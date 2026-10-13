@@ -3,11 +3,10 @@ import { z } from 'zod'
 import type { RelayDatabase } from '../db.js'
 import type { LoginRateLimiter } from '../auth/rateLimit.js'
 import {
-  authenticateInstance,
-  instanceClientIp,
-  parseInstanceCredentials,
+  type InstanceAuthedRequest,
   recordHeartbeat,
   registerInstance,
+  requireInstanceAuth,
 } from '../auth/instance.js'
 
 const registerBodySchema = z.object({
@@ -44,26 +43,8 @@ export function createDeviceRouter(
     res.json({ ok: true })
   })
 
-  router.post('/heartbeat', (req: Request, res: Response) => {
-    const creds = parseInstanceCredentials(req)
-    if (!creds) {
-      res.status(401).json({ error: 'Unauthorized' })
-      return
-    }
-
-    const ip = instanceClientIp(req)
-    const auth = authenticateInstance(
-      db,
-      instanceRateLimiter,
-      creds.instanceId,
-      creds.password,
-      ip,
-    )
-    if (!auth) {
-      res.status(401).json({ error: 'Unauthorized' })
-      return
-    }
-
+  router.post('/heartbeat', requireInstanceAuth(db, instanceRateLimiter), (req: Request, res: Response) => {
+    const auth = (req as InstanceAuthedRequest).instanceAuth
     const parsed = heartbeatBodySchema.safeParse(req.body ?? {})
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid heartbeat payload' })

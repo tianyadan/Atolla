@@ -198,6 +198,15 @@ describe('instance register / heartbeat / revoke', () => {
     expect(r.status).toBe(401)
   })
 
+  it('allows many successful heartbeats without rate limiting', async () => {
+    await register()
+    for (let i = 0; i < 12; i += 1) {
+      const r = await heartbeat(INSTANCE_ID, PASSWORD)
+      expect(r.status).toBe(200)
+      expect(r.body.ok).toBe(true)
+    }
+  })
+
   it('throttles repeated failed instance auth per IP and instance', async () => {
     await register()
     for (let i = 0; i < 5; i += 1) {
