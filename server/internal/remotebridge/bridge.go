@@ -17,7 +17,7 @@ const (
 // Status exposes bridge health for admin APIs.
 type Status struct {
 	Running     bool       `json:"running"`
-	LastOKAt    *time.Time `json:"last_ok_at,omitempty"`
+	LastOKAt    *time.Time `json:"last_ok,omitempty"`
 	LastError   string     `json:"last_error,omitempty"`
 	Registered  bool       `json:"registered"`
 }

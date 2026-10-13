@@ -21,6 +21,7 @@ func main() {
 	}
 
 	svc := service.New(cfg, st)
+	defer svc.Shutdown()
 	h := handler.New(svc)
 
 	r := gin.Default()
@@ -31,15 +32,9 @@ func main() {
 
 	log.Printf("atolla listening on %s", cfg.Addr)
 	if err := r.Run(cfg.Addr); err != nil {
-		if svc.RemoteBridge != nil {
-			svc.RemoteBridge.Stop()
-		}
 		svc.Perms.CloseAll()
 		svc.Sched.Stop()
 		log.Fatal(err)
-	}
-	if svc.RemoteBridge != nil {
-		svc.RemoteBridge.Stop()
 	}
 	svc.Perms.CloseAll()
 	svc.Sched.Stop()

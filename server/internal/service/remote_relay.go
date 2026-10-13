@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"atolla/server/internal/remotebridge"
 )
@@ -20,6 +21,46 @@ type RemoteRelayConfigUpdate struct {
 	InstanceID  string `json:"instance_id"`
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password,omitempty"`
+}
+
+// startRemoteBridge loads config and runs the outbound loop under a service-scoped context.
+func (s *Service) startRemoteBridge(workspaceRoot string) {
+	cs, err := remotebridge.NewConfigStore(workspaceRoot)
+	if err != nil {
+		log.Printf("remotebridge config: %v", err)
+		return
+	}
+	if s.remoteBridgeParent == nil {
+		s.remoteBridgeParent, s.remoteBridgeCancel = context.WithCancel(context.Background())
+	}
+	s.RemoteBridge = remotebridge.NewBridge(cs, s.Store)
+	s.RemoteBridge.Start(s.remoteBridgeParent)
+}
+
+// remoteBridgeContext returns the long-lived parent for bridge Start/Reload (not HTTP request ctx).
+func (s *Service) remoteBridgeContext() context.Context {
+	if s.remoteBridgeParent != nil {
+		return s.remoteBridgeParent
+	}
+	return context.Background()
+}
+
+// StopRemoteBridge cancels the service bridge context and stops the loop.
+func (s *Service) StopRemoteBridge() {
+	if s.remoteBridgeCancel != nil {
+		s.remoteBridgeCancel()
+		s.remoteBridgeCancel = nil
+	}
+	if s.RemoteBridge != nil {
+		s.RemoteBridge.Stop()
+	}
+}
+
+// Shutdown stops background workers tied to process lifetime (remote bridge, etc.).
+func (s *Service) Shutdown() {
+	s.remoteBridgeShutdown.Do(func() {
+		s.StopRemoteBridge()
+	})
 }
 
 // GetRemoteRelayConfig returns persisted settings without password plaintext.
@@ -45,7 +86,7 @@ func (s *Service) UpdateRemoteRelayConfig(ctx context.Context, patch RemoteRelay
 	if err != nil {
 		return remotebridge.PublicConfig{}, err
 	}
-	s.RemoteBridge.Reload(ctx)
+	s.RemoteBridge.Reload(s.remoteBridgeContext())
 	return s.RemoteBridge.Config.Public(), nil
 }
 
@@ -59,7 +100,7 @@ func (s *Service) RotateRemoteRelayPassword(ctx context.Context) (string, error)
 		return "", err
 	}
 	s.RemoteBridge.TriggerReregister()
-	s.RemoteBridge.Reload(ctx)
+	s.RemoteBridge.Reload(s.remoteBridgeContext())
 	return plain, nil
 }
 
