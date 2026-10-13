@@ -1,0 +1,56 @@
+/**
+ * 全局细滚动条：浅灰、细瘦；默认隐藏，悬停或正在滚动时显现。
+ * Firefox 用 scrollbar-*；Chromium/Safari 用 ::-webkit-scrollbar。
+ */
+
+:root {
+  --sb-size: 6px;
+  --sb-thumb: rgba(160, 160, 160, 0.38);
+  --sb-thumb-strong: rgba(180, 180, 180, 0.55);
+  --sb-track: transparent;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent var(--sb-track);
+}
+
+*:hover,
+*:focus-within,
+.is-scrolling {
+  scrollbar-color: var(--sb-thumb) var(--sb-track);
+}
+
+/* WebKit / Blink */
+*::-webkit-scrollbar {
+  width: var(--sb-size);
+  height: var(--sb-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--sb-track);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.18s ease;
+}
+
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb,
+.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--sb-thumb);
+}
+
+*:hover::-webkit-scrollbar-thumb:hover,
+.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background-color: var(--sb-thumb-strong);
+}

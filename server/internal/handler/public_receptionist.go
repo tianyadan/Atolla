@@ -114,9 +114,20 @@ func (h *Handler) PublicAsk(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Question string `json:"question"`
+		Question    string `json:"question"`
+		Attachments []struct {
+			ID   string `json:"id"`
+			URL  string `json:"url"`
+			Mime string `json:"mime"`
+			Name string `json:"name"`
+		} `json:"attachments"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Question) == "" {
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	atts := parseAskAttachments(body.Attachments)
+	if strings.TrimSpace(body.Question) == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty question"})
 		return
 	}
@@ -151,7 +162,7 @@ func (h *Handler) PublicAsk(c *gin.Context) {
 
 	ip := h.clientIP(c)
 	ua := c.Request.UserAgent()
-	msg, askErr := h.svc.AskReceptionist(c.Request.Context(), v.ID, recv.ID, convID, body.Question, ip, ua, func(ev map[string]any) {
+	msg, askErr := h.svc.AskReceptionistWith(c.Request.Context(), v.ID, recv.ID, convID, body.Question, atts, ip, ua, func(ev map[string]any) {
 		if ev == nil {
 			return
 		}

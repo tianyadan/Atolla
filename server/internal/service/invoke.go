@@ -71,7 +71,7 @@ func (s *Service) releaseAgentRun(agentID int64, slot *managedRun) {
 // sessionConvID：读写 engine_session_id / 拼平台历史（被调方记忆应绑自己的会话）。
 // permConvID/policyAgentID：授权路由（委托时弹窗挂调用方，策略取被调方）。
 // noHook=true 用于任务拆分等轻量调用,避免再次弹授权。
-func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink) (string, int, error) {
+func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink, atts []ChatAttachment) (string, int, error) {
 	bin := a.BinPath
 	if bin == "" {
 		bin = store.DefaultBin(a.Engine)
@@ -79,6 +79,27 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	dir := s.Cfg.WorkspaceRoot
 	if ws := strings.TrimSpace(a.WorkspacePath); ws != "" {
 		dir = ws
+	}
+	atts = NormalizeChatAttachments(atts)
+	engineQ := question
+	var claudeImages []agent.ImagePart
+	if len(atts) > 0 {
+		switch strings.ToLower(a.Engine) {
+		case "claude":
+			claudeImages = s.AttachmentsToAgentImages(atts)
+		default:
+			if paths, err := s.StageAttachmentsInWorkspace(dir, atts); err == nil && len(paths) > 0 {
+				var b strings.Builder
+				b.WriteString(question)
+				b.WriteString("\n\n【附图已保存到工作区，请直接查看这些图片文件】\n")
+				for _, p := range paths {
+					b.WriteString("- ")
+					b.WriteString(p)
+					b.WriteString("\n")
+				}
+				engineQ = b.String()
+			}
+		}
 	}
 	timeout := s.Cfg.AskTimeout()
 	// 记忆会话：优先显式 sessionConv；否则员工主会话；再不济用授权会话
@@ -144,7 +165,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				TimeoutS: s.Cfg.PermissionWaitSeconds() + 30,
 			}
 		}
-		return r.AskStream(ctx, dir, sys, question, history, onChunk, timeout, hook, onActivity, onMeta, resume)
+		return r.AskStreamWithImages(ctx, dir, sys, engineQ, history, onChunk, timeout, hook, onActivity, onMeta, resume, claudeImages)
 	case "codex":
 		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
 			agent.EnsureCodexPermissionHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
@@ -174,19 +195,19 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			// 只打标，等回复落库后再 Sync，避免 loadDetail 读到被清空的库
 			s.markCompactPending(metaConv)
 		}
-		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact)
+		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact)
 		// thread 在本机已无 rollout：清掉粘着的 session，拼平台历史后无 resume 重试
 		if err != nil && resume != "" && agent.IsCodexResumeGone(err.Error()) {
 			_ = s.Store.ClearConversationEngineMeta(context.WithoutCancel(ctx), metaConv)
 			if strings.TrimSpace(history) == "" {
 				turns, _ := s.Store.RecentTurns(ctx, metaConv, 12)
-				history = FormatResumeHistory(turns, question)
+				history = FormatResumeHistory(turns, engineQ)
 			}
 			emitAsk(onEvent, map[string]any{
 				"type": "system_note",
 				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
 			})
-			return agent.CodexAskMetaEx(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact)
+			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact)
 		}
 		return out, ms, err
 	default:
@@ -194,7 +215,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
 			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
-		return agent.GenericAskMeta(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume)
+		return agent.GenericAskMeta(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume)
 	}
 }
 
@@ -245,7 +266,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 		"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "running",
 	})
 
-	sys := BuildAgentSystemPrompt(a)
+	sys := s.BuildAgentSystemPromptWithSkills(runCtx, a)
 	q := fmt.Sprintf("【协作任务】由同事「%s」委托你执行。请直接完成下列任务并给出结果,不要反问调用方。\n\n%s",
 		caller.Name, strings.TrimSpace(taskBody))
 	// 记忆/resume 绑被调方自己的会话；授权弹窗挂调用方（策略仍用被调方）
@@ -254,7 +275,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 	if permConv == 0 {
 		permConv = sessionConv
 	}
-	out, ms, runErr := s.runEngineWithRecover(runCtx, a, sessionConv, permConv, sys, q, "", nil, sink, taskBody)
+	out, ms, runErr := s.runEngineWithRecover(runCtx, a, sessionConv, permConv, sys, q, "", nil, sink, taskBody, nil)
 	res.Ms = ms
 	if runErr != nil {
 		res.Err = runErr.Error()
@@ -363,7 +384,7 @@ func (s *Service) writeInvokeDividersAsync(caller *store.ManagedAgent, userTask 
 func (s *Service) summarizeForCallee(ctx context.Context, caller *store.ManagedAgent, userTask string, r InvokeResult) string {
 	prompt := fmt.Sprintf("用一两句中文总结：同事「%s」委托「%s」完成了什么、结果如何。只输出摘要正文。\n任务：%s\n结果：%s\n错误：%s",
 		caller.Name, r.AgentName, truncate(userTask, 300), truncate(r.Content, 1500), r.Err)
-	out, _, err := s.runManagedEngine(ctx, caller, "你是摘要助手,只输出一两句中文摘要。", prompt, "", nil, nil, 0, 0, 0, true, nil)
+	out, _, err := s.runManagedEngine(ctx, caller, "你是摘要助手,只输出一两句中文摘要。", prompt, "", nil, nil, 0, 0, 0, true, nil, nil)
 	out = strings.TrimSpace(out)
 	if err != nil || out == "" {
 		if r.Err != "" {

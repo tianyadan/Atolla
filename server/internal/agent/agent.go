@@ -205,6 +205,11 @@ func assistantMessageText(msg map[string]interface{}) string {
 // onChunk 收到文本增量; onActivity 收到工具运行态; onMeta 收到 session/usage(可为 nil)。
 // resumeSession 非空时 --resume 续聊。
 func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, resumeSession string) (string, int, error) {
+	return r.AskStreamWithImages(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, resumeSession, nil)
+}
+
+// AskStreamWithImages 同 AskStream，可附带多模态图片（Claude content image blocks）。
+func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, resumeSession string, images []ImagePart) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -261,7 +266,7 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 
 	userMsg := map[string]interface{}{
 		"type":    "user",
-		"message": map[string]interface{}{"role": "user", "content": []map[string]interface{}{{"type": "text", "text": userInput}}},
+		"message": map[string]interface{}{"role": "user", "content": BuildUserContent(userInput, images)},
 	}
 	ub, _ := json.Marshal(userMsg)
 	ub = append(ub, '\n')

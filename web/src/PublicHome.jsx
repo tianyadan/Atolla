@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import { agentAvatarUrl } from './agentAvatar.js'
+import {
+  MAX_CHAT_IMAGES,
+  appendPendingImages,
+  ensureUploadedAttachments,
+  imageFilesFromDataTransfer,
+  revokePendingImages,
+} from './chatImages.js'
+import { ChatAttachPreview, ChatLightbox, ChatMessageImages } from './ChatImageUI.jsx'
 
 const API = '/api'
 marked.setOptions({ breaks: true, gfm: true })
@@ -40,6 +48,9 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
   const [ctxWindow, setCtxWindow] = useState(0)
   const [ctxEstimated, setCtxEstimated] = useState(true)
   const [showJumpBottom, setShowJumpBottom] = useState(false)
+  const [pendingImages, setPendingImages] = useState([])
+  const [lightboxSrc, setLightboxSrc] = useState('')
+  const [attachBusy, setAttachBusy] = useState(false)
   const boxRef = useRef(null)
   const abortRef = useRef(null)
   const stickBottom = useRef(true)
@@ -110,12 +121,19 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
       if (res.status === 401) return
       const d = await res.json()
       const items = (d.items || []).filter((m) => m.role === 'user' || m.role === 'assistant')
-      setChatLog(items.map((m) => ({
-        role: m.role,
-        content: m.content || '',
-        error: m.status === 'error',
-        time: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
-      })))
+      setChatLog(items.map((m) => {
+        let meta = null
+        if (m.meta_json) {
+          try { meta = typeof m.meta_json === 'string' ? JSON.parse(m.meta_json) : m.meta_json } catch { /* ignore */ }
+        }
+        return {
+          role: m.role,
+          content: m.content || '',
+          attachments: Array.isArray(meta?.attachments) ? meta.attachments : [],
+          error: m.status === 'error',
+          time: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+        }
+      }))
     } catch { /* ignore */ }
   }
 
@@ -177,23 +195,89 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
       setChatLog([])
       setCtxUsed(0)
       setError('')
+      setPendingImages((prev) => {
+        revokePendingImages(prev)
+        return []
+      })
     } catch (err) {
       setError(String(err))
     }
+  }
+
+  /** 粘贴/拖入图片 */
+  function ingestComposerImages(files) {
+    if (!files?.length) return
+    setPendingImages((prev) => {
+      const { next, overflow } = appendPendingImages(prev, files)
+      if (overflow) setError(`最多附带 ${MAX_CHAT_IMAGES} 张图片`)
+      return next
+    })
+  }
+
+  function onComposerPaste(e) {
+    const files = imageFilesFromDataTransfer(e.clipboardData)
+    if (!files.length) return
+    e.preventDefault()
+    if (!ensureRegistered()) return
+    ingestComposerImages(files)
+  }
+
+  function onComposerDragOver(e) {
+    if (![...e.dataTransfer.types].includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function onComposerDrop(e) {
+    const files = imageFilesFromDataTransfer(e.dataTransfer)
+    if (!files.length) return
+    e.preventDefault()
+    if (!ensureRegistered()) return
+    ingestComposerImages(files)
+  }
+
+  function removePendingImage(localId) {
+    setPendingImages((prev) => {
+      const hit = prev.find((x) => x.localId === localId)
+      if (hit) revokePendingImages([hit])
+      return prev.filter((x) => x.localId !== localId)
+    })
   }
 
   async function sendQuestion(q) {
     if (!configured) return
     if (!ensureRegistered()) return
     q = (q || '').trim()
-    if (!q || loading) return
+    const pending = pendingImages
+    if ((!q && !pending.length) || loading || attachBusy) return
+    let atts = []
+    if (pending.length) {
+      setAttachBusy(true)
+      setError('')
+      try {
+        atts = await ensureUploadedAttachments(
+          pending,
+          (localId, patch) => {
+            setPendingImages((prev) => prev.map((x) => (x.localId === localId ? { ...x, ...patch } : x)))
+          },
+          { endpoint: `${API}/public/chat-images`, credentials: 'include' },
+        )
+      } catch (err) {
+        setError(String(err.message || err))
+        setAttachBusy(false)
+        return
+      }
+      setAttachBusy(false)
+    }
     setLoading(true)
     setError('')
     setQuestion('')
+    revokePendingImages(pending)
+    setPendingImages([])
     stickBottom.current = true
     setChatLog((prev) => [
       ...prev,
-      { role: 'user', content: q, time: Date.now() },
+      { role: 'user', content: q, attachments: atts, time: Date.now() },
       { role: 'assistant', content: '', time: Date.now() },
     ])
     const ac = new AbortController()
@@ -204,7 +288,7 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, attachments: atts }),
         signal: ac.signal,
       })
       if (res.status === 401) {
@@ -296,6 +380,8 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
     }
   }
 
+  const canSend = !!(question.trim() || pendingImages.length) && !loading && !attachBusy && configured
+
   return (
     <div className="ph-app">
       <header className="ph-top">
@@ -353,11 +439,14 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
                       : <img src={recvAvatar} alt="" />}
                   </div>
                   <div className={`ph-bubble ${m.error ? 'err' : ''}`}>
+                    {m.role === 'user' && (m.attachments || []).length > 0 && (
+                      <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
+                    )}
                     {m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1 ? (
                       <span className="ph-typing"><i /><i /><i /></span>
-                    ) : (
+                    ) : m.content ? (
                       <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content || '') }} />
-                    )}
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -378,13 +467,19 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
           {error && <p className="ph-error">{error}</p>}
 
           <div className="ph-composer-wrap">
-            <div className={`ph-composer ${!visitor.registered ? 'locked' : ''}`}>
+            <div
+              className={`ph-composer ${!visitor.registered ? 'locked' : ''}`}
+              onDragOver={onComposerDragOver}
+              onDrop={onComposerDrop}
+            >
+              <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
               <textarea
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 onFocus={onComposerFocus}
                 onKeyDown={onKeyDown}
-                placeholder={visitor.registered ? '有问题尽管问…' : '登记后来访再提问…'}
+                onPaste={onComposerPaste}
+                placeholder={visitor.registered ? '有问题尽管问…可粘贴图片' : '登记后来访再提问…'}
                 disabled={!configured}
                 rows={2}
               />
@@ -405,19 +500,21 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
                     <button
                       type="button"
                       className="ph-send"
-                      disabled={!question.trim()}
+                      disabled={!canSend}
                       onClick={() => sendQuestion(question)}
                       aria-label="发送"
-                      title="发送"
-                    >↑</button>
+                      title={attachBusy ? '上传中…' : '发送'}
+                    >{attachBusy ? '…' : '↑'}</button>
                   )}
                 </div>
               </div>
             </div>
-            <div className="ph-hint">Enter 发送 · Shift+Enter 换行</div>
+            <div className="ph-hint">Enter 发送 · Shift+Enter 换行 · 可粘贴/拖入图片</div>
           </div>
         </>
       )}
+
+      <ChatLightbox src={lightboxSrc} onClose={() => setLightboxSrc('')} />
 
       {registerOpen && (
         <div className="ph-modal-mask" onClick={() => !registerBusy && setRegisterOpen(false)}>

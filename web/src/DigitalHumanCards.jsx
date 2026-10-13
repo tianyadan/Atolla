@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { agentAvatarUrl } from './agentAvatar.js'
+import DismissAgentModal from './DismissAgentModal.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 12 // 一页 12 张：4 列 × 3 行
+
+/** 引擎展示色 */
+function engineColor(id) {
+  if (id === 'claude') return '#D97757'
+  if (id === 'codex') return '#10a37f'
+  if (id === 'agent') return '#6366f1'
+  return '#94a3b8'
+}
 
 /** 设置图标（齿轮，避免射线状「太阳」观感） */
 function GearIcon() {
@@ -37,6 +46,7 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [page, setPage] = useState(1)
+  const [dismissAgents, setDismissAgents] = useState([]) // [{id,name}]
 
   const totalPages = Math.max(1, Math.ceil(agents.length / PAGE_SIZE))
   const pageItems = useMemo(() => {
@@ -93,46 +103,14 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
 
   const pageAllSelected = pageItems.length > 0 && pageItems.every((a) => selected.has(a.id))
 
-  async function deleteOne(a) {
-    if (!window.confirm(`确认解聘「${a.name}」？`)) return
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agents/${a.id}`, { method: 'DELETE', headers: authHeaders() })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        setErr(d.error || '解聘失败')
-        return
-      }
-      setSelected((prev) => { const n = new Set(prev); n.delete(a.id); return n })
-      await load()
-    } finally {
-      setBusy(false)
-    }
+  function deleteOne(a) {
+    setDismissAgents([{ id: a.id, name: a.name }])
   }
 
-  async function deleteSelected() {
-    const ids = [...selected]
-    if (!ids.length) return
-    if (!window.confirm(`确认解聘选中的 ${ids.length} 位数字人？`)) return
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agents/batch-delete`, {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        setErr(d.error || '批量解聘失败')
-        return
-      }
-      setSelected(new Set())
-      await load()
-    } finally {
-      setBusy(false)
-    }
+  function deleteSelected() {
+    const list = agents.filter((a) => selected.has(a.id)).map((a) => ({ id: a.id, name: a.name }))
+    if (!list.length) return
+    setDismissAgents(list)
   }
 
   async function toggleReceptionist(a) {
@@ -174,7 +152,7 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
       </div>
       {err && <p className="dh-err">{err}</p>}
       {loading && !agents.length && <p className="empty">加载中…</p>}
-      {!loading && agents.length === 0 && <p className="empty">暂无数字人，点击「一键招聘」创建</p>}
+      {!loading && agents.length === 0 && <p className="empty">暂无数字人，点击「一键招聘」打开人才市场</p>}
       <div className="dh-grid">
         {pageItems.map((a) => (
           <article key={a.id} className={`dh-card ${a.is_receptionist ? 'is-recv' : ''} ${selected.has(a.id) ? 'is-selected' : ''}`}>
@@ -187,7 +165,12 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
             </div>
             <h3 className="dh-name" title={a.name}>{a.name}</h3>
             <p className="dh-folder">{a.folder_name || (a.folder_id ? `组 #${a.folder_id}` : '未入组')}</p>
-            <p className="dh-engine">{a.engine}</p>
+            <p className="dh-engine">
+              <span className="tag engine-tag" style={{ '--eng': engineColor(a.engine) }}>{a.engine}</span>
+              {(Number(a.skill_count) || 0) > 0 && (
+                <span className="skill-count-badge" title={`已安装 ${a.skill_count} 个技能`}>{a.skill_count}</span>
+              )}
+            </p>
             <div className="dh-card-actions">
               <button type="button" className={`dh-recv-btn ${a.is_receptionist ? 'on' : ''}`} disabled={busy} onClick={() => toggleReceptionist(a)}>
                 {a.is_receptionist ? '取消前台' : '设为前台助理'}
@@ -209,6 +192,21 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
           <button type="button" disabled={page >= totalPages || busy} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>下一页</button>
         </div>
       )}
+      <DismissAgentModal
+        open={dismissAgents.length > 0}
+        agents={dismissAgents}
+        authHeaders={authHeaders}
+        onUnauthorized={onUnauthorized}
+        onClose={() => setDismissAgents([])}
+        onDone={(ids) => {
+          setSelected((prev) => {
+            const n = new Set(prev)
+            ids.forEach((id) => n.delete(id))
+            return n
+          })
+          load()
+        }}
+      />
     </section>
   )
 }

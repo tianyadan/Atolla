@@ -36,11 +36,11 @@ func AgentPolicyBlock(a *store.ManagedAgent) string {
 		b.WriteString("- rm 权限:禁止。不得执行任何 rm/unlink 删除命令。\n")
 	}
 	if a.AllowBrowser {
-		b.WriteString("- 浏览器权限:允许。可使用 browser-use 相关工具操作浏览器完成网页交互、点击、填表、抓取页面等。\n")
-		b.WriteString("  前提:本机已安装 browser-use 插件/能力；操作时说明步骤，注意勿泄露凭据。\n")
-		b.WriteString("  重要:使用完成网页之后要及时关闭网页，不要留有僵尸网页。\n")
+		b.WriteString("- 浏览器权限:允许（技能 atolla.browser）。可使用 browser-use 操作浏览器完成网页交互、点击、填表、抓取等。\n")
+		b.WriteString("  前提:本机已安装 browser-use；操作时说明步骤，注意勿泄露凭据。\n")
+		b.WriteString("  硬性要求:用完必须关闭标签/窗口，禁止留下僵尸页；任务结束前确认无残留浏览器会话。\n")
 	} else {
-		b.WriteString("- 浏览器权限:禁止。不得调用 browser-use / 浏览器自动化工具。\n")
+		b.WriteString("- 浏览器权限:禁止。未安装「浏览器操作」技能时，不得调用 browser-use / 浏览器自动化工具。\n")
 	}
 	ws := strings.TrimSpace(a.WorkspacePath)
 	if ws == "" {

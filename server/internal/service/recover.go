@@ -44,11 +44,12 @@ func (s *Service) runEngineWithRecover(
 	onChunk func(string),
 	onEvent AskEventSink,
 	userTask string,
+	atts []ChatAttachment,
 ) (out string, ms int, err error) {
 	if permConv == 0 {
 		permConv = sessionConv
 	}
-	out, ms, err = s.runManagedEngine(ctx, a, sys, question, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent)
+	out, ms, err = s.runManagedEngine(ctx, a, sys, question, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent, atts)
 	if err == nil || !isTerminalKillErr(err) || ctx.Err() != nil {
 		return out, ms, err
 	}
@@ -69,7 +70,8 @@ func (s *Service) runEngineWithRecover(
 		}
 
 		checkQ := buildRecoverPrompt(userTask, partial, err.Error())
-		out2, ms2, err2 := s.runManagedEngine(ctx, a, sys, checkQ, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent)
+		// 恢复轮不再重复塞图，避免重复烧多模态 tokens
+		out2, ms2, err2 := s.runManagedEngine(ctx, a, sys, checkQ, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent, nil)
 		ms += ms2
 		if err2 == nil {
 			joined := strings.TrimSpace(partial)

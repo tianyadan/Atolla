@@ -13,6 +13,11 @@ import (
 
 // AskManaged 管理台数字员工一轮对话;onEvent 推送 SSE 事件(chunk/invoke_*/…)。可被 StopManaged 取消。
 func (s *Service) AskManaged(ctx context.Context, agentID int64, question string, onEvent AskEventSink) (*store.Message, error) {
+	return s.AskManagedWith(ctx, agentID, question, nil, onEvent)
+}
+
+// AskManagedWith 同 AskManaged，可附带聊天图片。
+func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question string, atts []ChatAttachment, onEvent AskEventSink) (*store.Message, error) {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -36,7 +41,10 @@ func (s *Service) AskManaged(ctx context.Context, agentID int64, question string
 	}
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
-	return s.askManagedCore(ctx, a, 0, question, askCoreOpts{bindMainConv: true}, onEvent)
+	return s.askManagedCore(ctx, a, 0, question, askCoreOpts{
+		bindMainConv: true,
+		attachments:  NormalizeChatAttachments(atts),
+	}, onEvent)
 }
 
 // AskManagedIsolated 在指定会话执行(项目协作节点)；不改写数字员工主会话；占用由调用方持有。
@@ -62,6 +70,7 @@ type askCoreOpts struct {
 	silent       bool
 	holdStatus   bool
 	skipTaskPlan bool
+	attachments  []ChatAttachment
 	// visitorAudit 非空时：用户消息落库后建 processing 审计，结束后写 token/耗时/状态。
 	visitorAudit *visitorAskAudit
 }
@@ -121,9 +130,13 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		emitAsk(onEvent, map[string]any{"type": "chunk", "content": chunk})
 	}
 	agentID := a.ID
+	atts := NormalizeChatAttachments(opts.attachments)
 	question = strings.TrimSpace(question)
-	if question == "" {
+	if question == "" && len(atts) == 0 {
 		return nil, fmt.Errorf("empty question")
+	}
+	if question == "" {
+		question = "请查看图片并回答相关问题。"
 	}
 	userQuestion := question
 	// v0.2.18：不再注入平台历史/Memory；上下文靠引擎 resume + 本轮问题。
@@ -198,6 +211,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		// 先落库用户消息，再规划/执行，避免规划耗时或中途压缩清库导致对话框「发出去看不见」
 		userMsg := &store.Message{
 			ConversationID: convID, Role: "user", Content: userQuestion, Status: "ok",
+			MetaJSON: AttachmentsMetaJSON(atts),
 		}
 		userMsgID, uerr := s.Store.InsertMessage(runCtx, userMsg)
 		if opts.visitorAudit != nil {
@@ -232,7 +246,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		return s.askManagedWithInvokes(runCtx, a, convID, opts, userQuestion, taskBody, mentions, steps, tp, onEvent, onChunk)
 	}
 
-	sys := BuildAgentSystemPrompt(a)
+	sys := s.BuildAgentSystemPromptWithSkills(runCtx, a)
 	sys = s.consumeSystemReinject(runCtx, convID, sys)
 	userTurns, _ := s.Store.CountUserMessages(runCtx, convID)
 	q := MaybeReinforcePolicy(a, userTurns, engineQuestion)
@@ -245,7 +259,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	}
 
 	// history 有 session 时恒空；丢失时由 runManagedEngine 回退 RecentTurns
-	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, "", onChunk, onEvent, userQuestion)
+	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, "", onChunk, onEvent, userQuestion, atts)
 	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
@@ -303,13 +317,13 @@ func (s *Service) askManagedWithInvokes(
 		}
 		tp.advance(ctx, sumStep, steps[sumStep])
 	}
-	sys := BuildAgentSystemPrompt(caller) + "\n你是协作编排方：根据各同事的隔离结果分别汇总，并标明归属。"
+	sys := s.BuildAgentSystemPromptWithSkills(ctx, caller) + "\n你是协作编排方：根据各同事的隔离结果分别汇总，并标明归属。"
 	sys = s.consumeSystemReinject(ctx, convID, sys)
 	sumQ := buildSummaryQuestion(taskBody, results)
 	userTurns, _ := s.Store.CountUserMessages(ctx, convID)
 	sumQ = MaybeReinforcePolicy(caller, userTurns, sumQ)
 
-	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, convID, sys, sumQ, "", onChunk, onEvent, taskBody)
+	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, convID, sys, sumQ, "", onChunk, onEvent, taskBody, nil)
 	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
 	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)

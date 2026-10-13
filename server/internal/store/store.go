@@ -265,6 +265,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if contextColCount == 0 {
 		if _, err := s.db.ExecContext(ctx, `ALTER TABLE managed_agents ADD COLUMN context_window_tokens BIGINT NOT NULL DEFAULT 1000000 AFTER engine`); err != nil { return err }
 	}
+	// 14) v0.4.0 技能商店：目录 + 按数字人安装
+	if err := s.EnsureSkillSchema(ctx); err != nil {
+		return err
+	}
+	// 15) v0.4.1 数据库技能：多数据源配置
+	if err := s.EnsureDBSourceSchema(ctx); err != nil {
+		return err
+	}
+	// 16) v0.4.3 服务器控制技能：多服务器 SSH
+	if err := s.EnsureServerSourceSchema(ctx); err != nil {
+		return err
+	}
+	// 17) v0.4.5 命令全部审批通过 + 自动通过审计（保留 7 天）
+	if err := s.EnsureAutoApproveSchema(ctx); err != nil {
+		return err
+	}
+	// 18) v0.4.7 解聘离职记忆书
+	if err := s.EnsureLegacyMemorySchema(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
