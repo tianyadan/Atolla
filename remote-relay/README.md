@@ -27,6 +27,14 @@ curl http://localhost:3080/api/health
 
 On first boot, if `site_auth` has no row, `SITE_PASSWORD` is hashed with bcrypt (cost 12) and stored; the env var is cleared in-process after bootstrap.
 
+### Site auth environment
+
+| Variable | Purpose |
+|----------|---------|
+| `RELAY_JWT_SECRET` | HS256 signing secret. **Required** when `NODE_ENV=production`; dev/test may omit (uses an insecure default). |
+| `RELAY_JWT_TTL_HOURS` | JWT lifetime in hours (default 24). |
+| `RELAY_TRUST_PROXY` | Set to `1` or `true` only when this process sits **behind a trusted reverse proxy** (nginx, Caddy, etc.). Enables Express `trust proxy` so `req.ip` reflects the proxy’s `X-Forwarded-For`. If unset, client IP for login rate limits comes from the TCP socket only—**spoofed `X-Forwarded-For` headers are ignored**. |
+
 ## Monorepo scripts (from `remote-relay/`)
 
 - `npm run dev` — run server with hot reload

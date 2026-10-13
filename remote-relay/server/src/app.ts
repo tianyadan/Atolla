@@ -2,11 +2,15 @@ import cors from 'cors'
 import express, { type Express } from 'express'
 import type { RelayDatabase } from './db.js'
 import { LoginRateLimiter } from './auth/rateLimit.js'
+import { isRelayTrustProxyEnabled } from './auth/site.js'
 import { createSiteAuthRouter } from './routes/siteAuth.js'
 
 /** Build Express app with health and site auth routes */
 export function createApp(db: RelayDatabase): Express {
   const app = express()
+  if (isRelayTrustProxyEnabled()) {
+    app.set('trust proxy', 1)
+  }
   const rateLimiter = new LoginRateLimiter()
 
   app.use(cors())

@@ -15,19 +15,20 @@ let dbPath: string
 let db: RelayDatabase
 let app: Express
 
-/** POST login with optional client IP override */
+/** POST login with optional X-Forwarded-For (only affects IP when RELAY_TRUST_PROXY=1) */
 async function login(
   password: string,
-  ip = '203.0.113.10',
+  forwardedFor?: string,
 ): Promise<request.Response> {
-  return request(app)
-    .post('/api/auth/login')
-    .set('X-Forwarded-For', ip)
-    .send({ password })
+  const req = request(app).post('/api/auth/login')
+  if (forwardedFor) req.set('X-Forwarded-For', forwardedFor)
+  return req.send({ password })
 }
 
 beforeEach(() => {
   process.env.RELAY_JWT_SECRET = 'test-jwt-secret'
+  delete process.env.RELAY_TRUST_PROXY
+  delete process.env.NODE_ENV
   dbPath = path.join(os.tmpdir(), `relay-auth-test-${Date.now()}.db`)
   db = initDb(dbPath)
   const hash = bcrypt.hashSync(SITE_PASSWORD, BCRYPT_ROUNDS)
@@ -43,6 +44,8 @@ afterEach(() => {
   db.close()
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath)
   delete process.env.RELAY_JWT_SECRET
+  delete process.env.RELAY_TRUST_PROXY
+  delete process.env.NODE_ENV
 })
 
 describe('site gate auth', () => {
@@ -65,7 +68,31 @@ describe('site gate auth', () => {
     expect(me.body.tokenVersion).toBe(1)
   })
 
+  it('throttles login after five attempts per minute from same IP', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const r = await login('wrong')
+      expect(r.status).toBe(401)
+    }
+    const throttled = await login('wrong')
+    expect(throttled.status).toBe(401)
+    expect(throttled.body.error).toBe('账号或密码错误')
+
+    const ok = await login(SITE_PASSWORD)
+    expect(ok.status).toBe(401)
+  })
+
+  it('ignores spoofed X-Forwarded-For when trust proxy is off', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const r = await login('wrong', `203.0.113.${i + 1}`)
+      expect(r.status).toBe(401)
+    }
+    const throttled = await login('wrong', '203.0.113.99')
+    expect(throttled.status).toBe(401)
+  })
+
   it('locks out after consecutive failures', async () => {
+    process.env.RELAY_TRUST_PROXY = '1'
+    app = createApp(db)
     const ip = '198.51.100.7'
     for (let i = 0; i < 5; i += 1) {
       const r = await login('wrong', ip)
@@ -81,5 +108,13 @@ describe('site gate auth', () => {
       .get() as { locked_until: number | null }
     expect(row.locked_until).not.toBeNull()
     expect(row.locked_until!).toBeGreaterThan(Date.now())
+  })
+
+  it('requires RELAY_JWT_SECRET in production', async () => {
+    delete process.env.RELAY_JWT_SECRET
+    process.env.NODE_ENV = 'production'
+    const { validateSiteAuthConfig, jwtSecret } = await import('./site.js')
+    expect(() => validateSiteAuthConfig()).toThrow(/RELAY_JWT_SECRET/)
+    expect(() => jwtSecret()).toThrow(/RELAY_JWT_SECRET/)
   })
 })

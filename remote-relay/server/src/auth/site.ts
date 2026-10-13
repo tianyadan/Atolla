@@ -26,25 +26,51 @@ export type SiteJwtPayload = {
   token_version: number
 }
 
-/** Resolve client IP from proxy header or socket */
-export function resolveClientIp(
-  forwardedFor: string | string[] | undefined,
-  socketIp: string | undefined,
-): string {
-  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    return forwardedFor.split(',')[0]?.trim() || '127.0.0.1'
-  }
-  if (Array.isArray(forwardedFor) && forwardedFor[0]) {
-    return String(forwardedFor[0]).split(',')[0]?.trim() || '127.0.0.1'
-  }
-  return socketIp?.trim() || '127.0.0.1'
+const DEV_JWT_SECRET = 'relay-dev-jwt-secret-change-me'
+
+/** Whether Express should trust proxy headers for req.ip (set RELAY_TRUST_PROXY=1 behind a real reverse proxy) */
+export function isRelayTrustProxyEnabled(): boolean {
+  const v = process.env.RELAY_TRUST_PROXY?.trim()
+  return v === '1' || v?.toLowerCase() === 'true'
 }
 
-/** HS256 secret from env with dev fallback */
+/** Normalize Express/socket IP (strip IPv6-mapped IPv4 prefix) */
+function normalizeIp(ip: string | undefined): string | undefined {
+  const trimmed = ip?.trim()
+  if (!trimmed) return undefined
+  if (trimmed.startsWith('::ffff:')) return trimmed.slice(7)
+  return trimmed
+}
+
+/**
+ * Resolve client IP for rate limit / audit.
+ * Never reads raw X-Forwarded-For; use req.ip only when RELAY_TRUST_PROXY is enabled (Express trust proxy).
+ */
+export function resolveClientIp(
+  expressIp: string | undefined,
+  socketIp: string | undefined,
+): string {
+  if (isRelayTrustProxyEnabled()) {
+    return normalizeIp(expressIp) ?? normalizeIp(socketIp) ?? '127.0.0.1'
+  }
+  return normalizeIp(socketIp) ?? '127.0.0.1'
+}
+
+/** Fail fast at startup when production has no signing secret */
+export function validateSiteAuthConfig(): void {
+  if (process.env.NODE_ENV === 'production' && !process.env.RELAY_JWT_SECRET?.trim()) {
+    throw new Error('RELAY_JWT_SECRET is required when NODE_ENV=production')
+  }
+}
+
+/** HS256 secret from env; dev/test fallback only outside production */
 export function jwtSecret(): string {
   const fromEnv = process.env.RELAY_JWT_SECRET?.trim()
   if (fromEnv) return fromEnv
-  return 'relay-dev-jwt-secret-change-me'
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('RELAY_JWT_SECRET is required when NODE_ENV=production')
+  }
+  return DEV_JWT_SECRET
 }
 
 /** JWT TTL in seconds */
