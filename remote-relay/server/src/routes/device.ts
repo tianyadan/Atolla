@@ -8,6 +8,7 @@ import {
   registerInstance,
   requireInstanceAuth,
 } from '../auth/instance.js'
+import { routeParam } from '../params.js'
 import {
   DEFAULT_LONG_POLL_WAIT_MS,
   longPollCommands,
@@ -200,7 +201,7 @@ export function createDeviceRouter(
     requireInstanceAuth(db, instanceRateLimiter),
     (req: Request, res: Response) => {
       const auth = (req as InstanceAuthedRequest).instanceAuth
-      const commandId = req.params.id?.trim()
+      const commandId = routeParam(req.params.id)
       if (!commandId) {
         res.status(400).json({ error: 'Invalid command id' })
         return

@@ -40,7 +40,7 @@ async function register(): Promise<void> {
 }
 
 /** Authenticated device POST helper */
-function devicePost(url: string, body: unknown): request.Test {
+function devicePost(url: string, body: object): request.Test {
   return request(app)
     .post(url)
     .set('X-Instance-Id', INSTANCE_ID)

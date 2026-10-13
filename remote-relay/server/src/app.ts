@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import express, { type Express } from 'express'
 import type { RelayDatabase } from './db.js'
@@ -6,6 +9,42 @@ import { isRelayTrustProxyEnabled } from './auth/site.js'
 import { createSiteAuthRouter } from './routes/siteAuth.js'
 import { createDeviceRouter } from './routes/device.js'
 import { createSiteRouter } from './routes/site.js'
+
+const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+
+/** Locate Vite build output relative to server src/dist or monorepo cwd */
+function resolveWebDistDir(): string | null {
+  const candidates = [
+    path.resolve(moduleDir, '../../web/dist'),
+    path.resolve(process.cwd(), 'web/dist'),
+    path.resolve(process.cwd(), '../web/dist'),
+  ]
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'index.html'))) return dir
+  }
+  return null
+}
+
+/** Serve mobile UI static assets; SPA fallback for non-API GET */
+function attachWebUi(app: Express): void {
+  const dist = resolveWebDistDir()
+  if (!dist) return
+
+  app.use(express.static(dist, { index: false }))
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      next()
+      return
+    }
+    if (req.path.startsWith('/api')) {
+      next()
+      return
+    }
+    res.sendFile(path.join(dist, 'index.html'), (err) => {
+      if (err) next(err)
+    })
+  })
+}
 
 /** Build Express app with health and site auth routes */
 export function createApp(db: RelayDatabase): Express {
@@ -26,6 +65,8 @@ export function createApp(db: RelayDatabase): Express {
   app.use('/api/auth', createSiteAuthRouter(db, siteLoginRateLimiter))
   app.use('/api/device', createDeviceRouter(db, instanceAuthRateLimiter))
   app.use('/api', createSiteRouter(db))
+
+  attachWebUi(app)
 
   return app
 }
