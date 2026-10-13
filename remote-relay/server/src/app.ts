@@ -28,7 +28,12 @@ function resolveWebDistDir(): string | null {
 /** Serve mobile UI static assets; SPA fallback for non-API GET */
 function attachWebUi(app: Express): void {
   const dist = resolveWebDistDir()
-  if (!dist) return
+  if (!dist) {
+    console.warn(
+      '[remote-relay] web/dist not found — API only. Build the UI: cd remote-relay/web && npm run build',
+    )
+    return
+  }
 
   app.use(express.static(dist, { index: false }))
   app.use((req, res, next) => {
