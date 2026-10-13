@@ -50,6 +50,10 @@ type Service struct {
 	WF       *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
+	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
+	remoteBridgeParent context.Context
+	remoteBridgeCancel context.CancelFunc
+	remoteBridgeShutdown sync.Once
 	// CodexContextCollector 允许测试注入临时 sessions 根目录；生产环境使用 ~/.codex/sessions。
 	CodexContextCollector agent.CodexSessionContextCollector
 
@@ -97,12 +101,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 	}
 	_ = st.ClearAllOccupancy(context.Background())
 	svc.BeginWorkflowRecoveryWindow()
-	if cs, err := remotebridge.NewConfigStore(cfg.WorkspaceRoot); err != nil {
-		log.Printf("remotebridge config: %v", err)
-	} else {
-		svc.RemoteBridge = remotebridge.NewBridge(cs, st)
-		svc.RemoteBridge.Start(context.Background())
-	}
+	svc.startRemoteBridge(cfg.WorkspaceRoot)
 	return svc
 }
 
