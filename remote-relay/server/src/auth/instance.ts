@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import type { Request } from 'express'
+import type { NextFunction, Request, Response } from 'express'
 import type { RelayDatabase } from '../db.js'
 import type { LoginRateLimiter } from './rateLimit.js'
 import { resolveClientIp } from './site.js'
@@ -166,7 +166,20 @@ export function parseInstanceCredentials(req: Request): {
   return null
 }
 
-/** Verify instance password; rate-limit failures by IP + instance */
+/** Record a failed instance auth attempt toward IP + instance throttle */
+function recordInstanceAuthRateLimitFailure(
+  rateLimiter: LoginRateLimiter,
+  limitKey: string,
+  db: RelayDatabase,
+  instanceId: string,
+  ip: string,
+  now: number,
+): void {
+  rateLimiter.recordAttempt(limitKey, now)
+  recordInstanceAuthFailure(db, instanceId, ip, now)
+}
+
+/** Verify instance password; rate-limit only failed attempts by IP + instance */
 export function authenticateInstance(
   db: RelayDatabase,
   rateLimiter: LoginRateLimiter,
@@ -176,28 +189,62 @@ export function authenticateInstance(
   now = Date.now(),
 ): InstanceAuthContext | null {
   const limitKey = instanceAuthRateLimitKey(ip, instanceId)
-  if (!rateLimiter.recordAttempt(limitKey, now)) {
+  if (rateLimiter.isThrottled(limitKey, now)) {
     return null
   }
 
   const row = getInstanceRow(db, instanceId)
   if (!row?.password_hash) {
-    recordInstanceAuthFailure(db, instanceId, ip, now)
+    recordInstanceAuthRateLimitFailure(rateLimiter, limitKey, db, instanceId, ip, now)
     return null
   }
 
   if (row.password_expires_at != null && row.password_expires_at <= now) {
-    recordInstanceAuthFailure(db, instanceId, ip, now)
+    recordInstanceAuthRateLimitFailure(rateLimiter, limitKey, db, instanceId, ip, now)
     return null
   }
 
   const valid = bcrypt.compareSync(password, row.password_hash)
   if (!valid) {
-    recordInstanceAuthFailure(db, instanceId, ip, now)
+    recordInstanceAuthRateLimitFailure(rateLimiter, limitKey, db, instanceId, ip, now)
     return null
   }
 
   return { instanceId, row }
+}
+
+export type InstanceAuthedRequest = Request & {
+  instanceAuth: InstanceAuthContext
+}
+
+/** Express middleware: require valid instance credentials (for heartbeat and future routes) */
+export function requireInstanceAuth(
+  db: RelayDatabase,
+  rateLimiter: LoginRateLimiter,
+) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const creds = parseInstanceCredentials(req)
+    if (!creds) {
+      res.status(401).json({ error: 'Unauthorized' })
+      return
+    }
+
+    const ip = instanceClientIp(req)
+    const auth = authenticateInstance(
+      db,
+      rateLimiter,
+      creds.instanceId,
+      creds.password,
+      ip,
+    )
+    if (!auth) {
+      res.status(401).json({ error: 'Unauthorized' })
+      return
+    }
+
+    ;(req as InstanceAuthedRequest).instanceAuth = auth
+    next()
+  }
 }
 
 /** Audit failed instance authentication */
