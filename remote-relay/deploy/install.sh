@@ -51,13 +51,18 @@ RSYNC=(rsync -az --delete
 JWT_SECRET="$(openssl rand -hex 32)"
 
 echo "==> Sync to ${USER}@${HOST}:${REMOTE_DIR}/remote-relay"
-"${SSH[@]}" "mkdir -p '${REMOTE_DIR}/remote-relay'"
+"${SSH[@]}" bash -s -- "$REMOTE_DIR" <<'REMOTE'
+set -euo pipefail
+REMOTE_DIR="$1"
+mkdir -p "${REMOTE_DIR}/remote-relay"
+REMOTE
 "${RSYNC[@]}" "$RELAY_SRC/" "${USER}@${HOST}:${REMOTE_DIR}/remote-relay/"
 
 echo "==> Remote npm ci && build"
-"${SSH[@]}" bash -s <<REMOTE
+"${SSH[@]}" bash -s -- "$REMOTE_DIR" <<'REMOTE'
 set -euo pipefail
-cd '${REMOTE_DIR}/remote-relay'
+REMOTE_DIR="$1"
+cd "${REMOTE_DIR}/remote-relay"
 if ! command -v npm >/dev/null 2>&1; then
   echo 'npm not found on remote host' >&2
   exit 1
@@ -77,12 +82,14 @@ LISTEN_PORT="$1"
 SITE_PASSWORD="$2"
 JWT_SECRET="$3"
 ENV_FILE="/etc/atolla-remote-relay.env"
-sudo bash -c "umask 077; cat > \"\$ENV_FILE\" <<EOF
+umask 077
+sudo tee "$ENV_FILE" >/dev/null <<EOF
 NODE_ENV=production
-PORT=${LISTEN_PORT}
-SITE_PASSWORD=${SITE_PASSWORD}
-RELAY_JWT_SECRET=${JWT_SECRET}
-EOF"
+PORT=$(printf '%s' "$LISTEN_PORT")
+SITE_PASSWORD=$(printf '%s' "$SITE_PASSWORD")
+RELAY_JWT_SECRET=$(printf '%s' "$JWT_SECRET")
+EOF
+sudo chmod 600 "$ENV_FILE"
 REMOTE
 
 echo "==> Install systemd unit atolla-remote-relay.service"
