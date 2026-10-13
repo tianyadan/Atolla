@@ -10,6 +10,7 @@ import {
   listTasksMirror,
   normalizeMessagesLimit,
 } from '../mirror.js'
+import { routeParam } from '../params.js'
 
 const enqueueBodySchema = z.object({
   action: z.string().min(1),
@@ -51,7 +52,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
   })
 
   router.post('/instances/:id/commands', guard, (req: Request, res: Response) => {
-    const instanceId = req.params.id?.trim()
+    const instanceId = routeParam(req.params.id)
     if (!instanceId) {
       res.status(400).json({ error: 'Invalid instance id' })
       return
@@ -75,7 +76,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
   })
 
   router.get('/instances/:id/agents', guard, (req: Request, res: Response) => {
-    const instanceId = req.params.id?.trim()
+    const instanceId = routeParam(req.params.id)
     if (!instanceId) {
       res.status(400).json({ error: 'Invalid instance id' })
       return
@@ -89,8 +90,8 @@ export function createSiteRouter(db: RelayDatabase): Router {
   })
 
   router.get('/instances/:id/agents/:agentId/tasks', guard, (req: Request, res: Response) => {
-    const instanceId = req.params.id?.trim()
-    const agentId = req.params.agentId?.trim()
+    const instanceId = routeParam(req.params.id)
+    const agentId = routeParam(req.params.agentId)
     if (!instanceId || !agentId) {
       res.status(400).json({ error: 'Invalid instance or agent id' })
       return
@@ -104,8 +105,8 @@ export function createSiteRouter(db: RelayDatabase): Router {
   })
 
   router.get('/instances/:id/agents/:agentId/messages', guard, (req: Request, res: Response) => {
-    const instanceId = req.params.id?.trim()
-    const agentId = req.params.agentId?.trim()
+    const instanceId = routeParam(req.params.id)
+    const agentId = routeParam(req.params.agentId)
     if (!instanceId || !agentId) {
       res.status(400).json({ error: 'Invalid instance or agent id' })
       return
@@ -140,8 +141,8 @@ export function createSiteRouter(db: RelayDatabase): Router {
     '/instances/:id/agents/:agentId/sync-messages',
     guard,
     (req: Request, res: Response) => {
-      const instanceId = req.params.id?.trim()
-      const agentId = req.params.agentId?.trim()
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
       if (!instanceId || !agentId) {
         res.status(400).json({ error: 'Invalid instance or agent id' })
         return
@@ -165,7 +166,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
   )
 
   router.delete('/instances/:id/password', guard, (req: Request, res: Response) => {
-    const instanceId = req.params.id?.trim()
+    const instanceId = routeParam(req.params.id)
     if (!instanceId) {
       res.status(400).json({ error: 'Invalid instance id' })
       return
