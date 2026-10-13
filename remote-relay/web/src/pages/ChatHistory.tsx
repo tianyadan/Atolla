@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   clearToken,
@@ -19,7 +19,6 @@ export function ChatHistoryPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
-  const syncOnce = useRef(false)
 
   /** Pull messages from relay mirror */
   const loadMessages = useCallback(async () => {
@@ -40,15 +39,17 @@ export function ChatHistoryPage() {
     }
   }, [instanceId, agentId, navigate])
 
-  /** Initial sync command then start polling */
+  /** Initial sync command then start polling; re-run when route params change */
   useEffect(() => {
-    if (!instanceId || !agentId || syncOnce.current) return
-    syncOnce.current = true
+    if (!instanceId || !agentId) return
     let cancelled = false
+
+    setLoading(true)
+    setMessages([])
+    setError(null)
 
     async function start() {
       setSyncing(true)
-      setError(null)
       try {
         await syncMessages(instanceId, agentId, { limit: MESSAGE_LIMIT })
       } catch (err) {
