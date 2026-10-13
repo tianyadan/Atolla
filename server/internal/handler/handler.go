@@ -125,6 +125,11 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/browser-use", h.AdminBrowserUseStatus)
 			adm.POST("/admin/browser-use/ensure", h.AdminBrowserUseEnsure)
+
+			adm.GET("/admin/remote-relay/config", h.AdminRemoteRelayConfigGet)
+			adm.PUT("/admin/remote-relay/config", h.AdminRemoteRelayConfigPut)
+			adm.POST("/admin/remote-relay/password/rotate", h.AdminRemoteRelayPasswordRotate)
+			adm.GET("/admin/remote-relay/status", h.AdminRemoteRelayStatus)
 			adm.GET("/admin/db-clients", h.AdminDBClients)
 			adm.GET("/admin/agents/:id/db-sources", h.AdminAgentDBSourcesList)
 			adm.POST("/admin/agents/:id/db-sources", h.AdminAgentDBSourcesCreate)
