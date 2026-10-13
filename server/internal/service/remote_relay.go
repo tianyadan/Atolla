@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"atolla/server/internal/remotebridge"
 )
@@ -95,11 +96,23 @@ func (s *Service) RotateRemoteRelayPassword(ctx context.Context) (string, error)
 	if s.RemoteBridge == nil || s.RemoteBridge.Config == nil {
 		return "", fmt.Errorf("remote bridge not initialized")
 	}
+	cfg := s.RemoteBridge.Config.Get()
+	if strings.TrimSpace(cfg.BaseURL) == "" || !remotebridge.ValidInstancePassword(cfg.Password) {
+		return "", fmt.Errorf("remote bridge not ready to rotate password")
+	}
+	oldPassword := cfg.Password
 	plain := remotebridge.GenerateInstancePassword()
+	client := &remotebridge.RelayClient{
+		BaseURL:    cfg.BaseURL,
+		InstanceID: cfg.InstanceID,
+		Password:   plain,
+	}
+	if err := client.Register(ctx, cfg.DisplayName, remotebridge.RegisteredActions(), oldPassword); err != nil {
+		return "", fmt.Errorf("relay register rotate: %w", err)
+	}
 	if err := s.RemoteBridge.Config.SetPassword(plain); err != nil {
 		return "", err
 	}
-	s.RemoteBridge.TriggerReregister()
 	s.RemoteBridge.Reload(s.remoteBridgeContext())
 	return plain, nil
 }

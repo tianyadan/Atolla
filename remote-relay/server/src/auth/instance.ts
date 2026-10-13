@@ -5,6 +5,8 @@ import type { LoginRateLimiter } from './rateLimit.js'
 import { resolveClientIp } from './site.js'
 
 const BCRYPT_ROUNDS = 12
+/** Lower cost on open register path to limit event-loop DoS (verify uses stored hash rounds) */
+const REGISTER_BCRYPT_ROUNDS = 10
 
 /** Instance password lifetime after register (ms) */
 export const INSTANCE_PASSWORD_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -33,6 +35,28 @@ export type RegisterInput = {
   actions: string[]
 }
 
+export type RegisterContext = {
+  /** Client IP for audit (optional) */
+  ip?: string
+  /** Prior instance password from X-Instance-* headers (required to rotate an existing password) */
+  priorCredentials?: { instanceId: string; password: string } | null
+  /** X-Relay-Bootstrap-Token when RELAY_INSTANCE_BOOTSTRAP_TOKEN is configured */
+  bootstrapToken?: string | null
+}
+
+/** Whether new instance registration requires RELAY_INSTANCE_BOOTSTRAP_TOKEN */
+export function instanceBootstrapTokenConfigured(): boolean {
+  return Boolean(process.env.RELAY_INSTANCE_BOOTSTRAP_TOKEN?.trim())
+}
+
+/** Validate optional bootstrap token for first-time instance registration */
+export function verifyInstanceBootstrapToken(token: string | undefined | null): boolean {
+  const expected = process.env.RELAY_INSTANCE_BOOTSTRAP_TOKEN?.trim()
+  if (!expected) return true
+  const got = token?.trim()
+  return got === expected
+}
+
 export type InstanceAuthContext = {
   instanceId: string
   row: InstanceRow
@@ -53,6 +77,11 @@ export function hashInstancePassword(plain: string): string {
   return bcrypt.hashSync(plain, BCRYPT_ROUNDS)
 }
 
+/** Hash password on register (capped rounds) */
+export function hashInstancePasswordForRegister(plain: string): string {
+  return bcrypt.hashSync(plain, REGISTER_BCRYPT_ROUNDS)
+}
+
 /** Load instance row by id */
 export function getInstanceRow(
   db: RelayDatabase,
@@ -67,6 +96,7 @@ export function getInstanceRow(
 export function registerInstance(
   db: RelayDatabase,
   input: RegisterInput,
+  ctx: RegisterContext = {},
   now = Date.now(),
 ): { ok: true } | { ok: false; status: number; error: string } {
   if (!input.instance_id.trim() || !input.display_name.trim()) {
@@ -82,11 +112,29 @@ export function registerInstance(
     return { ok: false, status: 400, error: 'Invalid actions' }
   }
 
-  const passwordHash = hashInstancePassword(input.password)
+  const existing = getInstanceRow(db, input.instance_id)
+  if (!existing) {
+    if (!verifyInstanceBootstrapToken(ctx.bootstrapToken)) {
+      return { ok: false, status: 403, error: 'Unauthorized' }
+    }
+  } else if (existing.password_hash) {
+    const prior = ctx.priorCredentials
+    if (
+      !prior ||
+      prior.instanceId !== input.instance_id ||
+      !bcrypt.compareSync(prior.password, existing.password_hash)
+    ) {
+      return { ok: false, status: 401, error: 'Unauthorized' }
+    }
+    if (existing.password_expires_at != null && existing.password_expires_at <= now) {
+      return { ok: false, status: 401, error: 'Unauthorized' }
+    }
+  }
+
+  const passwordHash = hashInstancePasswordForRegister(input.password)
   const expiresAt = now + INSTANCE_PASSWORD_TTL_MS
   const actionsJson = JSON.stringify(input.actions)
 
-  const existing = getInstanceRow(db, input.instance_id)
   if (existing) {
     db.prepare(
       `UPDATE instances

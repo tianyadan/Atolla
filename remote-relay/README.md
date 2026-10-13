@@ -34,6 +34,9 @@ On first boot, if `site_auth` has no row, `SITE_PASSWORD` is hashed with bcrypt 
 | `RELAY_JWT_SECRET` | HS256 signing secret. **Required** when `NODE_ENV=production`; dev/test may omit (uses an insecure default). |
 | `RELAY_JWT_TTL_HOURS` | JWT lifetime in hours (default 24). |
 | `RELAY_TRUST_PROXY` | Set to `1` or `true` only when this process sits **behind a trusted reverse proxy** (nginx, Caddy, etc.). Enables Express `trust proxy` so `req.ip` reflects the proxy’s `X-Forwarded-For`. If unset, client IP for login rate limits comes from the TCP socket only—**spoofed `X-Forwarded-For` headers are ignored**. |
+| `RELAY_INSTANCE_BOOTSTRAP_TOKEN` | Optional. When set, **first** `POST /api/device/register` for a new `instance_id` must send header `X-Relay-Bootstrap-Token` with this value. Password rotation for an existing instance requires `X-Instance-Id` + `X-Instance-Password` (current password) and a new `password` in the JSON body. Register is rate-limited per IP. |
+
+Mac bridge config (`.atolla/remote-relay.json`) assigns a random UUID `instance_id` on first create; keep it stable across restarts.
 
 ## Monorepo scripts (from `remote-relay/`)
 

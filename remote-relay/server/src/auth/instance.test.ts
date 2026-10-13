@@ -39,17 +39,29 @@ async function register(
     registry_version: number
     actions: string[]
   }> = {},
+  opts: {
+    priorPassword?: string
+    bootstrapToken?: string
+  } = {},
 ): Promise<request.Response> {
-  return request(app)
-    .post('/api/device/register')
-    .send({
-      instance_id: INSTANCE_ID,
-      display_name: DISPLAY_NAME,
-      password: PASSWORD,
-      registry_version: 1,
-      actions: ACTIONS,
-      ...overrides,
-    })
+  const body = {
+    instance_id: INSTANCE_ID,
+    display_name: DISPLAY_NAME,
+    password: PASSWORD,
+    registry_version: 1,
+    actions: ACTIONS,
+    ...overrides,
+  }
+  let req = request(app).post('/api/device/register')
+  if (opts.priorPassword) {
+    req = req
+      .set('X-Instance-Id', body.instance_id)
+      .set('X-Instance-Password', opts.priorPassword)
+  }
+  if (opts.bootstrapToken) {
+    req = req.set('X-Relay-Bootstrap-Token', opts.bootstrapToken)
+  }
+  return req.send(body)
 }
 
 /** Heartbeat with instance headers */
@@ -114,10 +126,10 @@ describe('instance register / heartbeat / revoke', () => {
     expect(JSON.parse(row.actions_json)).toEqual(ACTIONS)
   })
 
-  it('re-register same instance_id rotates password', async () => {
+  it('re-register same instance_id rotates password with prior auth headers', async () => {
     await register()
     const newPassword = 'Xy9zW8'
-    const r = await register({ password: newPassword })
+    const r = await register({ password: newPassword }, { priorPassword: PASSWORD })
     expect(r.status).toBe(200)
 
     const oldHb = await heartbeat(INSTANCE_ID, PASSWORD)
@@ -169,15 +181,49 @@ describe('instance register / heartbeat / revoke', () => {
     const expired = await heartbeat(INSTANCE_ID, PASSWORD)
     expect(expired.status).toBe(401)
 
-    await register({ password: 'Cd34Ef' })
     const token = await siteToken()
     const revoke = await request(app)
       .delete(`/api/instances/${INSTANCE_ID}/password`)
       .set('Authorization', `Bearer ${token}`)
     expect(revoke.status).toBe(200)
 
-    const revoked = await heartbeat(INSTANCE_ID, 'Cd34Ef')
+    const revoked = await heartbeat(INSTANCE_ID, PASSWORD)
     expect(revoked.status).toBe(401)
+
+    const recovered = await register({ password: 'Cd34Ef' })
+    expect(recovered.status).toBe(200)
+    const ok = await heartbeat(INSTANCE_ID, 'Cd34Ef')
+    expect(ok.status).toBe(200)
+  })
+
+  it('rejects register takeover without prior instance password', async () => {
+    await register()
+    const hijack = await request(app)
+      .post('/api/device/register')
+      .send({
+        instance_id: INSTANCE_ID,
+        display_name: 'Evil',
+        password: 'Ev1lPw',
+        registry_version: 1,
+        actions: ACTIONS,
+      })
+    expect(hijack.status).toBe(401)
+
+    const ok = await heartbeat(INSTANCE_ID, PASSWORD)
+    expect(ok.status).toBe(200)
+  })
+
+  it('requires bootstrap token for first register when configured', async () => {
+    process.env.RELAY_INSTANCE_BOOTSTRAP_TOKEN = 'bootstrap-secret'
+    const denied = await register({ instance_id: 'new-mac-1' })
+    expect(denied.status).toBe(403)
+
+    const ok = await register(
+      { instance_id: 'new-mac-1', password: 'Nw1Mac' },
+      { bootstrapToken: 'bootstrap-secret' },
+    )
+    expect(ok.status).toBe(200)
+    delete process.env.RELAY_INSTANCE_BOOTSTRAP_TOKEN
   })
 
   it('lists instances for site JWT and hides password hash', async () => {
