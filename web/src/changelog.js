@@ -1,6 +1,15 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.4.9',
+    date: '2026-10-13',
+    items: [
+      '管理台新增「远程中继」：配置 Base URL、启用开关、显示名与实例 ID',
+      '支持轮换 6 位实例密码（明文仅展示一次）与桥接运行状态查看',
+      '提供可复制的一键部署命令与 remote-relay/deploy/install.sh（rsync、远端 build、systemd、健康检查）',
+    ],
+  },
+  {
     version: 'v0.4.8',
     date: '2026-10-13',
     items: [

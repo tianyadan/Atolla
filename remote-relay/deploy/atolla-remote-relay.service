@@ -1,0 +1,14 @@
+[Unit]
+Description=Atolla Remote Relay
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REMOTE_DIR__/remote-relay
+EnvironmentFile=/etc/atolla-remote-relay.env
+ExecStart=/usr/bin/npm run start --prefix __REMOTE_DIR__/remote-relay
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

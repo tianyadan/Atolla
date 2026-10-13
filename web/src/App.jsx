@@ -12,6 +12,7 @@ import PublicHome from './PublicHome.jsx'
 import DigitalHumanCards from './DigitalHumanCards.jsx'
 import VisitorAskAudit from './VisitorAskAudit.jsx'
 import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
+import RemoteRelayPanel from './RemoteRelayPanel.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -33,6 +34,7 @@ const ADMIN_MENUS = [
   { id: 'plans', label: '项目协作' },
   { id: 'memos', label: '备忘录' },
   { id: 'analytics', label: '数据分析' },
+  { id: 'remote-relay', label: '远程中继' },
   { id: 'manual', label: '产品手册' },
   { id: 'changelog', label: '版本' },
 ]
@@ -940,6 +942,13 @@ export default function App() {
                 active={adminMenu === 'legacy-memories'}
               />
             )}
+            {adminMenu === 'remote-relay' && (
+              <RemoteRelayPanel
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'remote-relay'}
+              />
+            )}
             <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
               <WorkflowPanel
                 authHeaders={authHeaders}
@@ -976,7 +985,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'stats', 'agents', 'agents-manage', 'legacy-memories', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'stats', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>
