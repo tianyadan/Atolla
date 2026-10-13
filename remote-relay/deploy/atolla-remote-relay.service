@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 WorkingDirectory=__REMOTE_DIR__/remote-relay
 EnvironmentFile=/etc/atolla-remote-relay.env
-ExecStart=/usr/bin/npm run start --prefix __REMOTE_DIR__/remote-relay
+ExecStart=/usr/bin/env npm run start --prefix __REMOTE_DIR__/remote-relay
 Restart=on-failure
 RestartSec=5
 

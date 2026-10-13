@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 const API = '/api'
 
+/** Bash 单引号包裹（等价于常见 shell 参数转义，避免空格/元字符破坏命令） */
+function shellSingleQuote(value) {
+  const s = String(value)
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
 /** 管理台：远程中继配置与一键部署命令 */
 export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }) {
   const [loading, setLoading] = useState(false)
@@ -143,9 +149,8 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
     const sshPort = Number(deploySshPort) || 22
     const remoteDir = deployRemoteDir.trim() || '/opt/atolla-remote-relay'
     const listenPort = Number(deployListenPort) || 3080
-    const pwd = deploySitePassword.replace(/'/g, `'\\''`)
     if (!host || !deploySitePassword.trim()) return ''
-    return `./remote-relay/deploy/install.sh --host ${host} --user ${user} --ssh-port ${sshPort} --remote-dir ${remoteDir} --port ${listenPort} --site-password '${pwd}'`
+    return `./remote-relay/deploy/install.sh --host ${shellSingleQuote(host)} --user ${shellSingleQuote(user)} --ssh-port ${sshPort} --remote-dir ${shellSingleQuote(remoteDir)} --port ${listenPort} --site-password ${shellSingleQuote(deploySitePassword)}`
   }, [deployHost, deployUser, deploySshPort, deployRemoteDir, deployListenPort, deploySitePassword])
 
   function formatTime(iso) {
