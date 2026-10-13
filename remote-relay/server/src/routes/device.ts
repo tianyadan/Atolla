@@ -14,6 +14,11 @@ import {
   submitCommandResult,
   type CommandResultStatus,
 } from '../commands.js'
+import {
+  upsertAgentsMirror,
+  upsertMessagesMirror,
+  upsertTasksMirror,
+} from '../mirror.js'
 
 const registerBodySchema = z.object({
   instance_id: z.string().min(1),
@@ -31,6 +36,42 @@ const heartbeatBodySchema = z.object({
 const commandResultBodySchema = z.object({
   status: z.enum(['done', 'error', 'rejected']),
   body: z.unknown().optional(),
+})
+
+const mirrorAgentItemSchema = z.object({
+  agent_id: z.string().min(1),
+  display_name: z.string().nullable().optional(),
+  engine: z.string().nullable().optional(),
+  status: z.string().nullable().optional(),
+  payload: z.record(z.unknown()).optional(),
+})
+
+const agentsSnapshotBodySchema = z.object({
+  agents: z.array(mirrorAgentItemSchema).min(1),
+})
+
+const mirrorTaskItemSchema = z.object({
+  agent_id: z.string().min(1),
+  task_id: z.string().min(1),
+  status: z.string().nullable().optional(),
+  payload: z.record(z.unknown()).optional(),
+})
+
+const tasksSnapshotBodySchema = z.object({
+  tasks: z.array(mirrorTaskItemSchema).min(1),
+})
+
+const mirrorMessageItemSchema = z.object({
+  message_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  role: z.string().nullable().optional(),
+  content: z.string().nullable().optional(),
+  created_at: z.number().int().optional().nullable(),
+  payload: z.record(z.unknown()).optional(),
+})
+
+const messagesSnapshotBodySchema = z.object({
+  messages: z.array(mirrorMessageItemSchema).min(1),
 })
 
 /** Mount device register and heartbeat routes */
@@ -91,6 +132,66 @@ export function createDeviceRouter(
       } catch {
         res.status(500).json({ error: 'Long poll failed' })
       }
+    },
+  )
+
+  router.post(
+    '/snapshot/agents',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      const parsed = agentsSnapshotBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid agents snapshot payload' })
+        return
+      }
+      const upserted = upsertAgentsMirror(
+        db,
+        auth.instanceId,
+        parsed.data.agents,
+        Date.now(),
+      )
+      res.json({ ok: true, upserted })
+    },
+  )
+
+  router.post(
+    '/snapshot/tasks',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      const parsed = tasksSnapshotBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid tasks snapshot payload' })
+        return
+      }
+      const upserted = upsertTasksMirror(
+        db,
+        auth.instanceId,
+        parsed.data.tasks,
+        Date.now(),
+      )
+      res.json({ ok: true, upserted })
+    },
+  )
+
+  router.post(
+    '/snapshot/messages',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      const parsed = messagesSnapshotBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid messages snapshot payload' })
+        return
+      }
+      const upserted = upsertMessagesMirror(
+        db,
+        auth.instanceId,
+        parsed.data.messages,
+        Date.now(),
+      )
+      res.json({ ok: true, upserted })
     },
   )
 
