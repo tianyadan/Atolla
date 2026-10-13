@@ -26,10 +26,7 @@ export function createSiteAuthRouter(
       return
     }
 
-    const ip = resolveClientIp(
-      req.headers['x-forwarded-for'],
-      req.socket.remoteAddress,
-    )
+    const ip = resolveClientIp(req.ip, req.socket.remoteAddress)
     const result = loginSite(db, rateLimiter, parsed.data.password, ip)
     if (!result.ok) {
       res.status(result.status).json({ error: result.error })
