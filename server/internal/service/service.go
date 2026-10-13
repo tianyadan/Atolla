@@ -16,6 +16,7 @@ import (
 	"atolla/server/internal/dbquery"
 	"atolla/server/internal/notify"
 	"atolla/server/internal/permission"
+	"atolla/server/internal/remotebridge"
 	"atolla/server/internal/store"
 	"atolla/server/internal/testsrv"
 )
@@ -47,7 +48,8 @@ type Service struct {
 	Sched    *Scheduler
 	Memory   MemoryService
 	WF       *WorkflowEngine
-	Gateway  *permission.Gateway
+	Gateway      *permission.Gateway
+	RemoteBridge *remotebridge.Bridge
 	// CodexContextCollector 允许测试注入临时 sessions 根目录；生产环境使用 ~/.codex/sessions。
 	CodexContextCollector agent.CodexSessionContextCollector
 
@@ -95,6 +97,12 @@ func New(cfg config.Config, st *store.Store) *Service {
 	}
 	_ = st.ClearAllOccupancy(context.Background())
 	svc.BeginWorkflowRecoveryWindow()
+	if cs, err := remotebridge.NewConfigStore(cfg.WorkspaceRoot); err != nil {
+		log.Printf("remotebridge config: %v", err)
+	} else {
+		svc.RemoteBridge = remotebridge.NewBridge(cs, st)
+		svc.RemoteBridge.Start(context.Background())
+	}
 	return svc
 }
 
