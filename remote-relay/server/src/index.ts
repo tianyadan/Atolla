@@ -1,20 +1,12 @@
-import cors from 'cors'
-import express from 'express'
+import { createApp } from './app.js'
 import { initDb } from './db.js'
 
 const PORT = Number(process.env.PORT ?? 3080)
 
-/** Start HTTP API (health + DB bootstrap only in V1 task 1) */
+/** Start HTTP API (health + site gate auth) */
 function main(): void {
-  initDb()
-
-  const app = express()
-  app.use(cors())
-  app.use(express.json())
-
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'atolla-remote-relay', ts: Date.now() })
-  })
+  const db = initDb()
+  const app = createApp(db)
 
   app.listen(PORT, () => {
     console.log(`[remote-relay] listening on http://0.0.0.0:${PORT}`)
