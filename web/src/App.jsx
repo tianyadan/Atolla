@@ -11,6 +11,7 @@ import ProductManual from './ProductManual.jsx'
 import PublicHome from './PublicHome.jsx'
 import DigitalHumanCards from './DigitalHumanCards.jsx'
 import VisitorAskAudit from './VisitorAskAudit.jsx'
+import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -24,14 +25,13 @@ const ADMIN_MENUS = [
     children: [
       { id: 'agents', label: '对话' },
       { id: 'agents-manage', label: '数字人管理' },
+      { id: 'legacy-memories', label: '数字员工记忆' },
     ],
   },
   { id: 'audit', label: '对话审计' },
   { id: 'stats', label: '统计' },
   { id: 'plans', label: '项目协作' },
   { id: 'memos', label: '备忘录' },
-  { id: 'passwords', label: '常用密码' },
-  { id: 'servers', label: '服务器' },
   { id: 'analytics', label: '数据分析' },
   { id: 'manual', label: '产品手册' },
   { id: 'changelog', label: '版本' },
@@ -693,7 +693,7 @@ export default function App() {
   // —— 管理菜单 ——
   function switchAdminMenu(id) {
     setAdminMenu(id)
-    if (id === 'agents' || id === 'agents-manage') setDigitalOpen(true)
+    if (id === 'agents' || id === 'agents-manage' || id === 'legacy-memories') setDigitalOpen(true)
     if (id === 'stats') loadStats()
     if (id === 'changelog') setClPage(1)
   }
@@ -933,6 +933,13 @@ export default function App() {
                 }}
               />
             )}
+            {adminMenu === 'legacy-memories' && (
+              <LegacyMemoryShelf
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'legacy-memories'}
+              />
+            )}
             <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
               <WorkflowPanel
                 authHeaders={authHeaders}
@@ -969,7 +976,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'stats', 'agents', 'agents-manage', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'stats', 'agents', 'agents-manage', 'legacy-memories', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>

@@ -17,7 +17,8 @@ import (
 
 // AdminAgentsList 数字员工列表。
 func (h *Handler) AdminAgentsList(c *gin.Context) {
-	items, err := h.svc.Store.ListManagedAgents(c.Request.Context())
+	ctx := c.Request.Context()
+	items, err := h.svc.Store.ListManagedAgents(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -25,14 +26,18 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 	if items == nil {
 		items = []store.ManagedAgent{}
 	}
-	items = h.svc.EnrichAgentsFolderNames(c.Request.Context(), items)
-	occMap, _ := h.svc.Store.ListOccupancyMap(c.Request.Context())
+	items = h.svc.EnrichAgentsFolderNames(ctx, items)
+	skillCounts, _ := h.svc.Store.CountInstalledSkillsMap(ctx)
+	skillIcons, _ := h.svc.Store.ListInstalledSkillIconsByAgents(ctx)
+	occMap, _ := h.svc.Store.ListOccupancyMap(ctx)
 	type row struct {
 		store.ManagedAgent
 		Occupancy *store.Occupancy `json:"occupancy,omitempty"`
 	}
 	out := make([]row, 0, len(items))
 	for _, a := range items {
+		a.SkillCount = skillCounts[a.ID]
+		a.SkillIcons = skillIcons[a.ID]
 		r := row{ManagedAgent: a}
 		if o, ok := occMap[a.ID]; ok {
 			oc := o
@@ -419,9 +424,20 @@ func (h *Handler) AdminAgentsFile(c *gin.Context) {
 func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
-		Question string `json:"question"`
+		Question    string `json:"question"`
+		Attachments []struct {
+			ID   string `json:"id"`
+			URL  string `json:"url"`
+			Mime string `json:"mime"`
+			Name string `json:"name"`
+		} `json:"attachments"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Question) == "" {
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	atts := parseAskAttachments(body.Attachments)
+	if strings.TrimSpace(body.Question) == "" && len(atts) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "question required"})
 		return
 	}
@@ -515,7 +531,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	}
 	defer stopForward()
 
-	msg, askErr := h.svc.AskManaged(c.Request.Context(), id, body.Question, func(ev map[string]any) {
+	msg, askErr := h.svc.AskManagedWith(c.Request.Context(), id, body.Question, atts, func(ev map[string]any) {
 		if ev == nil {
 			return
 		}
@@ -791,6 +807,28 @@ func (h *Handler) AdminAgentsTaskPlan(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Store.SetManagedAgentTaskPlan(c.Request.Context(), id, body.Enabled); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": body.Enabled, "agent": a})
+}
+
+// AdminAgentsAutoApproveAll 开关「命令全部审批通过」。
+func (h *Handler) AdminAgentsAutoApproveAll(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if err := h.svc.Store.SetManagedAgentAutoApproveAll(c.Request.Context(), id, body.Enabled); err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return

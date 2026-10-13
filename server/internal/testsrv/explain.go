@@ -36,7 +36,7 @@ func ExplainCommand(ctx context.Context, bin string, env []string, command strin
 		"--output-format", "text",
 		"--system-prompt", sys,
 		"--tools", "",
-		"--permission-prompts", "none",
+		"--permission-mode", "dontAsk",
 		"--no-session-persistence",
 	)
 	if len(env) > 0 {

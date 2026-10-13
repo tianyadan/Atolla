@@ -19,6 +19,7 @@ type ManagedAgent struct {
 	BinPath         string     `json:"bin_path"`
 	RulesPrompt     string     `json:"rules_prompt"`
 	AutoReview      bool       `json:"auto_review"`
+	AutoApproveAll  bool       `json:"auto_approve_all"` // 命令全部审批通过（无需人工）
 	TaskPlanEnabled bool       `json:"task_plan_enabled"` // 默认 true：Ask 前 AI 拆分步骤
 	AllowWrite      bool       `json:"allow_write"`
 	AllowNetwork    bool       `json:"allow_network"`
@@ -33,6 +34,8 @@ type ManagedAgent struct {
 	ConversationID  int64      `json:"conversation_id"`
 	ClonedFromID    int64      `json:"cloned_from_id"`
 	FolderName      string     `json:"folder_name,omitempty"` // 列表展示用，非列
+	SkillCount      int        `json:"skill_count"`           // 已安装技能数（列表富化）
+	SkillIcons      []AgentSkillIconBrief `json:"skill_icons,omitempty"` // 悬停展示用
 	LastError       string     `json:"last_error"`
 	LastRunMs       int        `json:"last_run_ms"`
 	RunStartedAt    *time.Time `json:"run_started_at,omitempty"`
@@ -102,9 +105,9 @@ func scanManagedAgent(scanner interface {
 }) (ManagedAgent, error) {
 	var a ManagedAgent
 	var runAt sql.NullTime
-	var auto, tp, aw, an, ar, ab, se, recv int
+	var auto, aaa, tp, aw, an, ar, ab, se, recv int
 	err := scanner.Scan(
-		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &tp,
+		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
 		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
@@ -112,6 +115,7 @@ func scanManagedAgent(scanner interface {
 		return a, err
 	}
 	a.AutoReview = auto != 0
+	a.AutoApproveAll = aaa != 0
 	a.TaskPlanEnabled = tp != 0
 	a.AllowWrite = aw != 0
 	a.AllowNetwork = an != 0
@@ -127,7 +131,7 @@ func scanManagedAgent(scanner interface {
 }
 
 const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(folder_id,0), engine, context_window_tokens, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
-		IFNULL(task_plan_enabled,1),
+		IFNULL(auto_approve_all,0), IFNULL(task_plan_enabled,1),
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
 		status, IFNULL(is_receptionist,0), IFNULL(conversation_id,0), IFNULL(cloned_from_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
@@ -353,6 +357,19 @@ func (s *Store) SetManagedAgentTaskPlan(ctx context.Context, id int64, enabled b
 // SetManagedAgentAutoReview 持久化 AI 自动审核开关。
 func (s *Store) SetManagedAgentAutoReview(ctx context.Context, id int64, enabled bool) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET auto_review=? WHERE id=?`, bool01(enabled), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetManagedAgentAutoApproveAll 持久化「命令全部审批通过」开关。
+func (s *Store) SetManagedAgentAutoApproveAll(ctx context.Context, id int64, enabled bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET auto_approve_all=? WHERE id=?`, bool01(enabled), id)
 	if err != nil {
 		return err
 	}

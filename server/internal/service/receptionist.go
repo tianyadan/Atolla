@@ -90,9 +90,18 @@ func (s *Service) NewVisitorConversation(ctx context.Context, v *store.Visitor, 
 
 // AskReceptionist 前台访客提问（隔离会话，不写数字人主会话）。
 func (s *Service) AskReceptionist(ctx context.Context, visitorID, agentID, convID int64, question, ip, ua string, onEvent AskEventSink) (*store.Message, error) {
+	return s.AskReceptionistWith(ctx, visitorID, agentID, convID, question, nil, ip, ua, onEvent)
+}
+
+// AskReceptionistWith 同 AskReceptionist，可附带聊天图片。
+func (s *Service) AskReceptionistWith(ctx context.Context, visitorID, agentID, convID int64, question string, atts []ChatAttachment, ip, ua string, onEvent AskEventSink) (*store.Message, error) {
+	atts = NormalizeChatAttachments(atts)
 	question = strings.TrimSpace(question)
-	if question == "" {
+	if question == "" && len(atts) == 0 {
 		return nil, fmt.Errorf("empty question")
+	}
+	if question == "" {
+		question = "请查看图片并回答相关问题。"
 	}
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil || a == nil {
@@ -115,6 +124,7 @@ func (s *Service) AskReceptionist(ctx context.Context, visitorID, agentID, convI
 	// 审计在 askManagedCore：用户消息 INSERT 后 Begin，assistant 落库后 Finish。
 	return s.askManagedCore(ctx, a, convID, question, askCoreOpts{
 		bindMainConv: false,
+		attachments:  atts,
 		visitorAudit: &visitorAskAudit{VisitorID: visitorID, IP: ip, UA: ua},
 	}, onEvent)
 }

@@ -13,6 +13,17 @@ import {
   subscribeAgentSessions,
 } from './managedAgentSessions.js'
 import { coalesceChatLog } from './coalesceChatLog.js'
+import AgentSkillsPanel from './AgentSkillsPanel.jsx'
+import TalentMarket from './TalentMarket.jsx'
+import DismissAgentModal from './DismissAgentModal.jsx'
+import {
+  MAX_CHAT_IMAGES,
+  appendPendingImages,
+  ensureUploadedAttachments,
+  imageFilesFromDataTransfer,
+  revokePendingImages,
+} from './chatImages.js'
+import { ChatAttachPreview, ChatLightbox, ChatMessageImages } from './ChatImageUI.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -55,12 +66,60 @@ function engineMeta(id) {
   return ENGINES.find((e) => e.id === id) || { id, label: id, color: '#94a3b8' }
 }
 
+const BUILTIN_SKILL_ICON = {
+  database: '/skill-icons/database.svg',
+  server: '/skill-icons/server.svg',
+  browser: '/skill-icons/browser.svg',
+}
+
+/** 引擎标签旁：已安装技能数量（浅紫粉半透明） */
+function SkillCountBadge({ count }) {
+  const n = Number(count) || 0
+  if (n <= 0) return null
+  return (
+    <span className="skill-count-badge" title={`已安装 ${n} 个技能`}>
+      {n}
+    </span>
+  )
+}
+
+/** 引擎标签 + 技能数量角标 */
+function EngineTagWithSkills({ engine, skillCount }) {
+  return (
+    <span className="engine-tag-wrap">
+      <span className="tag engine-tag" style={{ '--eng': engineMeta(engine).color }}>
+        {engineMeta(engine).label}
+      </span>
+      <SkillCountBadge count={skillCount} />
+    </span>
+  )
+}
+
+/** 悬停展示已安装技能 10×10 图标 */
+function SkillIconStrip({ icons }) {
+  if (!icons?.length) return null
+  return (
+    <div className="ma-item-skills" aria-hidden="true">
+      {icons.map((sk) => {
+        const src = sk.icon_url || BUILTIN_SKILL_ICON[sk.icon_key]
+        if (src) {
+          return <img key={sk.id} className="ma-skill-ico" src={src} alt="" title={sk.name || sk.id} />
+        }
+        return (
+          <span key={sk.id} className="ma-skill-ico glyph" title={sk.name || sk.id}>
+            ◇
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 function emptyPolicy() {
   return {
     allow_write: true,
     allow_network: true,
     allow_rm: false,
-    allow_browser: false,
     workspace_bound: false,
     workspace_path: '',
     schedule_enabled: false,
@@ -130,9 +189,14 @@ export default function ManagedAgentsPanel({
   const [question, setQuestion] = useState('')
   const [tasks, setTasks] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
+  const [talentMarketOpen, setTalentMarketOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
   const [copyName, setCopyName] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState('basic') // basic | skills | legacy
+  const [skillsSubTab, setSkillsSubTab] = useState('installed') // installed | store
+  const [dismissTarget, setDismissTarget] = useState(null) // agent | null
+  const [legacyMounts, setLegacyMounts] = useState([])
   const [folders, setFolders] = useState([])
   const [agentSearch, setAgentSearch] = useState('')
   const [collapsedFolders, setCollapsedFolders] = useState({})
@@ -153,12 +217,18 @@ export default function ManagedAgentsPanel({
   const [workspaces, setWorkspaces] = useState([])
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionIdx, setMentionIdx] = useState(0)
+  const [pendingImages, setPendingImages] = useState([])
+  const [lightboxSrc, setLightboxSrc] = useState('')
+  const [attachBusy, setAttachBusy] = useState(false)
   const composerRef = useRef(null)
+  const composerDropRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [rulesDraft, setRulesDraft] = useState('')
   const [permBusy, setPermBusy] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
+  const [approveAllSaving, setApproveAllSaving] = useState(false)
+  const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
   const [taskPlanSaving, setTaskPlanSaving] = useState(false)
   const [, setTick] = useState(0)
   const [, setSessVer] = useState(0)
@@ -176,6 +246,7 @@ export default function ManagedAgentsPanel({
   const interrupting = !!sess.interrupting
   const permQueue = sess.permQueue || []
   const autoOn = !!sess.autoOn
+  const approveAllOn = !!selected?.auto_approve_all
   // 缺省 true：兼容尚未返回字段的旧响应
   const taskPlanOn = selected ? selected.task_plan_enabled !== false : true
   const invokeMap = sess.invokes || {}
@@ -258,6 +329,7 @@ export default function ManagedAgentsPanel({
         calleeId: meta?.callee_id,
         calleeName: meta?.callee_name,
         callerName: meta?.caller_name,
+        attachments: Array.isArray(meta?.attachments) ? meta.attachments : [],
         collapsed: m.role === 'invoke_quote',
       }
       if (m.role === 'command' && typeof m.content === 'string' && m.content.trim().startsWith('{')) {
@@ -381,15 +453,17 @@ export default function ManagedAgentsPanel({
   useEffect(() => {
     if (!focusAgentId) return
     setSelectedId(focusAgentId)
-    if (openSettings) setSettingsOpen(true)
+    if (openSettings) {
+      setSettingsTab('basic')
+      setSettingsOpen(true)
+    }
     onFocusConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusAgentId, openSettings])
 
   useEffect(() => {
     if (!openHire) return
-    setNewPolicy(emptyPolicy())
-    setCreateOpen(true)
+    setTalentMarketOpen(true)
     onHireConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openHire])
@@ -411,6 +485,15 @@ export default function ManagedAgentsPanel({
     setPolicyDraft(policyFromAgent(selected))
     loadDetail(selected.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
+
+  // 切换同事时清空未发送贴图
+  useEffect(() => {
+    setPendingImages((prev) => {
+      revokePendingImages(prev)
+      return []
+    })
+    setLightboxSrc('')
   }, [selectedId])
 
   useEffect(() => {
@@ -461,7 +544,6 @@ export default function ManagedAgentsPanel({
           allow_write: !!newPolicy.allow_write,
           allow_network: !!newPolicy.allow_network,
           allow_rm: !!newPolicy.allow_rm,
-          allow_browser: !!newPolicy.allow_browser,
           workspace_path: newPolicy.workspace_bound ? (newPolicy.workspace_path || '') : '',
           schedule_enabled: !!newPolicy.schedule_enabled,
           schedule_cron: newPolicy.schedule_enabled ? (newPolicy.schedule_cron || '') : '',
@@ -562,7 +644,6 @@ export default function ManagedAgentsPanel({
           allow_write: !!policyDraft.allow_write,
           allow_network: !!policyDraft.allow_network,
           allow_rm: !!policyDraft.allow_rm,
-          allow_browser: !!policyDraft.allow_browser,
           workspace_path: policyDraft.workspace_bound ? (policyDraft.workspace_path || '') : '',
           schedule_enabled: !!policyDraft.schedule_enabled,
           schedule_cron: policyDraft.schedule_enabled ? (policyDraft.schedule_cron || '') : '',
@@ -644,14 +725,20 @@ export default function ManagedAgentsPanel({
 
   async function deleteAgent() {
     if (!selected || busy) return
-    if (!window.confirm(`确认解聘数字员工「${selected.name}」？`)) return
-    setBusy(true)
+    setDismissTarget(selected)
+  }
+
+  /** 加载设置页「继承记忆」 */
+  async function loadLegacyMounts(agentId) {
+    if (!agentId) { setLegacyMounts([]); return }
     try {
-      const id = selected.id
-      await fetch(`${API}/admin/agents/${id}`, { method: 'DELETE', headers: authHeaders() })
-      clearAgentSession(id)
-      await loadAgents(0)
-    } finally { setBusy(false) }
+      const res = await fetch(`${API}/admin/agents/${agentId}/legacy-mounts`, { headers: authHeaders() })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (res.ok) setLegacyMounts(d.items || [])
+    } catch {
+      setLegacyMounts([])
+    }
   }
 
   async function compressChat() {
@@ -701,9 +788,35 @@ export default function ManagedAgentsPanel({
       }
       patchAgentSession(selected.id, { autoOn: v })
       if (!v) patchAgentSession(selected.id, { permQueue: [] })
+      setAgents((list) => list.map((a) => (
+        a.id === selected.id ? { ...a, auto_review: v } : a
+      )))
     } catch (e) {
       patchAgentSession(selected.id, { autoOn: false, error: String(e.message || e) })
     } finally { setAutoSaving(false) }
+  }
+
+  /** 开关「命令全部审批通过」并落库 */
+  async function toggleApproveAll(v) {
+    if (!selected || approveAllSaving) return
+    setApproveAllSaving(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${selected.id}/auto-approve-all`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ enabled: v }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `全部审批通过开关失败(${res.status})`)
+      setAgents((list) => list.map((a) => (
+        a.id === selected.id ? { ...a, auto_approve_all: v } : a
+      )))
+      if (v) patchAgentSession(selected.id, { permQueue: [] })
+    } catch (e) {
+      patchAgentSession(selected.id, { error: String(e.message || e) })
+    } finally {
+      setApproveAllSaving(false)
+    }
   }
 
   /** 切换任务规划：落库到数字员工配置 */
@@ -973,7 +1086,8 @@ export default function ManagedAgentsPanel({
     } catch { /* ignore */ }
   }
 
-  async function sendQuestion(agentId, q) {
+  async function sendQuestion(agentId, q, attachments = []) {
+    const atts = (attachments || []).filter((a) => a?.url || a?.id)
     const ac = new AbortController()
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: Date.now(), abort: ac, interrupting: false, invokes: {},
@@ -982,14 +1096,14 @@ export default function ManagedAgentsPanel({
     })
     setAgentChatLog(agentId, (prev) => [
       ...prev,
-      { role: 'user', content: q, time: Date.now() },
+      { role: 'user', content: q, attachments: atts, time: Date.now() },
     ])
     stickBottomRef.current = true
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/ask`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, attachments: atts }),
         signal: ac.signal,
       })
       if (res.status === 401) { onUnauthorized?.(); return }
@@ -1038,13 +1152,54 @@ export default function ManagedAgentsPanel({
       }
     } finally {
       const pending = getAgentSession(agentId).pendingInterrupt
+      const pendingAtts = getAgentSession(agentId).pendingAttachments || []
       patchAgentSession(agentId, {
-        loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', interrupting: false,
-        liveActivity: null,
+        loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
+        interrupting: false, liveActivity: null,
       })
       await refreshAgentContext(agentId, false)
-      if (pending) await sendQuestion(agentId, pending)
+      if (pending || pendingAtts.length) await sendQuestion(agentId, pending || '', pendingAtts)
     }
+  }
+
+  /** 粘贴/拖入图片加入预览 */
+  function ingestComposerImages(files) {
+    if (!files?.length) return
+    setPendingImages((prev) => {
+      const { next, overflow } = appendPendingImages(prev, files)
+      if (overflow) {
+        patchAgentSession(selectedId, { error: `最多附带 ${MAX_CHAT_IMAGES} 张图片` })
+      }
+      return next
+    })
+  }
+
+  function onComposerPaste(e) {
+    const files = imageFilesFromDataTransfer(e.clipboardData)
+    if (!files.length) return
+    e.preventDefault()
+    ingestComposerImages(files)
+  }
+
+  function onComposerDragOver(e) {
+    if (![...e.dataTransfer.types].includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  function onComposerDrop(e) {
+    const files = imageFilesFromDataTransfer(e.dataTransfer)
+    if (!files.length) return
+    e.preventDefault()
+    ingestComposerImages(files)
+  }
+
+  function removePendingImage(localId) {
+    setPendingImages((prev) => {
+      const hit = prev.find((x) => x.localId === localId)
+      if (hit) revokePendingImages([hit])
+      return prev.filter((x) => x.localId !== localId)
+    })
   }
 
   /** 输入 @ 时弹出同事列表 */
@@ -1082,24 +1237,47 @@ export default function ManagedAgentsPanel({
   }
 
   async function ask() {
-    if (!selected || !question.trim()) return
+    if (!selected) return
     if (selected.status === 'initializing' || isCloneInitBusy(selected)) return
     const q = question.trim()
-    setQuestion('')
+    const pending = pendingImages
+    if (!q && !pending.length) return
+    if (attachBusy) return
     const id = selected.id
     const s = getAgentSession(id)
+    let atts = []
+    if (pending.length) {
+      setAttachBusy(true)
+      try {
+        atts = await ensureUploadedAttachments(
+          pending,
+          (localId, patch) => {
+            setPendingImages((prev) => prev.map((x) => (x.localId === localId ? { ...x, ...patch } : x)))
+          },
+          { endpoint: `${API}/admin/chat-images`, headers: authHeaders() },
+        )
+      } catch (err) {
+        patchAgentSession(id, { error: String(err.message || err) })
+        setAttachBusy(false)
+        return
+      }
+      setAttachBusy(false)
+    }
+    setQuestion('')
+    revokePendingImages(pending)
+    setPendingImages([])
     if (s.loading) {
-      patchAgentSession(id, { pendingInterrupt: q, interrupting: true })
+      patchAgentSession(id, { pendingInterrupt: q, pendingAttachments: atts, interrupting: true })
       s.abort?.abort()
       return
     }
-    await sendQuestion(id, q)
+    await sendQuestion(id, q, atts)
   }
 
   async function stopRun() {
     if (!selected) return
     const id = selected.id
-    patchAgentSession(id, { pendingInterrupt: '', interrupting: false })
+    patchAgentSession(id, { pendingInterrupt: '', pendingAttachments: [], interrupting: false })
     getAgentSession(id).abort?.abort()
     try {
       await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
@@ -1229,7 +1407,7 @@ export default function ManagedAgentsPanel({
           </span>
         </div>
         <div className="ma-item-meta">
-          <span className="tag engine-tag" style={{ '--eng': engineMeta(a.engine).color }}>{engineMeta(a.engine).label}</span>
+          <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
           <span className="ma-age-fixed">已运行 {fmtAge(a.created_at)}</span>
           {runSec > 0 ? <span className="ma-runlive">本次 {fmtSec(runSec)}</span>
             : a.last_run_ms > 0 ? <span>上次 {fmtSec(Math.round(a.last_run_ms / 1000))}</span> : null}
@@ -1243,6 +1421,7 @@ export default function ManagedAgentsPanel({
             </button>
           )}
         </div>
+        <SkillIconStrip icons={a.skill_icons} />
       </div>
     )
   }
@@ -1279,7 +1458,7 @@ export default function ManagedAgentsPanel({
           >
             创建工作组
           </button>
-          <button type="button" className="new" onClick={() => { setNewPolicy(emptyPolicy()); setCreateOpen(true) }}>＋ 一键招聘</button>
+          <button type="button" className="new" onClick={() => setTalentMarketOpen(true)}>＋ 一键招聘</button>
         </div>
       </div>
 
@@ -1390,7 +1569,7 @@ export default function ManagedAgentsPanel({
             <div className="empty ma-empty ma-empty-hero">
               <div className="ma-empty-icon" aria-hidden="true" />
               <p>还没有选中同事</p>
-              <p className="ma-empty-sub">从左侧工作组点选，或点右上角「一键招聘」</p>
+              <p className="ma-empty-sub">从左侧工作组点选，或点右上角「一键招聘」打开人才市场</p>
             </div>
           ) : (
             <div className="ma-detail">
@@ -1398,7 +1577,7 @@ export default function ManagedAgentsPanel({
                 <div className="ma-detail-title">
                   <img className="ma-avatar ma-avatar-md" src={agentAvatarUrl(selected)} alt="" />
                   <h3>{selected.name}</h3>
-                  <span className="tag engine-tag" style={{ '--eng': engineMeta(selected.engine).color }}>{engineMeta(selected.engine).label}</span>
+                  <EngineTagWithSkills engine={selected.engine} skillCount={selected.skill_count} />
                   <span className={`ma-status st-${cloneInitBusy ? 'initializing' : statusClass(getAgentSession(selected.id).compressing ? 'compressing' : (getAgentSession(selected.id).loading ? 'running' : selected.status))}`}>
                     {statusLabel(selected)}
                   </span>
@@ -1415,17 +1594,22 @@ export default function ManagedAgentsPanel({
                 </div>
                 <div className="ma-detail-tools">
                   {!workflowBusy && (
-                    <label className={`auto-switch ${autoSaving ? 'busy' : ''}`} title="开启后由 AI 审核命令">
-                      <input type="checkbox" checked={autoOn} disabled={autoSaving} onChange={(e) => toggleAuto(e.target.checked)} />
-                      <span className="slider" />
-                      <span className="auto-label">自动审核</span>
-                    </label>
+                    <button
+                      type="button"
+                      className={`ghost ma-approve-settings-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
+                      onClick={() => setApproveSettingsOpen(true)}
+                      title="命令审批设置"
+                    >
+                      命令审批设置
+                      {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
+                    </button>
                   )}
                   <button type="button" className="ghost" onClick={() => {
                     setRenameDraft(selected.name || '')
                     setRulesDraft(selected.rules_prompt || '')
                     setPolicyDraft(policyFromAgent(selected))
                     setContextWindowDraft(selected.context_window_tokens || 1000000)
+                    setSettingsTab('basic')
                     setSettingsOpen(true)
                   }}>设置</button>
                   {selected.status !== 'initializing' && !cloneInitBusy && (
@@ -1542,10 +1726,14 @@ export default function ManagedAgentsPanel({
                         <AgentMarkdown content={m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
                       </div>
                     ) : (
-                      <div
-                        className="msg-body"
-                        dangerouslySetInnerHTML={{ __html: escapeHtml(m.content) }}
-                      />
+                      <div className="msg-body">
+                        {(m.attachments || []).length > 0 && (
+                          <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
+                        )}
+                        {m.content ? (
+                          <div dangerouslySetInnerHTML={{ __html: escapeHtml(m.content) }} />
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 ))}
@@ -1569,7 +1757,12 @@ export default function ManagedAgentsPanel({
               )}
 
               {!chatLocked && (
-              <div className="ma-composer">
+              <div
+                className="ma-composer"
+                ref={composerDropRef}
+                onDragOver={onComposerDragOver}
+                onDrop={onComposerDrop}
+              >
                 <CapsuleToggle
                   label="任务规划"
                   hint="开启后先拆分步骤并展示进度；关闭则跳过规划、直接执行"
@@ -1587,20 +1780,22 @@ export default function ManagedAgentsPanel({
                             className={i === mentionIdx ? 'active' : ''}
                             onMouseDown={(e) => { e.preventDefault(); insertMention(a) }}
                           >
-                            <span className="tag engine-tag" style={{ '--eng': engineMeta(a.engine).color }}>{engineMeta(a.engine).label}</span>
+                            <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
                             {a.name}
                           </button>
                         </li>
                       ))}
                     </ul>
                   )}
+                  <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
                   <textarea
                     ref={composerRef}
                     value={question}
                     onChange={onComposerChange}
                     onKeyDown={onKeyDown}
+                    onPaste={onComposerPaste}
                     rows={3}
-                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事' : '输入任务，Ctrl+Enter 发送，Enter 换行；输入 @ 选择其他同事')}
+                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事；可粘贴图片' : '输入任务，Ctrl+Enter 发送，Enter 换行；@ 协作；可粘贴/拖入图片')}
                     disabled={initializing}
                   />
                   <ContextRing
@@ -1614,13 +1809,23 @@ export default function ManagedAgentsPanel({
                 </div>
                 <div className="ma-composer-actions">
                   {!loading ? (
-                    <button type="button" className="primary" onClick={ask} disabled={!question.trim() || compressing || initializing}>
-                      发送
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={ask}
+                      disabled={(!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                    >
+                      {attachBusy ? '上传中…' : '发送'}
                     </button>
                   ) : (
                     <>
-                      <button type="button" className="primary" onClick={ask} disabled={!question.trim() || compressing || initializing}>
-                        {interrupting ? '插话中…' : '插话'}
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={ask}
+                        disabled={(!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                      >
+                        {attachBusy ? '上传中…' : (interrupting ? '插话中…' : '插话')}
                       </button>
                       <button type="button" className="stop" onClick={stopRun}>终止</button>
                     </>
@@ -1685,10 +1890,51 @@ export default function ManagedAgentsPanel({
         </div>
       </div>
 
+      {approveSettingsOpen && selected && (
+        <div className="modal-mask" onClick={() => !autoSaving && !approveAllSaving && setApproveSettingsOpen(false)}>
+          <div className="modal-card ma-settings ma-approve-modal" onClick={(e) => e.stopPropagation()}>
+            <h2>命令审批设置</h2>
+            <p className="ma-approve-modal-desc">
+              控制本数字人命令授权策略。Hard Deny（如关机）仍不可绕过。
+            </p>
+            <CapsuleToggle
+              label="命令全部审批通过"
+              hint="开启后无需人工审批，全部自动通过；自动通过记录写入数据库，最多保留 7 天"
+              checked={approveAllOn}
+              disabled={approveAllSaving || workflowBusy}
+              onChange={toggleApproveAll}
+            />
+            <CapsuleToggle
+              label="自动审核"
+              hint="开启后由 AI 审核非常规命令（仍可能弹窗）"
+              checked={autoOn}
+              disabled={autoSaving || approveAllOn || workflowBusy}
+              onChange={toggleAuto}
+            />
+            <div className="modal-actions">
+              <button type="button" className="ghost" onClick={() => setApproveSettingsOpen(false)}>关闭</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <TalentMarket
+        open={talentMarketOpen}
+        authHeaders={authHeaders}
+        onUnauthorized={onUnauthorized}
+        onClose={() => setTalentMarketOpen(false)}
+        onHired={(a) => { if (a?.id) loadAgents(a.id) }}
+        onCustomHire={() => {
+          setTalentMarketOpen(false)
+          setNewPolicy(emptyPolicy())
+          setCreateOpen(true)
+        }}
+      />
+
       {createOpen && (
         <div className="modal-mask" onClick={() => !busy && setCreateOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={createAgent}>
-            <h2>招聘数字员工</h2>
+            <h2>自定义招聘</h2>
             <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
               引擎
@@ -1807,61 +2053,144 @@ export default function ManagedAgentsPanel({
       )}
 
       {settingsOpen && selected && (
-        <div className="modal-mask" onClick={() => !busy && setSettingsOpen(false)}>
-          <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); saveRules() }}>
+        <div className="modal-mask" onClick={() => {
+          if (busy) return
+          setSettingsOpen(false)
+          loadAgents(selected.id)
+        }}>
+          <div className="modal-card ma-settings ma-settings-wide" onClick={(e) => e.stopPropagation()}>
             <h2>员工设置 · {selected.name}</h2>
-            <div className="ma-avatar-edit">
-              <img className="ma-avatar ma-avatar-lg" src={agentAvatarUrl(selected)} alt="" />
-              <div className="ma-avatar-actions">
-                <label className="ghost ma-file-btn">
-                  {busy ? '上传中…' : '上传头像'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    hidden
-                    disabled={busy}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0]
-                      e.target.value = ''
-                      if (f) uploadAvatar(f)
-                    }}
-                  />
+            <div className="ma-settings-tabs" role="tablist">
+              <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>基本</button>
+              <button type="button" className={settingsTab === 'skills' ? 'active' : ''} onClick={() => setSettingsTab('skills')}>技能</button>
+              <button
+                type="button"
+                className={settingsTab === 'legacy' ? 'active' : ''}
+                onClick={() => { setSettingsTab('legacy'); loadLegacyMounts(selected.id) }}
+              >
+                继承记忆
+              </button>
+            </div>
+            {settingsTab === 'basic' ? (
+              <form onSubmit={(e) => { e.preventDefault(); saveRules() }}>
+                <div className="ma-avatar-edit">
+                  <img className="ma-avatar ma-avatar-lg" src={agentAvatarUrl(selected)} alt="" />
+                  <div className="ma-avatar-actions">
+                    <label className="ghost ma-file-btn">
+                      {busy ? '上传中…' : '上传头像'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        disabled={busy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          e.target.value = ''
+                          if (f) uploadAvatar(f)
+                        }}
+                      />
+                    </label>
+                    {!!String(selected.avatar_url || '').trim() && (
+                      <button type="button" className="ghost" disabled={busy} onClick={clearAvatar}>恢复默认</button>
+                    )}
+                  </div>
+                </div>
+                <label>
+                  名称
+                  <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
                 </label>
-                {!!String(selected.avatar_url || '').trim() && (
-                  <button type="button" className="ghost" disabled={busy} onClick={clearAvatar}>恢复默认</button>
+                <label>
+                  上下文窗口
+                  <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
+                    <option value={262144}>256K</option>
+                    <option value={524288}>512K</option>
+                    <option value={1000000}>1M</option>
+                  </select>
+                </label>
+                <label>
+                  系统提示词
+                  <textarea rows={8} value={rulesDraft} onChange={(e) => setRulesDraft(e.target.value)} disabled={busy} />
+                </label>
+                <AgentPolicyFields
+                  value={policyDraft}
+                  onChange={setPolicyDraft}
+                  workspaces={workspaces}
+                  disabled={busy}
+                />
+                <p className="muted">权限会写入系统提示，并每 10 轮重申；工具层会硬拦截违规操作。也可在「技能商店」按技能安装细粒度能力。</p>
+                <div className="modal-actions">
+                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>取消</button>
+                  <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+                </div>
+              </form>
+            ) : settingsTab === 'skills' ? (
+              <>
+                <AgentSkillsPanel
+                  agentId={selected.id}
+                  authHeaders={authHeaders}
+                  onUnauthorized={onUnauthorized}
+                  activeTab={skillsSubTab}
+                  onTabChange={setSkillsSubTab}
+                  disabled={busy}
+                />
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setSettingsOpen(false)
+                      loadAgents(selected.id)
+                    }}
+                  >
+                    关闭
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="lm-mounts-panel">
+                <p className="muted">已继承的离职记忆（最多 5 本）；认领时已写入规则区，可在「基本」中编辑正文。</p>
+                {legacyMounts.length === 0 ? (
+                  <p className="empty">尚未继承记忆。可在「数字员工记忆」书架认领。</p>
+                ) : (
+                  <ul className="lm-mount-list">
+                    {legacyMounts.map((m) => (
+                      <li key={m.id} className="lm-mount-item">
+                        <img
+                          className="lm-mount-avatar"
+                          src={agentAvatarUrl({ avatar_url: m.source_avatar_url })}
+                          alt=""
+                        />
+                        <div>
+                          <strong>{m.source_agent_name}</strong>
+                          <span>{m.source_job_title || '数字员工'}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 )}
+                <div className="modal-actions">
+                  <button type="button" className="ghost" disabled={busy} onClick={() => loadLegacyMounts(selected.id)}>刷新</button>
+                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>关闭</button>
+                </div>
               </div>
-            </div>
-            <label>
-              名称
-              <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
-            </label>
-            <label>
-              上下文窗口
-              <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
-                <option value={262144}>256K</option>
-                <option value={524288}>512K</option>
-                <option value={1000000}>1M</option>
-              </select>
-            </label>
-            <label>
-              系统提示词
-              <textarea rows={8} value={rulesDraft} onChange={(e) => setRulesDraft(e.target.value)} disabled={busy} />
-            </label>
-            <AgentPolicyFields
-              value={policyDraft}
-              onChange={setPolicyDraft}
-              workspaces={workspaces}
-              disabled={busy}
-            />
-            <p className="muted">权限会写入系统提示，并每 10 轮重申；工具层会硬拦截违规操作。</p>
-            <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>取消</button>
-              <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存'}</button>
-            </div>
-          </form>
+            )}
+          </div>
         </div>
       )}
+
+      <DismissAgentModal
+        open={!!dismissTarget}
+        agents={dismissTarget ? [{ id: dismissTarget.id, name: dismissTarget.name }] : []}
+        authHeaders={authHeaders}
+        onUnauthorized={onUnauthorized}
+        onClose={() => setDismissTarget(null)}
+        onDone={(ids) => {
+          ids.forEach((id) => clearAgentSession(id))
+          loadAgents(0)
+        }}
+      />
+
+      <ChatLightbox src={lightboxSrc} onClose={() => setLightboxSrc('')} />
     </section>
   )
 }
@@ -1875,7 +2204,6 @@ function policyFromAgent(a) {
     allow_write: a.allow_write !== false,
     allow_network: a.allow_network !== false,
     allow_rm: !!a.allow_rm,
-    allow_browser: !!a.allow_browser,
     workspace_bound: !!ws,
     workspace_path: ws,
     schedule_enabled: !!a.schedule_enabled,
@@ -1897,13 +2225,7 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled }) {
       <CapsuleToggle label="允许写入文件" checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
       <CapsuleToggle label="允许联网搜索" checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
       <CapsuleToggle label="允许执行 rm" checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
-      <CapsuleToggle
-        label="允许操作浏览器"
-        checked={!!v.allow_browser}
-        disabled={disabled}
-        onChange={(c) => patch({ allow_browser: c })}
-        hint="若打开此选项，请安装 browser-use 插件。开启后数字员工可通过该工具操作浏览器；使用完成网页后须及时关闭，勿留僵尸网页。"
-      />
+      <p className="dbs-hint">浏览器能力已迁至「技能 → 浏览器操作」。安装该技能后自动检测/下载 browser-use，用完须关闭标签。</p>
 
       <h3 className="ma-policy-title">运行边界</h3>
       <CapsuleToggle

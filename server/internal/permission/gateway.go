@@ -18,9 +18,10 @@ type PermissionDecision struct {
 
 // EvaluateOpts 策略与编排例外（仍不能覆盖 Hard Deny）。
 type EvaluateOpts struct {
-	Policy          *AgentPolicy
-	AllowAllExceptRm bool
-	SkipJevos        bool
+	Policy             *AgentPolicy
+	ServerControl      *ServerControlPolicy // 服务器技能硬规则
+	AllowAllExceptRm   bool
+	SkipJevos          bool
 }
 
 // Gateway 平台权限网关：Hard Deny → Safe Allow → Session → JEVOS → REVIEW。
@@ -40,6 +41,14 @@ func (g *Gateway) Evaluate(ctx context.Context, a ToolAction, opt EvaluateOpts) 
 	}
 	if IsHardDeny(a) {
 		return PermissionDecision{Decision: DecisionDeny, Reason: "命中平台 Hard Deny", DecidedBy: DecidedByStatic, RuleID: staticRuleID(a, true)}
+	}
+	// 服务器技能规则层（非提示词）：破坏性默认拒绝；勾选后仍强制每次询问
+	if opt.ServerControl != nil {
+		if d, hit := ApplyServerControlRules(a, *opt.ServerControl); hit {
+			if d.Decision == DecisionDeny || d.Decision == DecisionReview {
+				return d
+			}
+		}
 	}
 	if opt.Policy != nil {
 		if d := applyPolicyAction(a, *opt.Policy); d.Decision == DecisionDeny {

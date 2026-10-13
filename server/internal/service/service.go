@@ -116,6 +116,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	policyAgentName := ""
 	rulesPrompt := ""
 	policyNote := ""
+	autoApproveAll := false
 	if lookupID > 0 {
 		if ag, _ := s.Store.GetManagedAgent(ctx, lookupID); ag != nil {
 			engine = ag.Engine
@@ -126,6 +127,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 			agentPolicy = &p
 			policyAgentName = ag.Name
 			rulesPrompt = strings.TrimSpace(ag.RulesPrompt)
+			autoApproveAll = ag.AutoApproveAll
 			policyNote = fmt.Sprintf("name=%s allow_write=%v allow_network=%v allow_rm=%v allow_browser=%v workspace=%s",
 				ag.Name, ag.AllowWrite, ag.AllowNetwork, ag.AllowRm, ag.AllowBrowser, strings.TrimSpace(ag.WorkspacePath))
 			if ws := strings.TrimSpace(ag.WorkspacePath); ws != "" {
@@ -138,7 +140,11 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	action.RulesPrompt = rulesPrompt
 	action.PolicyNote = policyNote
 	action.ContextSnippet = s.permissionContextSnippet(ctx, convID)
-	opt := permission.EvaluateOpts{Policy: agentPolicy, AllowAllExceptRm: s.Perms.IsAllowAllExceptRm(convID)}
+	opt := permission.EvaluateOpts{
+		Policy:           agentPolicy,
+		ServerControl:    s.LoadServerControlPolicy(ctx, lookupID),
+		AllowAllExceptRm: s.Perms.IsAllowAllExceptRm(convID),
+	}
 	pd := s.Gateway.Evaluate(ctx, action, opt)
 	summary := summarize(tool, input)
 	owner, _ := s.Store.ConversationOwner(ctx, convID)
@@ -164,6 +170,19 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 		}
 		s.recordPerm(ctx, convID, action, pd, "deny", "system", summary, reason)
 		return permission.Decision{Behavior: permission.Deny, Reason: reason}
+	}
+	// 命令全部审批通过：Hard Deny 已在 Gateway 拦住；REVIEW 直接放行并写审计。
+	if autoApproveAll {
+		reason := "命令全部审批通过（策略开启）"
+		if pd.Reason != "" {
+			reason = reason + " · " + pd.Reason
+		}
+		pd.DecidedBy = "system"
+		pd.Reason = reason
+		s.Perms.AutoApprove(tool, summary, reason, convID, owner)
+		s.recordPerm(ctx, convID, action, pd, "allow", "system", summary, reason)
+		_ = s.Store.InsertAutoApproveAudit(ctx, lookupID, convID, tool, summary, reason)
+		return permission.Decision{Behavior: permission.Allow, Reason: reason}
 	}
 	note := pd.Reason
 	if policyAgentID > 0 && policyAgentName != "" {

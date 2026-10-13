@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   bin_path        VARCHAR(512)   NOT NULL DEFAULT '',
   rules_prompt    LONGTEXT       NULL,
   auto_review     TINYINT        NOT NULL DEFAULT 0,
+  auto_approve_all TINYINT       NOT NULL DEFAULT 0, -- 命令全部审批通过
   task_plan_enabled TINYINT      NOT NULL DEFAULT 1,
   allow_write     TINYINT        NOT NULL DEFAULT 1,
   allow_network   TINYINT        NOT NULL DEFAULT 1,
@@ -346,3 +347,139 @@ CREATE TABLE IF NOT EXISTS visitor_ask_logs (
   KEY idx_ask_visitor_time (visitor_id, created_at),
   KEY idx_ask_status_time (status, created_at)
 ) ENGINE=InnoDB;
+
+-- v0.4.0 技能商店目录 + 按数字人安装
+CREATE TABLE IF NOT EXISTS skill_catalog (
+  id VARCHAR(64) PRIMARY KEY,
+  name VARCHAR(128) NOT NULL,
+  summary VARCHAR(512) NOT NULL DEFAULT '',
+  description TEXT NOT NULL,
+  icon_key VARCHAR(64) NOT NULL DEFAULT 'custom',
+  icon_url VARCHAR(1024) NULL,
+  source ENUM('builtin','custom') NOT NULL DEFAULT 'builtin',
+  publisher_id VARCHAR(64) NULL,
+  publisher_name VARCHAR(128) NULL,
+  author VARCHAR(128) NOT NULL DEFAULT 'Atolla',
+  category VARCHAR(64) NOT NULL DEFAULT 'general',
+  risk VARCHAR(16) NOT NULL DEFAULT 'mid',
+  rules_json JSON NOT NULL,
+  capabilities_json JSON NOT NULL,
+  version VARCHAR(32) NOT NULL DEFAULT '1.0.0',
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  install_count INT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_skill_source (source),
+  INDEX idx_skill_category (category),
+  INDEX idx_skill_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS agent_skill_installs (
+  agent_id BIGINT NOT NULL,
+  skill_id VARCHAR(64) NOT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  enabled_capabilities_json JSON NOT NULL,
+  config_json JSON NULL,
+  installed_by VARCHAR(64) NULL,
+  installed_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (agent_id, skill_id),
+  CONSTRAINT fk_asi_agent FOREIGN KEY (agent_id) REFERENCES managed_agents(id) ON DELETE CASCADE,
+  CONSTRAINT fk_asi_skill FOREIGN KEY (skill_id) REFERENCES skill_catalog(id) ON DELETE CASCADE,
+  INDEX idx_asi_skill (skill_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- v0.4.1 数据库技能多数据源（密码 AES 密文）
+CREATE TABLE IF NOT EXISTS agent_db_sources (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  agent_id BIGINT NOT NULL,
+  name VARCHAR(64) NOT NULL,
+  db_type VARCHAR(16) NOT NULL,
+  url VARCHAR(512) NOT NULL,
+  database_name VARCHAR(128) NOT NULL DEFAULT '',
+  username VARCHAR(128) NOT NULL DEFAULT '',
+  password_enc TEXT NULL,
+  perm_list TINYINT(1) NOT NULL DEFAULT 1,
+  perm_read TINYINT(1) NOT NULL DEFAULT 1,
+  perm_create TINYINT(1) NOT NULL DEFAULT 0,
+  perm_update TINYINT(1) NOT NULL DEFAULT 0,
+  perm_delete TINYINT(1) NOT NULL DEFAULT 0,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ads_agent (agent_id),
+  CONSTRAINT fk_ads_agent FOREIGN KEY (agent_id) REFERENCES managed_agents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- v0.4.3 服务器控制技能多服务器（SSH，密码 AES 密文）
+CREATE TABLE IF NOT EXISTS agent_server_sources (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  agent_id BIGINT NOT NULL,
+  name VARCHAR(64) NOT NULL,
+  host VARCHAR(512) NOT NULL,
+  port INT NOT NULL DEFAULT 22,
+  username VARCHAR(128) NOT NULL DEFAULT '',
+  password_enc TEXT NULL,
+  allow_delete TINYINT(1) NOT NULL DEFAULT 0,
+  allow_docker_restart TINYINT(1) NOT NULL DEFAULT 0,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  reachable TINYINT(1) NOT NULL DEFAULT 0,
+  last_test_at DATETIME(3) NULL,
+  last_test_error VARCHAR(512) NOT NULL DEFAULT '',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_ass_agent (agent_id),
+  CONSTRAINT fk_ass_agent FOREIGN KEY (agent_id) REFERENCES managed_agents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- v0.4.5: 命令全部审批通过的审计（保留约 7 天，定时清理）
+CREATE TABLE IF NOT EXISTS auto_approve_audits (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  agent_id BIGINT NOT NULL DEFAULT 0,
+  conversation_id BIGINT NOT NULL DEFAULT 0,
+  tool_name VARCHAR(64) NOT NULL DEFAULT '',
+  command_text TEXT NOT NULL,
+  reason VARCHAR(512) NOT NULL DEFAULT '',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_aaa_created (created_at),
+  KEY idx_aaa_agent (agent_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- v0.4.7: 解聘离职记忆书（仅 AI 生成，可认领挂载）
+CREATE TABLE IF NOT EXISTS legacy_memories (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  source_agent_id BIGINT NOT NULL DEFAULT 0,
+  agent_name VARCHAR(128) NOT NULL DEFAULT '',
+  job_title VARCHAR(128) NOT NULL DEFAULT '数字员工',
+  avatar_url VARCHAR(512) NOT NULL DEFAULT '',
+  engine VARCHAR(32) NOT NULL DEFAULT '',
+  sections_json JSON NOT NULL,
+  body_markdown LONGTEXT NOT NULL,
+  materials_json LONGTEXT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'generating',
+  error_message VARCHAR(512) NOT NULL DEFAULT '',
+  claimed_by_agent_id BIGINT NULL,
+  claimed_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_lm_status (status, created_at),
+  KEY idx_lm_source (source_agent_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS agent_legacy_memory_mounts (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  agent_id BIGINT NOT NULL,
+  legacy_memory_id BIGINT NOT NULL,
+  source_agent_name VARCHAR(128) NOT NULL DEFAULT '',
+  source_job_title VARCHAR(128) NOT NULL DEFAULT '',
+  source_avatar_url VARCHAR(512) NOT NULL DEFAULT '',
+  mounted_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_alm_mem (legacy_memory_id),
+  KEY idx_alm_agent (agent_id),
+  CONSTRAINT fk_alm_agent FOREIGN KEY (agent_id) REFERENCES managed_agents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

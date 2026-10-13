@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 )
@@ -17,11 +18,50 @@ type Scheduler struct {
 	entries map[int64]cron.EntryID
 }
 
-// NewScheduler 创建并启动空调度器。
+// NewScheduler 创建并启动空调度器（含每日维护任务）。
 func NewScheduler(svc *Service) *Scheduler {
-	c := cron.New()
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.Local
+	}
+	c := cron.New(cron.WithLocation(loc))
 	c.Start()
-	return &Scheduler{svc: svc, cron: c, entries: map[int64]cron.EntryID{}}
+	sch := &Scheduler{svc: svc, cron: c, entries: map[int64]cron.EntryID{}}
+	sch.startMaintenanceJobs()
+	return sch
+}
+
+// startMaintenanceJobs 注册全局维护定时任务。
+func (sch *Scheduler) startMaintenanceJobs() {
+	if sch == nil || sch.cron == nil {
+		return
+	}
+	// 每天 12:00（上海时区）清理超过 7 天的自动审批审计
+	_, err := sch.cron.AddFunc("0 12 * * *", func() {
+		sch.purgeAutoApproveAudits()
+	})
+	if err != nil {
+		log.Printf("scheduler maintenance auto-approve purge: %v", err)
+	} else {
+		log.Printf("scheduler armed auto-approve audit purge cron=0 12 * * * (Asia/Shanghai)")
+	}
+}
+
+// purgeAutoApproveAudits 删除 7 天前的自动审批记录。
+func (sch *Scheduler) purgeAutoApproveAudits() {
+	if sch == nil || sch.svc == nil || sch.svc.Store == nil {
+		return
+	}
+	ctx := context.Background()
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	n, err := sch.svc.Store.PurgeAutoApproveAuditsOlderThan(ctx, cutoff)
+	if err != nil {
+		log.Printf("auto-approve audit purge: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("auto-approve audit purged %d rows older than %s", n, cutoff.Format(time.RFC3339))
+	}
 }
 
 // Reload 按数据库重建全部定时任务。

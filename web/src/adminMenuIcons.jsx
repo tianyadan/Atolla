@@ -47,6 +47,15 @@ function iconBody(name) {
           <path d="M16 3.13a4 4 0 0 1 0 7.75" />
         </>
       )
+    case 'legacy-memories':
+      return (
+        <>
+          <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22.5Z" />
+          <path d="M4 4.5v18" />
+          <path d="M8 7h8" />
+          <path d="M8 11h6" />
+        </>
+      )
     case 'plans':
       return (
         <>

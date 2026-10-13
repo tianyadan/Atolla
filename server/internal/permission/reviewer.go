@@ -71,11 +71,12 @@ func (rv *Reviewer) Review(ctx context.Context, req ReviewRequest) Verdict {
 	}
 	sb.WriteString("现在请给出判定。")
 
+	// 新版 Claude CLI 用 --permission-mode，已无 --permission-prompts
 	cmd := exec.CommandContext(cctx, rv.bin, "-p",
 		"--output-format", "json",
 		"--system-prompt", reviewSystemPrompt,
 		"--tools", "",
-		"--permission-prompts", "none",
+		"--permission-mode", "dontAsk",
 		"--no-session-persistence",
 	)
 	cmd.Stdin = strings.NewReader(sb.String())
