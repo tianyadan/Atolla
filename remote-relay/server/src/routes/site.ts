@@ -1,7 +1,14 @@
 import express, { type Request, type Response, type Router } from 'express'
+import { z } from 'zod'
 import type { RelayDatabase } from '../db.js'
 import { verifySiteToken } from '../auth/site.js'
 import { listInstancesPublic, revokeInstancePassword } from '../auth/instance.js'
+import { enqueueCommand } from '../commands.js'
+
+const enqueueBodySchema = z.object({
+  action: z.string().min(1),
+  payload: z.record(z.unknown()).optional(),
+})
 
 /** Extract bearer token from Authorization header */
 function readBearerToken(req: Request): string | null {
@@ -30,6 +37,30 @@ export function createSiteRouter(db: RelayDatabase): Router {
 
   router.get('/instances', guard, (_req: Request, res: Response) => {
     res.json({ instances: listInstancesPublic(db) })
+  })
+
+  router.post('/instances/:id/commands', guard, (req: Request, res: Response) => {
+    const instanceId = req.params.id?.trim()
+    if (!instanceId) {
+      res.status(400).json({ error: 'Invalid instance id' })
+      return
+    }
+    const parsed = enqueueBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid command payload' })
+      return
+    }
+    const result = enqueueCommand(
+      db,
+      instanceId,
+      parsed.data.action,
+      parsed.data.payload ?? {},
+    )
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error })
+      return
+    }
+    res.json({ command: result.command })
   })
 
   router.delete('/instances/:id/password', guard, (req: Request, res: Response) => {
