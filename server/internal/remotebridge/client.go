@@ -43,7 +43,16 @@ func (c *RelayClient) deviceURL(path string) string {
 }
 
 // Register registers or rotates the instance on the relay.
-func (c *RelayClient) Register(ctx context.Context, displayName string, actions []string) error {
+// priorPassword is the current relay password when rotating; empty uses c.Password for auth headers.
+func (c *RelayClient) Register(ctx context.Context, displayName string, actions []string, priorPassword string) error {
+	authPass := strings.TrimSpace(priorPassword)
+	if authPass == "" {
+		authPass = c.Password
+	}
+	hdr := make(http.Header)
+	hdr.Set("X-Instance-Id", c.InstanceID)
+	hdr.Set("X-Instance-Password", authPass)
+	hdr.Set("Content-Type", "application/json")
 	body := map[string]any{
 		"instance_id":      c.InstanceID,
 		"display_name":     displayName,
@@ -51,7 +60,7 @@ func (c *RelayClient) Register(ctx context.Context, displayName string, actions 
 		"registry_version": RegistryVersion,
 		"actions":          actions,
 	}
-	return c.postJSON(ctx, c.deviceURL("/register"), nil, body)
+	return c.postJSON(ctx, c.deviceURL("/register"), hdr, body)
 }
 
 // Heartbeat sends registry metadata to the relay.

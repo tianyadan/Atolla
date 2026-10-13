@@ -4,6 +4,8 @@ import type { RelayDatabase } from '../db.js'
 import type { LoginRateLimiter } from '../auth/rateLimit.js'
 import {
   type InstanceAuthedRequest,
+  instanceClientIp,
+  parseInstanceCredentials,
   recordHeartbeat,
   registerInstance,
   requireInstanceAuth,
@@ -79,16 +81,31 @@ const messagesSnapshotBodySchema = z.object({
 export function createDeviceRouter(
   db: RelayDatabase,
   instanceRateLimiter: LoginRateLimiter,
+  registerRateLimiter: LoginRateLimiter,
 ): Router {
   const router = express.Router()
 
   router.post('/register', (req: Request, res: Response) => {
+    const ip = instanceClientIp(req)
+    const registerKey = `register:${ip}`
+    const now = Date.now()
+    if (registerRateLimiter.isThrottled(registerKey, now)) {
+      res.status(429).json({ error: 'Too many requests' })
+      return
+    }
+    registerRateLimiter.recordAttempt(registerKey, now)
+
     const parsed = registerBodySchema.safeParse(req.body)
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid register payload' })
       return
     }
-    const result = registerInstance(db, parsed.data)
+    const bootstrapHeader = req.headers['x-relay-bootstrap-token']
+    const result = registerInstance(db, parsed.data, {
+      ip,
+      priorCredentials: parseInstanceCredentials(req),
+      bootstrapToken: typeof bootstrapHeader === 'string' ? bootstrapHeader : undefined,
+    })
     if (!result.ok) {
       res.status(result.status).json({ error: result.error })
       return

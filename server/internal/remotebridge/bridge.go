@@ -27,10 +27,12 @@ type Bridge struct {
 	Config *ConfigStore
 	Store  *store.Store
 
-	mu          sync.RWMutex
-	status      Status
-	cancel      context.CancelFunc
-	reregister  chan struct{}
+	mu         sync.RWMutex
+	status     Status
+	generation uint64
+	cancel     context.CancelFunc
+	runWg      sync.WaitGroup
+	reregister chan struct{}
 }
 
 // NewBridge constructs a bridge (does not start until Start).
@@ -63,11 +65,32 @@ func (b *Bridge) setErr(msg string) {
 	b.status.LastError = msg
 }
 
-func (b *Bridge) setRunning(running, registered bool) {
+func (b *Bridge) setRunning(running, registered bool, gen uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if gen != b.generation {
+		return
+	}
 	b.status.Running = running
 	b.status.Registered = registered
+}
+
+func (b *Bridge) setRegistered(registered bool, gen uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if gen != b.generation {
+		return
+	}
+	b.status.Registered = registered
+}
+
+// stopLoop cancels the active run loop and waits until it exits.
+func (b *Bridge) stopLoop() {
+	if b.cancel != nil {
+		b.cancel()
+		b.cancel = nil
+	}
+	b.runWg.Wait()
 }
 
 // Start launches the bridge loop when config is ready.
@@ -75,23 +98,30 @@ func (b *Bridge) Start(parent context.Context) {
 	if b.Config == nil || b.Store == nil {
 		return
 	}
-	b.Stop()
+	b.stopLoop()
 	if !b.Config.Ready() {
 		return
 	}
+
+	b.mu.Lock()
+	b.generation++
+	gen := b.generation
+	b.mu.Unlock()
+
 	ctx, cancel := context.WithCancel(parent)
 	b.cancel = cancel
-	b.setRunning(true, false)
-	go b.run(ctx)
+	b.setRunning(true, false, gen)
+
+	b.runWg.Add(1)
+	go func() {
+		defer b.runWg.Done()
+		b.run(ctx, gen)
+	}()
 }
 
-// Stop cancels the bridge loop.
+// Stop cancels the bridge loop and waits for exit.
 func (b *Bridge) Stop() {
-	if b.cancel != nil {
-		b.cancel()
-		b.cancel = nil
-	}
-	b.setRunning(false, false)
+	b.stopLoop()
 }
 
 // TriggerReregister signals the loop to re-register (e.g. after password rotate).
@@ -111,19 +141,19 @@ func (b *Bridge) Reload(parent context.Context) {
 	}
 }
 
-func (b *Bridge) run(ctx context.Context) {
-	defer b.setRunning(false, false)
+func (b *Bridge) run(ctx context.Context, gen uint64) {
+	defer b.setRunning(false, false, gen)
 
 	cfg := b.Config.Get()
 	client := b.newClient(cfg)
 	actions := RegisteredActions()
 
-	if err := client.Register(ctx, cfg.DisplayName, actions); err != nil {
+	if err := client.Register(ctx, cfg.DisplayName, actions, ""); err != nil {
 		b.setErr(err.Error())
 		log.Printf("remotebridge: register failed: %v", err)
 	} else {
 		b.setOK()
-		b.setRunning(true, true)
+		b.setRunning(true, true, gen)
 	}
 
 	heartbeatTicker := time.NewTicker(heartbeatInterval)
@@ -144,14 +174,12 @@ func (b *Bridge) run(ctx context.Context) {
 		case <-b.reregister:
 			cfg = b.Config.Get()
 			client = b.newClient(cfg)
-			if err := client.Register(ctx, cfg.DisplayName, actions); err != nil {
+			if err := client.Register(ctx, cfg.DisplayName, actions, ""); err != nil {
 				b.setErr(err.Error())
 				log.Printf("remotebridge: re-register failed: %v", err)
 			} else {
 				b.setOK()
-				b.mu.Lock()
-				b.status.Registered = true
-				b.mu.Unlock()
+				b.setRegistered(true, gen)
 			}
 		case <-heartbeatTicker.C:
 			cfg = b.Config.Get()
