@@ -4,6 +4,8 @@ import type { RelayDatabase } from './db.js'
 import { LoginRateLimiter } from './auth/rateLimit.js'
 import { isRelayTrustProxyEnabled } from './auth/site.js'
 import { createSiteAuthRouter } from './routes/siteAuth.js'
+import { createDeviceRouter } from './routes/device.js'
+import { createSiteRouter } from './routes/site.js'
 
 /** Build Express app with health and site auth routes */
 export function createApp(db: RelayDatabase): Express {
@@ -11,7 +13,8 @@ export function createApp(db: RelayDatabase): Express {
   if (isRelayTrustProxyEnabled()) {
     app.set('trust proxy', 1)
   }
-  const rateLimiter = new LoginRateLimiter()
+  const siteLoginRateLimiter = new LoginRateLimiter()
+  const instanceAuthRateLimiter = new LoginRateLimiter()
 
   app.use(cors())
   app.use(express.json())
@@ -20,7 +23,9 @@ export function createApp(db: RelayDatabase): Express {
     res.json({ ok: true, service: 'atolla-remote-relay', ts: Date.now() })
   })
 
-  app.use('/api/auth', createSiteAuthRouter(db, rateLimiter))
+  app.use('/api/auth', createSiteAuthRouter(db, siteLoginRateLimiter))
+  app.use('/api/device', createDeviceRouter(db, instanceAuthRateLimiter))
+  app.use('/api', createSiteRouter(db))
 
   return app
 }
