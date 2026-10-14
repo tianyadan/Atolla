@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "npm run dev -w server",
     "dev:web": "npm run dev -w web",
+    "dev:local": "bash scripts/dev-local.sh",
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server"
   }

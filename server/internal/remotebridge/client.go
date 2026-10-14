@@ -63,11 +63,20 @@ func (c *RelayClient) Register(ctx context.Context, displayName string, actions 
 	return c.postJSON(ctx, c.deviceURL("/register"), hdr, body)
 }
 
-// Heartbeat sends registry metadata to the relay.
+// Heartbeat sends registry metadata (+ optional host metrics) to the relay.
 func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) error {
 	body := map[string]any{
 		"registry_version": RegistryVersion,
 		"actions":          actions,
+	}
+	hm := CollectHostMetrics()
+	body["host"] = map[string]any{
+		"os":         hm.OS,
+		"ip":         hm.IP,
+		"uptime_sec": hm.UptimeSec,
+		"cpu_pct":    hm.CPUPct,
+		"mem_pct":    hm.MemPct,
+		"disk_pct":   hm.DiskPct,
 	}
 	return c.postJSON(ctx, c.deviceURL("/heartbeat"), c.headers(), body)
 }
@@ -139,6 +148,20 @@ func (c *RelayClient) PostTasksSnapshot(ctx context.Context, tasks []map[string]
 // PostMessagesSnapshot pushes message mirror rows.
 func (c *RelayClient) PostMessagesSnapshot(ctx context.Context, messages []map[string]any) error {
 	return c.postJSON(ctx, c.deviceURL("/snapshot/messages"), c.headers(), map[string]any{"messages": messages})
+}
+
+// PostPermissionsSnapshot upserts pending permission cards on the relay.
+func (c *RelayClient) PostPermissionsSnapshot(ctx context.Context, permissions []map[string]any) error {
+	return c.postJSON(ctx, c.deviceURL("/snapshot/permissions"), c.headers(), map[string]any{
+		"permissions": permissions,
+	})
+}
+
+// PostPermissionsResolved deletes resolved permission cards on the relay.
+func (c *RelayClient) PostPermissionsResolved(ctx context.Context, requestIDs []string) error {
+	return c.postJSON(ctx, c.deviceURL("/permissions/resolved"), c.headers(), map[string]any{
+		"request_ids": requestIDs,
+	})
 }
 
 func (c *RelayClient) postJSON(ctx context.Context, url string, hdr http.Header, body any) error {

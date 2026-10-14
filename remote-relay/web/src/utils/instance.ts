@@ -29,3 +29,22 @@ export function instanceSubtitle(inst: PublicInstance, now = Date.now()): string
   else if (pwd === 'soon') parts.push('密码即将过期')
   return parts.join(' · ')
 }
+
+/** Format host uptime seconds → "2天 3小时" */
+export function formatUptime(sec: number | undefined | null): string {
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return '—'
+  const s = Math.floor(sec)
+  if (s < 60) return `${s}秒`
+  const days = Math.floor(s / 86400)
+  const hours = Math.floor((s % 86400) / 3600)
+  const mins = Math.floor((s % 3600) / 60)
+  if (days > 0) return hours > 0 ? `${days}天 ${hours}小时` : `${days}天`
+  if (hours > 0) return mins > 0 ? `${hours}小时 ${mins}分` : `${hours}小时`
+  return `${mins}分`
+}
+
+/** Clamp percent for progress bars */
+export function formatPct(v: number | undefined | null): number {
+  if (v == null || !Number.isFinite(v)) return 0
+  return Math.max(0, Math.min(100, Math.round(v)))
+}

@@ -64,6 +64,33 @@ export type MessagesPageResult = {
   has_more: boolean
 }
 
+export type MirrorPermissionInput = {
+  request_id: string
+  agent_id: string
+  conversation_id?: number
+  tool_name?: string | null
+  summary?: string | null
+  note?: string | null
+  meaning?: string | null
+  risk?: string | null
+  created_at?: string | null
+  deadline?: string | null
+}
+
+export type PublicMirrorPermission = {
+  request_id: string
+  agent_id: string
+  conversation_id: number
+  tool_name: string | null
+  summary: string | null
+  note: string | null
+  meaning: string | null
+  risk: string | null
+  created_at: string | null
+  deadline: string | null
+  synced_at: number
+}
+
 /** Upsert agent rows from a device snapshot batch */
 export function upsertAgentsMirror(
   db: RelayDatabase,
@@ -127,6 +154,130 @@ export function upsertTasksMirror(
     count += 1
   }
   return count
+}
+
+/** Upsert pending permission rows from Mac Hub */
+export function upsertPermissionsMirror(
+  db: RelayDatabase,
+  instanceId: string,
+  items: MirrorPermissionInput[],
+  syncedAt: number,
+): number {
+  const stmt = db.prepare(
+    `INSERT INTO permissions_mirror (
+       instance_id, request_id, agent_id, conversation_id,
+       tool_name, summary, note, meaning, risk, created_at, deadline, synced_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(instance_id, request_id) DO UPDATE SET
+       agent_id = excluded.agent_id,
+       conversation_id = excluded.conversation_id,
+       tool_name = excluded.tool_name,
+       summary = excluded.summary,
+       note = excluded.note,
+       meaning = excluded.meaning,
+       risk = excluded.risk,
+       created_at = excluded.created_at,
+       deadline = excluded.deadline,
+       synced_at = excluded.synced_at`,
+  )
+  let count = 0
+  for (const p of items) {
+    const agentId = String(p.agent_id || '').trim()
+    const requestId = String(p.request_id || '').trim()
+    if (!agentId || !requestId) continue
+    stmt.run(
+      instanceId,
+      requestId,
+      agentId,
+      Number(p.conversation_id) || 0,
+      p.tool_name ?? null,
+      p.summary ?? null,
+      p.note ?? null,
+      p.meaning ?? null,
+      p.risk ?? null,
+      p.created_at ?? null,
+      p.deadline ?? null,
+      syncedAt,
+    )
+    count += 1
+  }
+  return count
+}
+
+/** Delete resolved permission rows by request_id */
+export function deletePermissionsMirror(
+  db: RelayDatabase,
+  instanceId: string,
+  requestIds: string[],
+): number {
+  const stmt = db.prepare(
+    `DELETE FROM permissions_mirror WHERE instance_id = ? AND request_id = ?`,
+  )
+  let count = 0
+  for (const id of requestIds) {
+    const rid = String(id || '').trim()
+    if (!rid) continue
+    const info = stmt.run(instanceId, rid)
+    count += Number(info.changes) || 0
+  }
+  return count
+}
+
+/** List pending permissions for one agent (skip expired by deadline when parseable) */
+export function listPermissionsMirror(
+  db: RelayDatabase,
+  instanceId: string,
+  agentId: string,
+  nowMs: number = Date.now(),
+): { ok: true; items: PublicMirrorPermission[] } | { ok: false; status: number; error: string } {
+  if (!getInstanceRow(db, instanceId)) {
+    return { ok: false, status: 404, error: 'Instance not found' }
+  }
+  const rows = db
+    .prepare(
+      `SELECT request_id, agent_id, conversation_id, tool_name, summary, note, meaning, risk,
+              created_at, deadline, synced_at
+       FROM permissions_mirror
+       WHERE instance_id = ? AND agent_id = ?
+       ORDER BY synced_at DESC, request_id ASC`,
+    )
+    .all(instanceId, agentId) as Array<{
+    request_id: string
+    agent_id: string
+    conversation_id: number
+    tool_name: string | null
+    summary: string | null
+    note: string | null
+    meaning: string | null
+    risk: string | null
+    created_at: string | null
+    deadline: string | null
+    synced_at: number
+  }>
+
+  const items = rows.filter((r) => {
+    if (!r.deadline) return true
+    const t = Date.parse(r.deadline)
+    if (!Number.isFinite(t)) return true
+    return t > nowMs
+  })
+
+  return {
+    ok: true,
+    items: items.map((r) => ({
+      request_id: r.request_id,
+      agent_id: r.agent_id,
+      conversation_id: r.conversation_id,
+      tool_name: r.tool_name,
+      summary: r.summary,
+      note: r.note,
+      meaning: r.meaning,
+      risk: r.risk,
+      created_at: r.created_at,
+      deadline: r.deadline,
+      synced_at: r.synced_at,
+    })),
+  }
 }
 
 /** Upsert messages by (instance_id, message_id) */

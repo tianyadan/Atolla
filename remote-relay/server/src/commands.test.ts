@@ -49,9 +49,20 @@ async function register(
   expect(r.status).toBe(200)
 }
 
-/** Enqueue command from site UI */
+/** Unlock instance for site command enqueue */
+async function unlock(token: string, instanceId = INSTANCE_ID, password = PASSWORD): Promise<string> {
+  const r = await request(app)
+    .post(`/api/instances/${instanceId}/unlock`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ password })
+  expect(r.status).toBe(200)
+  return r.body.unlock_token as string
+}
+
+/** Enqueue command from site UI (requires unlock) */
 function enqueue(
   token: string,
+  unlockTok: string,
   action: string,
   payload: Record<string, unknown> = {},
   instanceId = INSTANCE_ID,
@@ -59,6 +70,7 @@ function enqueue(
   return request(app)
     .post(`/api/instances/${instanceId}/commands`)
     .set('Authorization', `Bearer ${token}`)
+    .set('X-Instance-Unlock', unlockTok)
     .send({ action, payload })
 }
 
@@ -113,7 +125,8 @@ describe('command queue and long-poll', () => {
   it('enqueues ping when site JWT and instance supports action', async () => {
     await register()
     const token = await siteToken()
-    const r = await enqueue(token, 'ping')
+    const u = await unlock(token)
+    const r = await enqueue(token, u, 'ping')
     expect(r.status).toBe(200)
     expect(r.body.command.action).toBe('ping')
     expect(r.body.command.status).toBe('pending')
@@ -122,34 +135,136 @@ describe('command queue and long-poll', () => {
 
   it('rejects enqueue without site JWT', async () => {
     await register()
-    const r = await enqueue('', 'ping')
+    const r = await enqueue('', '', 'ping')
     expect(r.status).toBe(401)
   })
 
-  it('rejects reserved agent.ask even if instance reports support', async () => {
+  it('rejects enqueue without unlock token', async () => {
+    await register()
+    const token = await siteToken()
+    const r = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/commands`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ action: 'ping' })
+    expect(r.status).toBe(403)
+  })
+
+  it('enqueues agent.ask when instance reports support', async () => {
     await register({ actions: [...ACTIONS, 'agent.ask'] })
     const token = await siteToken()
-    const r = await enqueue(token, 'agent.ask', { text: 'hi' })
-    expect(r.status).toBe(400)
+    const u = await unlock(token)
+    const r = await enqueue(token, u, 'agent.ask', { agent_id: '1', question: 'hi' })
+    expect(r.status).toBe(200)
+    expect(r.body.command.action).toBe('agent.ask')
+  })
+
+  it('enqueues permission and auto-policy actions when supported', async () => {
+    await register({
+      actions: [
+        ...ACTIONS,
+        'agent.set_auto_review',
+        'agent.set_auto_approve_all',
+        'permission.decide',
+      ],
+    })
+    const token = await siteToken()
+    const u = await unlock(token)
+
+    const auto = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/1/auto-review`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+      .send({ enabled: true })
+    expect(auto.status).toBe(200)
+    expect(auto.body.command.action).toBe('agent.set_auto_review')
+
+    const all = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/1/auto-approve-all`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+      .send({ enabled: true })
+    expect(all.status).toBe(200)
+    expect(all.body.command.action).toBe('agent.set_auto_approve_all')
+
+    const decide = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/1/permissions/decide`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+      .send({ request_id: 'r1', behavior: 'allow' })
+    expect(decide.status).toBe(200)
+    expect(decide.body.command.action).toBe('permission.decide')
+    expect(decide.body.command.payload).toEqual({
+      request_id: 'r1',
+      behavior: 'allow',
+      agent_id: '1',
+    })
+  })
+
+  it('permission decide removes row from permissions mirror immediately', async () => {
+    await register({
+      actions: [...ACTIONS, 'permission.decide'],
+    })
+    const token = await siteToken()
+    const u = await unlock(token)
+    const future = new Date(Date.now() + 60_000).toISOString()
+
+    await request(app)
+      .post('/api/device/snapshot/permissions')
+      .set('X-Instance-Id', INSTANCE_ID)
+      .set('X-Instance-Password', PASSWORD)
+      .send({
+        permissions: [
+          {
+            request_id: 'stay-pending',
+            agent_id: '1',
+            summary: 'ls',
+            deadline: future,
+          },
+        ],
+      })
+
+    const before = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents/1/permissions/pending`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+    expect(before.body.items).toHaveLength(1)
+
+    const decide = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/1/permissions/decide`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+      .send({ request_id: 'stay-pending', behavior: 'allow_session' })
+    expect(decide.status).toBe(200)
+
+    const after = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents/1/permissions/pending`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+    expect(after.body.items).toEqual([])
   })
 
   it('rejects action not reported by instance', async () => {
     await register({ actions: ['ping'] })
     const token = await siteToken()
-    const r = await enqueue(token, 'sync.messages')
+    const u = await unlock(token)
+    const r = await enqueue(token, u, 'sync.messages')
     expect(r.status).toBe(400)
   })
 
-  it('rejects enqueue for unknown instance', async () => {
+  it('rejects unlock for unknown instance', async () => {
     const token = await siteToken()
-    const r = await enqueue(token, 'ping', {}, 'missing-instance')
-    expect(r.status).toBe(404)
+    const r = await request(app)
+      .post('/api/instances/missing-instance/unlock')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ password: PASSWORD })
+    expect(r.status).toBe(401)
   })
 
   it('long-poll leases pending commands and returns them', async () => {
     await register()
     const token = await siteToken()
-    const enq = await enqueue(token, 'sync.agents')
+    const u = await unlock(token)
+    const enq = await enqueue(token, u, 'sync.agents')
     const cmdId = enq.body.command.id as string
 
     const poll = await longPoll(50)
@@ -177,7 +292,8 @@ describe('command queue and long-poll', () => {
   it('accepts command result and stores terminal status', async () => {
     await register()
     const token = await siteToken()
-    const enq = await enqueue(token, 'ping')
+    const u = await unlock(token)
+    const enq = await enqueue(token, u, 'ping')
     const cmdId = enq.body.command.id as string
     await longPoll(50)
 
@@ -194,7 +310,8 @@ describe('command queue and long-poll', () => {
   it('expires leased commands on next poll when lease elapsed', async () => {
     await register()
     const token = await siteToken()
-    const enq = await enqueue(token, 'ping')
+    const u = await unlock(token)
+    const enq = await enqueue(token, u, 'ping')
     const cmdId = enq.body.command.id as string
     await longPoll(50)
 

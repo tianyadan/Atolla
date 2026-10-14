@@ -1,6 +1,7 @@
 package remotebridge
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,7 +15,7 @@ func handlePing(_ *ExecContext) (any, error) {
 	return map[string]any{"pong": true, "ts": time.Now().UnixMilli()}, nil
 }
 
-// handleSyncAgents loads managed agents and pushes agents snapshot.
+// handleSyncAgents loads managed agents and pushes agents snapshot (with folder/avatar/plan).
 func handleSyncAgents(ec *ExecContext) (any, error) {
 	agents, err := ec.Store.ListManagedAgents(ec.Context)
 	if err != nil {
@@ -23,13 +24,31 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 	if len(agents) == 0 {
 		return map[string]any{"skipped": true, "reason": "no agents"}, nil
 	}
+	folderName := map[int64]string{}
+	if folders, ferr := ec.Store.ListAgentFolders(ec.Context); ferr == nil {
+		for _, f := range folders {
+			folderName[f.ID] = f.Name
+		}
+	}
 	rows := make([]map[string]any, 0, len(agents))
 	for _, a := range agents {
+		fn := ""
+		if a.FolderID > 0 {
+			fn = folderName[a.FolderID]
+		}
 		rows = append(rows, map[string]any{
 			"agent_id":     strconv.FormatInt(a.ID, 10),
 			"display_name": a.Name,
 			"engine":       a.Engine,
 			"status":       a.Status,
+			"payload": map[string]any{
+				"avatar_url":        a.AvatarURL,
+				"folder_id":         a.FolderID,
+				"folder_name":       fn,
+				"task_plan_enabled": a.TaskPlanEnabled,
+				"auto_review":       a.AutoReview,
+				"auto_approve_all":  a.AutoApproveAll,
+			},
 		})
 	}
 	if err := ec.Client.PostAgentsSnapshot(ec.Context, rows); err != nil {
@@ -113,12 +132,68 @@ func handleSyncMessages(ec *ExecContext) (any, error) {
 	}
 	rows := make([]map[string]any, 0, len(msgs))
 	for _, m := range msgs {
+		payload := map[string]any{}
+		if strings.TrimSpace(m.MetaJSON) != "" {
+			var meta map[string]any
+			if json.Unmarshal([]byte(m.MetaJSON), &meta) == nil {
+				if atts, ok := meta["attachments"]; ok {
+					payload["attachments"] = atts
+				}
+				if cid, ok := meta["callee_id"]; ok {
+					payload["callee_id"] = cid
+				}
+				if cn, ok := meta["callee_name"]; ok {
+					payload["callee_name"] = cn
+				}
+				if cn, ok := meta["caller_name"]; ok {
+					payload["caller_name"] = cn
+				}
+			}
+		}
+		if st := strings.TrimSpace(m.Status); st != "" {
+			payload["status"] = st
+		}
+		// Flatten command JSON so mobile can style risk/decision like PC.
+		if m.Role == "command" {
+			raw := strings.TrimSpace(m.Content)
+			if strings.HasPrefix(raw, "{") {
+				var cmd map[string]any
+				if json.Unmarshal([]byte(raw), &cmd) == nil {
+					if c, ok := cmd["command"].(string); ok && strings.TrimSpace(c) != "" {
+						payload["command"] = c
+					}
+					if d, ok := cmd["decision"].(string); ok {
+						payload["decision"] = d
+					}
+					if r, ok := cmd["risk"].(string); ok {
+						payload["risk"] = r
+					}
+					if meaning, ok := cmd["meaning"].(string); ok {
+						payload["meaning"] = meaning
+					}
+					if by, ok := cmd["by"].(string); ok {
+						payload["by"] = by
+					}
+					if note, ok := cmd["note"].(string); ok {
+						payload["note"] = note
+					}
+				}
+			}
+			if payload["decision"] == nil && m.Status == "denied" {
+				payload["decision"] = "deny"
+			}
+		}
+		content := m.Content
+		if cmdText, ok := payload["command"].(string); ok && strings.TrimSpace(cmdText) != "" {
+			content = cmdText
+		}
 		rows = append(rows, map[string]any{
 			"message_id": strconv.FormatInt(m.ID, 10),
 			"agent_id":   agentIDStr,
 			"role":       m.Role,
-			"content":    m.Content,
+			"content":    content,
 			"created_at": m.CreatedAt.UnixMilli(),
+			"payload":    payload,
 		})
 	}
 	if err := ec.Client.PostMessagesSnapshot(ec.Context, rows); err != nil {

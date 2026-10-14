@@ -1,14 +1,18 @@
 [Unit]
 Description=Atolla Remote Relay
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=__REMOTE_DIR__/remote-relay
 EnvironmentFile=/etc/atolla-remote-relay.env
+# systemd 默认 PATH 很窄；保证能找到 NodeSource / 手动安装的 node、npm
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/bin/env npm run start --prefix __REMOTE_DIR__/remote-relay
 Restart=on-failure
-RestartSec=5
+RestartSec=3
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target

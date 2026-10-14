@@ -23,8 +23,19 @@ export type InstanceRow = {
   status: string
   registry_version: number
   actions_json: string
+  host_meta_json?: string
   created_at: number
   updated_at: number
+}
+
+/** Host metrics pushed by Mac on heartbeat */
+export type InstanceHostMeta = {
+  os?: string
+  ip?: string
+  uptime_sec?: number
+  cpu_pct?: number
+  mem_pct?: number
+  disk_pct?: number
 }
 
 export type RegisterInput = {
@@ -308,14 +319,38 @@ function recordInstanceAuthFailure(
   ).run(instanceId, ip, now)
 }
 
-/** Update heartbeat timestamp and optional registry metadata */
+/** Update heartbeat timestamp, optional registry metadata, and host metrics */
 export function recordHeartbeat(
   db: RelayDatabase,
   instanceId: string,
-  opts: { registry_version?: number; actions?: string[] },
+  opts: {
+    registry_version?: number
+    actions?: string[]
+    host?: InstanceHostMeta | null
+  },
   now = Date.now(),
 ): void {
+  const hostJson =
+    opts.host && typeof opts.host === 'object' ? JSON.stringify(opts.host) : null
+
   if (opts.actions != null) {
+    if (hostJson) {
+      db.prepare(
+        `UPDATE instances
+         SET last_heartbeat_at = ?, status = 'healthy', actions_json = ?,
+             registry_version = COALESCE(?, registry_version),
+             host_meta_json = ?, updated_at = ?
+         WHERE instance_id = ?`,
+      ).run(
+        now,
+        JSON.stringify(opts.actions),
+        opts.registry_version ?? null,
+        hostJson,
+        now,
+        instanceId,
+      )
+      return
+    }
     db.prepare(
       `UPDATE instances
        SET last_heartbeat_at = ?, status = 'healthy', actions_json = ?,
@@ -328,6 +363,17 @@ export function recordHeartbeat(
       now,
       instanceId,
     )
+    return
+  }
+
+  if (hostJson) {
+    db.prepare(
+      `UPDATE instances
+       SET last_heartbeat_at = ?, status = 'healthy',
+           registry_version = COALESCE(?, registry_version),
+           host_meta_json = ?, updated_at = ?
+       WHERE instance_id = ?`,
+    ).run(now, opts.registry_version ?? null, hostJson, now, instanceId)
     return
   }
 
@@ -371,11 +417,13 @@ export function listInstancesPublic(db: RelayDatabase): Array<{
   actions: string[]
   password_expires_at: number | null
   has_password: boolean
+  host: InstanceHostMeta
 }> {
   const rows = db
     .prepare(
       `SELECT instance_id, display_name, last_heartbeat_at, status,
-              registry_version, actions_json, password_expires_at, password_hash
+              registry_version, actions_json, password_expires_at, password_hash,
+              IFNULL(host_meta_json, '{}') AS host_meta_json
        FROM instances ORDER BY display_name COLLATE NOCASE`,
     )
     .all() as Array<
@@ -389,19 +437,29 @@ export function listInstancesPublic(db: RelayDatabase): Array<{
       | 'actions_json'
       | 'password_expires_at'
       | 'password_hash'
+      | 'host_meta_json'
     >
   >
 
-  return rows.map((row) => ({
-    instance_id: row.instance_id,
-    display_name: row.display_name,
-    last_heartbeat_at: row.last_heartbeat_at,
-    status: row.status,
-    registry_version: row.registry_version,
-    actions: JSON.parse(row.actions_json) as string[],
-    password_expires_at: row.password_expires_at,
-    has_password: row.password_hash != null,
-  }))
+  return rows.map((row) => {
+    let host: InstanceHostMeta = {}
+    try {
+      host = JSON.parse(row.host_meta_json || '{}') as InstanceHostMeta
+    } catch {
+      host = {}
+    }
+    return {
+      instance_id: row.instance_id,
+      display_name: row.display_name,
+      last_heartbeat_at: row.last_heartbeat_at,
+      status: row.status,
+      registry_version: row.registry_version,
+      actions: JSON.parse(row.actions_json) as string[],
+      password_expires_at: row.password_expires_at,
+      has_password: row.password_hash != null,
+      host,
+    }
+  })
 }
 
 /** Resolve client IP for instance routes */

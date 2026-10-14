@@ -8,8 +8,39 @@ import (
 	"strings"
 	"time"
 
+	"atolla/server/internal/permission"
 	"atolla/server/internal/store"
 )
+
+// AskManagedBackground validates the agent then runs AskManaged on a detached goroutine (remote-relay).
+func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string) error {
+	a, err := s.Store.GetManagedAgent(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("agent not found")
+	}
+	if err := GuardAgentUsable(a); err != nil {
+		return err
+	}
+	q := strings.TrimSpace(question)
+	if q == "" {
+		return fmt.Errorf("question required")
+	}
+	go func() {
+		bg := context.Background()
+		_, askErr := s.AskManaged(bg, agentID, q, nil)
+		if askErr != nil {
+			log.Printf("remotebridge agent.ask agent=%d: %v", agentID, askErr)
+		}
+		// Push reply + status to relay so mobile polls see it without re-entering chat.
+		if s.RemoteBridge != nil {
+			s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
+		}
+	}()
+	return nil
+}
 
 // AskManaged 管理台数字员工一轮对话;onEvent 推送 SSE 事件(chunk/invoke_*/…)。可被 StopManaged 取消。
 func (s *Service) AskManaged(ctx context.Context, agentID int64, question string, onEvent AskEventSink) (*store.Message, error) {
@@ -77,14 +108,14 @@ type askCoreOpts struct {
 
 // visitorAskAudit 前台一轮 Ask 的审计上下文。
 type visitorAskAudit struct {
-	VisitorID int64
-	IP        string
-	UA        string
-	logID     int64
-	started   time.Time
-	input     int64
-	output    int64
-	cacheRead int64
+	VisitorID  int64
+	IP         string
+	UA         string
+	logID      int64
+	started    time.Time
+	input      int64
+	output     int64
+	cacheRead  int64
 	cacheWrite int64
 }
 
@@ -463,6 +494,42 @@ func (s *Service) StopManaged(agentID int64) bool {
 	_ = s.Store.SetManagedAgentStatus(context.Background(), agentID, "idle", "stopped by user", 0, convID)
 	s.ReleaseOccupancy(context.Background(), agentID)
 	return true
+}
+
+// SetAutoReview persists AI auto-review and updates the live Hub for the agent conversation.
+func (s *Service) SetAutoReview(ctx context.Context, agentID int64, enabled bool) error {
+	if err := s.Store.SetManagedAgentAutoReview(ctx, agentID, enabled); err != nil {
+		return err
+	}
+	a, err := s.Store.GetManagedAgent(ctx, agentID)
+	if err != nil || a == nil {
+		return err
+	}
+	if a.ConversationID > 0 && s.Perms != nil {
+		s.Perms.SetAuto(a.ConversationID, enabled)
+	}
+	return nil
+}
+
+// SetAutoApproveAll persists「命令全部审批通过」.
+func (s *Service) SetAutoApproveAll(ctx context.Context, agentID int64, enabled bool) error {
+	return s.Store.SetManagedAgentAutoApproveAll(ctx, agentID, enabled)
+}
+
+// DecidePermission resolves a pending Hub request for remote-relay phone clients.
+func (s *Service) DecidePermission(requestID, behavior string) error {
+	if s.Perms == nil {
+		return fmt.Errorf("permission hub not configured")
+	}
+	b := permission.Deny
+	session := false
+	if strings.EqualFold(behavior, "allow") || strings.EqualFold(behavior, "allow_session") {
+		b = permission.Allow
+	}
+	if strings.EqualFold(behavior, "allow_session") {
+		session = true
+	}
+	return s.Perms.Decide(requestID, b, "user", session)
 }
 
 // ClearManagedChat 清空当前会话消息，并解除引擎 session 绑定（避免 Codex resume 到已失效 thread）。

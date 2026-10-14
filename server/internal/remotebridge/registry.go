@@ -15,17 +15,35 @@ type ExecContext struct {
 	Store   *store.Store
 	Client  *RelayClient
 	Payload map[string]interface{}
+	Runtime AgentRuntime
 }
 
 // RegisteredActions lists actions advertised at register/heartbeat.
 func RegisteredActions() []string {
-	return []string{"ping", "sync.agents", "sync.tasks", "sync.messages"}
+	return []string{
+		"ping",
+		"sync.agents",
+		"sync.tasks",
+		"sync.messages",
+		"agent.ask",
+		"agent.stop",
+		"agent.set_task_plan",
+		"agent.set_auto_review",
+		"agent.set_auto_approve_all",
+		"permission.decide",
+	}
 }
 
-// Handlers maps executable V1 actions. agent.ask / agent.stop are intentionally absent.
+// Handlers maps executable V1 actions.
 var Handlers = map[string]Handler{
-	"ping":          handlePing,
-	"sync.agents":   handleSyncAgents,
-	"sync.tasks":    handleSyncTasks,
-	"sync.messages": handleSyncMessages,
+	"ping":                       handlePing,
+	"sync.agents":                handleSyncAgents,
+	"sync.tasks":                 handleSyncTasks,
+	"sync.messages":              handleSyncMessages,
+	"agent.ask":                  handleAgentAsk,
+	"agent.stop":                 handleAgentStop,
+	"agent.set_task_plan":        handleAgentSetTaskPlan,
+	"agent.set_auto_review":      handleAgentSetAutoReview,
+	"agent.set_auto_approve_all": handleAgentSetAutoApproveAll,
+	"permission.decide":          handlePermissionDecide,
 }

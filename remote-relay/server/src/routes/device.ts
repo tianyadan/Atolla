@@ -18,8 +18,10 @@ import {
   type CommandResultStatus,
 } from '../commands.js'
 import {
+  deletePermissionsMirror,
   upsertAgentsMirror,
   upsertMessagesMirror,
+  upsertPermissionsMirror,
   upsertTasksMirror,
 } from '../mirror.js'
 
@@ -31,9 +33,21 @@ const registerBodySchema = z.object({
   actions: z.array(z.string()),
 })
 
+const hostMetaSchema = z
+  .object({
+    os: z.string().optional(),
+    ip: z.string().optional(),
+    uptime_sec: z.number().optional(),
+    cpu_pct: z.number().optional(),
+    mem_pct: z.number().optional(),
+    disk_pct: z.number().optional(),
+  })
+  .optional()
+
 const heartbeatBodySchema = z.object({
   registry_version: z.number().int().positive().optional(),
   actions: z.array(z.string()).optional(),
+  host: hostMetaSchema,
 })
 
 const commandResultBodySchema = z.object({
@@ -75,6 +89,27 @@ const mirrorMessageItemSchema = z.object({
 
 const messagesSnapshotBodySchema = z.object({
   messages: z.array(mirrorMessageItemSchema).min(1),
+})
+
+const mirrorPermissionItemSchema = z.object({
+  request_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  conversation_id: z.number().int().optional(),
+  tool_name: z.string().nullable().optional(),
+  summary: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+  meaning: z.string().nullable().optional(),
+  risk: z.string().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  deadline: z.string().nullable().optional(),
+})
+
+const permissionsSnapshotBodySchema = z.object({
+  permissions: z.array(mirrorPermissionItemSchema).min(1),
+})
+
+const permissionsResolvedBodySchema = z.object({
+  request_ids: z.array(z.string().min(1)).min(1),
 })
 
 /** Mount device register and heartbeat routes */
@@ -124,6 +159,7 @@ export function createDeviceRouter(
     recordHeartbeat(db, auth.instanceId, {
       registry_version: parsed.data.registry_version,
       actions: parsed.data.actions,
+      host: parsed.data.host ?? null,
     })
     res.json({ ok: true })
   })
@@ -210,6 +246,43 @@ export function createDeviceRouter(
         Date.now(),
       )
       res.json({ ok: true, upserted })
+    },
+  )
+
+  /** Upsert pending permission cards from Mac Hub */
+  router.post(
+    '/snapshot/permissions',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      const parsed = permissionsSnapshotBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid permissions snapshot payload' })
+        return
+      }
+      const upserted = upsertPermissionsMirror(
+        db,
+        auth.instanceId,
+        parsed.data.permissions,
+        Date.now(),
+      )
+      res.json({ ok: true, upserted })
+    },
+  )
+
+  /** Remove resolved permission cards */
+  router.post(
+    '/permissions/resolved',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      const parsed = permissionsResolvedBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid permissions resolved payload' })
+        return
+      }
+      const deleted = deletePermissionsMirror(db, auth.instanceId, parsed.data.request_ids)
+      res.json({ ok: true, deleted })
     },
   )
 

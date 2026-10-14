@@ -97,6 +97,26 @@ function applySchema(db: RelayDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_messages_mirror_agent
       ON messages_mirror(instance_id, agent_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS permissions_mirror (
+      instance_id TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      conversation_id INTEGER NOT NULL DEFAULT 0,
+      tool_name TEXT,
+      summary TEXT,
+      note TEXT,
+      meaning TEXT,
+      risk TEXT,
+      created_at TEXT,
+      deadline TEXT,
+      synced_at INTEGER NOT NULL,
+      PRIMARY KEY (instance_id, request_id),
+      FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_permissions_mirror_agent
+      ON permissions_mirror(instance_id, agent_id, synced_at DESC);
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       event_type TEXT NOT NULL,
@@ -109,30 +129,52 @@ function applySchema(db: RelayDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created
       ON audit_logs(created_at DESC);
   `)
+
+  // Optional host metrics JSON from Mac heartbeat (os/ip/uptime/cpu/mem/disk).
+  try {
+    db.exec(`ALTER TABLE instances ADD COLUMN host_meta_json TEXT NOT NULL DEFAULT '{}'`)
+  } catch {
+    /* column already exists */
+  }
 }
 
-/** Bootstrap site gate password hash from SITE_PASSWORD when no row exists */
+/** Bootstrap / sync site gate password from SITE_PASSWORD */
 function bootstrapSiteAuth(db: RelayDatabase): void {
-  const row = db
-    .prepare('SELECT id FROM site_auth WHERE id = 1')
-    .get() as { id: number } | undefined
-
-  if (row) return
-
   const plain = process.env.SITE_PASSWORD?.trim()
-  if (!plain) {
-    console.warn(
-      '[remote-relay] site_auth empty and SITE_PASSWORD unset; set SITE_PASSWORD on first boot',
-    )
+  const row = db
+    .prepare('SELECT id, password_hash, token_version FROM site_auth WHERE id = 1')
+    .get() as { id: number; password_hash: string; token_version: number } | undefined
+
+  if (!row) {
+    if (!plain) {
+      console.warn(
+        '[remote-relay] site_auth empty and SITE_PASSWORD unset; set SITE_PASSWORD on first boot',
+      )
+      return
+    }
+    const passwordHash = bcrypt.hashSync(plain, BCRYPT_ROUNDS)
+    const now = Date.now()
+    db.prepare(
+      `INSERT INTO site_auth (id, password_hash, token_version, failed_attempt_count, locked_until, updated_at)
+       VALUES (1, ?, 1, 0, NULL, ?)`,
+    ).run(passwordHash, now)
+    delete process.env.SITE_PASSWORD
     return
   }
 
-  const passwordHash = bcrypt.hashSync(plain, BCRYPT_ROUNDS)
-  const now = Date.now()
-  db.prepare(
-    `INSERT INTO site_auth (id, password_hash, token_version, failed_attempt_count, locked_until, updated_at)
-     VALUES (1, ?, 1, 0, NULL, ?)`,
-  ).run(passwordHash, now)
+  // 本机调试：若设置了 SITE_PASSWORD 且与库内不一致，同步更新（避免旧库卡死在 testpass）
+  const isDev = (process.env.NODE_ENV || 'development') !== 'production'
+  if (isDev && plain && !bcrypt.compareSync(plain, row.password_hash)) {
+    const passwordHash = bcrypt.hashSync(plain, BCRYPT_ROUNDS)
+    const now = Date.now()
+    const nextVer = (Number(row.token_version) || 1) + 1
+    db.prepare(
+      `UPDATE site_auth
+       SET password_hash = ?, token_version = ?, failed_attempt_count = 0, locked_until = NULL, updated_at = ?
+       WHERE id = 1`,
+    ).run(passwordHash, nextVer, now)
+    console.log('[remote-relay] site gate password synced from SITE_PASSWORD (dev)')
+  }
 
   delete process.env.SITE_PASSWORD
 }
