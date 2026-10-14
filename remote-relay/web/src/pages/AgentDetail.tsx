@@ -19,9 +19,14 @@ export function AgentDetailPage() {
       setTasks(await fetchTasks(instanceId, agentId))
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
-      if (msg.includes('Unauthorized')) {
+      const status = (err as { status?: number })?.status
+      if (msg.includes('Unauthorized') || status === 401) {
         clearToken()
         navigate('/login', { replace: true })
+        return
+      }
+      if (status === 403 || msg.includes('实例密码')) {
+        navigate('/instances', { replace: true })
         return
       }
       setError(msg)

@@ -10,11 +10,27 @@ Lightweight Node.js + TypeScript + SQLite relay for read-only mobile access to A
 
 ## Quick start (development)
 
+本机一键（API `:3080` + 手机端 Vite `:15174`）：
+
+```bash
+# 仓库根
+scripts/start-remote-relay.sh
+
+# 或在 remote-relay/
+npm run dev:local
+# 仅 API:  ./scripts/dev-local.sh --api
+# 清空库:  ./scripts/dev-local.sh --fresh
+```
+
+默认门禁密码 `localdev`，JWT 密钥 `local-dev-jwt-secret-change-me`（可用环境变量或 `remote-relay/.env` 覆盖）。
+
+手动拆开启动：
+
 ```bash
 cd remote-relay
 npm install
 cd server
-SITE_PASSWORD=your-gate-password npm run dev
+SITE_PASSWORD=your-gate-password RELAY_JWT_SECRET=devsecret npm run dev
 ```
 
 Default listen port: **3080** (`PORT` to override). SQLite file: `server/data/relay.db` (`SQLITE_PATH` to override).

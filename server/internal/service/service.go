@@ -37,31 +37,34 @@ type QuestionReq struct {
 
 // Service 顶层业务编排。
 type Service struct {
-	Cfg      config.Config
-	Store    *store.Store
-	Agent    *agent.Runner
-	DBQuery  *dbquery.Client
-	Perms    *permission.Hub
-	Reviewer *permission.Reviewer
-	TestHub  *testsrv.Hub
-	Notify   *notify.Notifier
-	Sched    *Scheduler
-	Memory   MemoryService
-	WF       *WorkflowEngine
+	Cfg          config.Config
+	Store        *store.Store
+	Agent        *agent.Runner
+	DBQuery      *dbquery.Client
+	Perms        *permission.Hub
+	Reviewer     *permission.Reviewer
+	TestHub      *testsrv.Hub
+	Notify       *notify.Notifier
+	Sched        *Scheduler
+	Memory       MemoryService
+	WF           *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
 	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
-	remoteBridgeParent context.Context
-	remoteBridgeCancel context.CancelFunc
+	remoteBridgeParent   context.Context
+	remoteBridgeCancel   context.CancelFunc
 	remoteBridgeShutdown sync.Once
 	// CodexContextCollector 允许测试注入临时 sessions 根目录；生产环境使用 ~/.codex/sessions。
 	CodexContextCollector agent.CodexSessionContextCollector
 
+	deployJobOnce sync.Once
+	deployJobs    *deployJobHub
+
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
 
-	cloneJobMap     *sync.Map
-	compactPending  *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
+	cloneJobMap    *sync.Map
+	compactPending *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
 }
 
 type managedRun struct {
@@ -70,17 +73,17 @@ type managedRun struct {
 
 func New(cfg config.Config, st *store.Store) *Service {
 	svc := &Service{
-		Cfg:      cfg,
-		Store:    st,
-		Agent:    agent.NewRunner(cfg.ClaudeBin),
-		DBQuery:  mustDBQuery(cfg.DataDBDSN),
-		Perms:    permission.NewHub(cfg.PermissionWaitSeconds()),
-		Reviewer: newReviewer(cfg),
-		TestHub:  testsrv.NewHub(cfg.PermissionWaitSeconds()),
-		Notify:   notify.New(cfg.NotifyScript, cfg.BarkNotify),
-		runs:           map[int64]*managedRun{},
-		cloneJobMap:    &sync.Map{},
-		compactPending: &sync.Map{},
+		Cfg:                   cfg,
+		Store:                 st,
+		Agent:                 agent.NewRunner(cfg.ClaudeBin),
+		DBQuery:               mustDBQuery(cfg.DataDBDSN),
+		Perms:                 permission.NewHub(cfg.PermissionWaitSeconds()),
+		Reviewer:              newReviewer(cfg),
+		TestHub:               testsrv.NewHub(cfg.PermissionWaitSeconds()),
+		Notify:                notify.New(cfg.NotifyScript, cfg.BarkNotify),
+		runs:                  map[int64]*managedRun{},
+		cloneJobMap:           &sync.Map{},
+		compactPending:        &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
@@ -124,6 +127,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	rulesPrompt := ""
 	policyNote := ""
 	autoApproveAll := false
+	agentAutoReview := false
 	if lookupID > 0 {
 		if ag, _ := s.Store.GetManagedAgent(ctx, lookupID); ag != nil {
 			engine = ag.Engine
@@ -135,6 +139,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 			policyAgentName = ag.Name
 			rulesPrompt = strings.TrimSpace(ag.RulesPrompt)
 			autoApproveAll = ag.AutoApproveAll
+			agentAutoReview = ag.AutoReview
 			policyNote = fmt.Sprintf("name=%s allow_write=%v allow_network=%v allow_rm=%v allow_browser=%v workspace=%s",
 				ag.Name, ag.AllowWrite, ag.AllowNetwork, ag.AllowRm, ag.AllowBrowser, strings.TrimSpace(ag.WorkspacePath))
 			if ws := strings.TrimSpace(ag.WorkspacePath); ws != "" {
@@ -190,6 +195,24 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 		s.recordPerm(ctx, convID, action, pd, "allow", "system", summary, reason)
 		_ = s.Store.InsertAutoApproveAudit(ctx, lookupID, convID, tool, summary, reason)
 		return permission.Decision{Behavior: permission.Allow, Reason: reason}
+	}
+	// AI 自动审核（与管理台「自动审核」一致）：ALLOW 直接放行；失败/拒绝再走人工弹窗。
+	autoOn := agentAutoReview || (s.Perms != nil && s.Perms.IsAuto(convID))
+	if autoOn && s.Perms != nil && convID > 0 {
+		s.Perms.SetAuto(convID, true)
+	}
+	if autoOn && s.Reviewer != nil {
+		allow, reason := s.review(ctx, convID, tool, summary, nil)
+		if allow {
+			if reason == "" {
+				reason = "AI 自动审核放行"
+			}
+			pd.DecidedBy = "ai"
+			pd.Reason = reason
+			s.Perms.AutoApprove(tool, summary, reason, convID, owner)
+			s.recordPerm(ctx, convID, action, pd, "allow", "ai", summary, reason)
+			return permission.Decision{Behavior: permission.Allow, Reason: reason}
+		}
 	}
 	note := pd.Reason
 	if policyAgentID > 0 && policyAgentName != "" {

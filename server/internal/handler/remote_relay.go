@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -41,4 +44,102 @@ func (h *Handler) AdminRemoteRelayPasswordRotate(c *gin.Context) {
 // AdminRemoteRelayStatus GET /api/admin/remote-relay/status
 func (h *Handler) AdminRemoteRelayStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.GetRemoteRelayStatus())
+}
+
+// AdminRemoteRelayDeploy POST /api/admin/remote-relay/deploy — start one-click install job.
+func (h *Handler) AdminRemoteRelayDeploy(c *gin.Context) {
+	var body service.RemoteRelayDeployRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	id, err := h.svc.StartRemoteRelayDeploy(body)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "another deploy/upgrade job is running" {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job_id": id})
+}
+
+// AdminRemoteRelayUpgrade POST /api/admin/remote-relay/upgrade — start one-click upgrade job.
+func (h *Handler) AdminRemoteRelayUpgrade(c *gin.Context) {
+	var body service.RemoteRelayUpgradeRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	id, err := h.svc.StartRemoteRelayUpgrade(body)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "another deploy/upgrade job is running" {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"job_id": id})
+}
+
+// AdminRemoteRelayDeployJobStream GET /api/admin/remote-relay/deploy-job/:id/stream — SSE logs.
+func (h *Handler) AdminRemoteRelayDeployJobStream(c *gin.Context) {
+	id := c.Param("id")
+	lines, ch, done, ok, errMsg, err := h.svc.SubscribeRemoteRelayDeployJob(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	flusher, okf := c.Writer.(http.Flusher)
+	if !okf {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		return
+	}
+
+	writeEvent := func(ev string, payload any) {
+		b, _ := json.Marshal(payload)
+		_, _ = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", ev, b)
+		flusher.Flush()
+	}
+
+	for _, line := range lines {
+		writeEvent("log", gin.H{"line": line})
+	}
+	if done {
+		if ok {
+			writeEvent("done", gin.H{"ok": true})
+		} else {
+			writeEvent("error", gin.H{"error": errMsg})
+		}
+		return
+	}
+	defer h.svc.UnsubscribeRemoteRelayDeployJob(id, ch)
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	clientGone := c.Request.Context().Done()
+	for {
+		select {
+		case <-clientGone:
+			return
+		case <-ticker.C:
+			writeEvent("ping", gin.H{"ts": time.Now().Unix()})
+		case line, open := <-ch:
+			if !open {
+				_, dok, derr, _ := h.svc.SnapshotRemoteRelayDeployJob(id)
+				if dok {
+					writeEvent("done", gin.H{"ok": true})
+				} else {
+					writeEvent("error", gin.H{"error": derr})
+				}
+				return
+			}
+			writeEvent("log", gin.H{"line": line})
+		}
+	}
 }

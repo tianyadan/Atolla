@@ -35,6 +35,8 @@ func (s *Service) startRemoteBridge(workspaceRoot string) {
 		s.remoteBridgeParent, s.remoteBridgeCancel = context.WithCancel(context.Background())
 	}
 	s.RemoteBridge = remotebridge.NewBridge(cs, s.Store)
+	s.RemoteBridge.SetRuntime(s)
+	s.RemoteBridge.SetPerms(s.Perms)
 	s.RemoteBridge.Start(s.remoteBridgeParent)
 }
 
@@ -91,28 +93,41 @@ func (s *Service) UpdateRemoteRelayConfig(ctx context.Context, patch RemoteRelay
 	return s.RemoteBridge.Config.Public(), nil
 }
 
-// RotateRemoteRelayPassword generates a new instance password and re-registers.
+// RotateRemoteRelayPassword generates a new instance password and registers (or rotates) on the relay.
+// First-time setup: Base URL required, existing password optional (empty = first register).
 func (s *Service) RotateRemoteRelayPassword(ctx context.Context) (string, error) {
 	if s.RemoteBridge == nil || s.RemoteBridge.Config == nil {
 		return "", fmt.Errorf("remote bridge not initialized")
 	}
 	cfg := s.RemoteBridge.Config.Get()
-	if strings.TrimSpace(cfg.BaseURL) == "" || !remotebridge.ValidInstancePassword(cfg.Password) {
-		return "", fmt.Errorf("remote bridge not ready to rotate password")
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return "", fmt.Errorf("请先填写并保存中继 Base URL")
 	}
-	oldPassword := cfg.Password
+	if strings.TrimSpace(cfg.InstanceID) == "" {
+		return "", fmt.Errorf("instance_id missing")
+	}
+	display := strings.TrimSpace(cfg.DisplayName)
+	if display == "" {
+		display = cfg.InstanceID
+	}
+	// 已有有效密码则带旧密码轮换；否则视为首次注册
+	prior := ""
+	if remotebridge.ValidInstancePassword(cfg.Password) {
+		prior = cfg.Password
+	}
 	plain := remotebridge.GenerateInstancePassword()
 	client := &remotebridge.RelayClient{
 		BaseURL:    cfg.BaseURL,
 		InstanceID: cfg.InstanceID,
 		Password:   plain,
 	}
-	if err := client.Register(ctx, cfg.DisplayName, remotebridge.RegisteredActions(), oldPassword); err != nil {
-		return "", fmt.Errorf("relay register rotate: %w", err)
+	if err := client.Register(ctx, display, remotebridge.RegisteredActions(), prior); err != nil {
+		return "", fmt.Errorf("relay register: %w", err)
 	}
 	if err := s.RemoteBridge.Config.SetPassword(plain); err != nil {
 		return "", err
 	}
+	// 首次生成密码后若已勾选启用，Reload 会真正拉起出站循环
 	s.RemoteBridge.Reload(s.remoteBridgeContext())
 	return plain, nil
 }

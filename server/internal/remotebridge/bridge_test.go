@@ -4,12 +4,9 @@ import (
 	"testing"
 )
 
-func TestHandlersRejectUnregisteredActions(t *testing.T) {
-	unregistered := []string{"agent.ask", "agent.stop", "unknown.action"}
-	for _, action := range unregistered {
-		if _, ok := Handlers[action]; ok {
-			t.Fatalf("action %q must not be registered", action)
-		}
+func TestHandlersRejectUnknownAction(t *testing.T) {
+	if _, ok := Handlers["unknown.action"]; ok {
+		t.Fatal("unknown.action must not be registered")
 	}
 }
 
@@ -22,7 +19,7 @@ func TestRegisteredActionsMatchHandlers(t *testing.T) {
 }
 
 func TestRegisteredActionsCount(t *testing.T) {
-	if len(RegisteredActions()) != 4 {
-		t.Fatalf("expected 4 V1 actions, got %d", len(RegisteredActions()))
+	if len(RegisteredActions()) != 10 {
+		t.Fatalf("expected 10 V1 actions, got %d", len(RegisteredActions()))
 	}
 }

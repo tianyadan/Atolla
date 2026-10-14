@@ -24,11 +24,11 @@ type Config struct {
 
 // PublicConfig is returned by admin GET (no password plaintext).
 type PublicConfig struct {
-	Enabled      bool   `json:"enabled"`
-	BaseURL      string `json:"base_url"`
-	InstanceID   string `json:"instance_id"`
-	DisplayName  string `json:"display_name"`
-	HasPassword  bool   `json:"has_password"`
+	Enabled     bool   `json:"enabled"`
+	BaseURL     string `json:"base_url"`
+	InstanceID  string `json:"instance_id"`
+	DisplayName string `json:"display_name"`
+	HasPassword bool   `json:"has_password"`
 }
 
 // ConfigStore loads and saves bridge settings under the Atolla data directory.

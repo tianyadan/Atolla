@@ -6,12 +6,15 @@ type PageShellProps = {
   backTo?: string
   children: ReactNode
   right?: ReactNode
+  /** Extra class on main (e.g. chat full-height layout) */
+  bodyClassName?: string
 }
 
 /** Mobile page frame with optional back link */
-export function PageShell({ title, backTo, children, right }: PageShellProps) {
+export function PageShell({ title, backTo, children, right, bodyClassName }: PageShellProps) {
+  const isChat = bodyClassName?.includes('page-body-chat')
   return (
-    <div className="page">
+    <div className={`page${isChat ? ' page-fill' : ''}`}>
       <header className="page-header">
         <div className="page-header-left">
           {backTo ? (
@@ -25,7 +28,7 @@ export function PageShell({ title, backTo, children, right }: PageShellProps) {
         </div>
         {right ? <div className="page-header-right">{right}</div> : null}
       </header>
-      <main className="page-body">{children}</main>
+      <main className={`page-body${bodyClassName ? ` ${bodyClassName}` : ''}`}>{children}</main>
     </div>
   )
 }

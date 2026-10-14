@@ -5,10 +5,13 @@ import cors from 'cors'
 import express, { type Express } from 'express'
 import type { RelayDatabase } from './db.js'
 import { LoginRateLimiter } from './auth/rateLimit.js'
+import { FailLockLimiter } from './auth/failLock.js'
+import { UNLOCK_LOCK_MS, UNLOCK_MAX_FAILURES } from './auth/unlock.js'
 import { isRelayTrustProxyEnabled } from './auth/site.js'
 import { createSiteAuthRouter } from './routes/siteAuth.js'
 import { createDeviceRouter } from './routes/device.js'
 import { createSiteRouter } from './routes/site.js'
+import { createMetaRouter } from './routes/meta.js'
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -60,6 +63,7 @@ export function createApp(db: RelayDatabase): Express {
   const siteLoginRateLimiter = new LoginRateLimiter()
   const instanceAuthRateLimiter = new LoginRateLimiter()
   const registerRateLimiter = new LoginRateLimiter()
+  const unlockFailLock = new FailLockLimiter(UNLOCK_MAX_FAILURES, UNLOCK_LOCK_MS)
 
   app.use(cors())
   app.use(express.json({ limit: '5mb' }))
@@ -73,7 +77,8 @@ export function createApp(db: RelayDatabase): Express {
     '/api/device',
     createDeviceRouter(db, instanceAuthRateLimiter, registerRateLimiter),
   )
-  app.use('/api', createSiteRouter(db))
+  app.use('/api/meta', createMetaRouter(db))
+  app.use('/api', createSiteRouter(db, unlockFailLock))
 
   attachWebUi(app)
 

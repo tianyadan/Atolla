@@ -25,6 +25,16 @@ async function siteToken(): Promise<string> {
   return r.body.token as string
 }
 
+/** Unlock token for instance detail APIs */
+async function unlockToken(siteTok: string): Promise<string> {
+  const r = await request(app)
+    .post(`/api/instances/${INSTANCE_ID}/unlock`)
+    .set('Authorization', `Bearer ${siteTok}`)
+    .send({ password: PASSWORD })
+  expect(r.status).toBe(200)
+  return r.body.unlock_token as string
+}
+
 /** Register test instance */
 async function register(): Promise<void> {
   const r = await request(app)
@@ -119,9 +129,12 @@ describe('mirror snapshot ingest and site read', () => {
       ).status,
     ).toBe(200)
 
+    const unlock = await unlockToken(token)
+
     const agents = await request(app)
       .get(`/api/instances/${INSTANCE_ID}/agents`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
     expect(agents.status).toBe(200)
     expect(agents.body.agents).toHaveLength(1)
     expect(agents.body.agents[0].display_name).toBe('Alpha')
@@ -129,12 +142,14 @@ describe('mirror snapshot ingest and site read', () => {
     const tasks = await request(app)
       .get(`/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/tasks`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
     expect(tasks.status).toBe(200)
     expect(tasks.body.tasks[0].task_id).toBe('task-1')
 
     const latest = await request(app)
       .get(`/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/messages?limit=2`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
     expect(latest.status).toBe(200)
     expect(latest.body.messages.map((m: { message_id: string }) => m.message_id)).toEqual([
       'm2',
@@ -147,6 +162,7 @@ describe('mirror snapshot ingest and site read', () => {
         `/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/messages?before_id=m2&limit=10`,
       )
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
     expect(older.status).toBe(200)
     expect(older.body.messages.map((m: { message_id: string }) => m.message_id)).toEqual(['m1'])
   })
@@ -154,15 +170,26 @@ describe('mirror snapshot ingest and site read', () => {
   it('sync-messages enqueues sync.messages with agent_id', async () => {
     await register()
     const token = await siteToken()
+    const unlock = await unlockToken(token)
 
     const r = await request(app)
       .post(`/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/sync-messages`)
       .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
       .send({ limit: 50 })
 
     expect(r.status).toBe(200)
     expect(r.body.command.action).toBe('sync.messages')
     expect(r.body.command.payload).toEqual({ agent_id: AGENT_ID, limit: 50 })
+  })
+
+  it('rejects agents without unlock token', async () => {
+    await register()
+    const token = await siteToken()
+    const r = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents`)
+      .set('Authorization', `Bearer ${token}`)
+    expect(r.status).toBe(403)
   })
 
   it('rejects snapshot without instance auth', async () => {
@@ -171,5 +198,57 @@ describe('mirror snapshot ingest and site read', () => {
       .post('/api/device/snapshot/agents')
       .send({ agents: [{ agent_id: 'x' }] })
     expect(r.status).toBe(401)
+  })
+
+  it('upserts permissions and lists pending; resolved deletes', async () => {
+    await register()
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+    const future = new Date(Date.now() + 60_000).toISOString()
+
+    const snap = await devicePost('/api/device/snapshot/permissions', {
+      permissions: [
+        {
+          request_id: 'req-1',
+          agent_id: AGENT_ID,
+          conversation_id: 9,
+          tool_name: 'Bash',
+          summary: 'ls -la',
+          meaning: '列目录',
+          risk: 'low',
+          deadline: future,
+        },
+        {
+          request_id: 'req-other',
+          agent_id: 'other-agent',
+          summary: 'rm -rf /',
+          deadline: future,
+        },
+      ],
+    })
+    expect(snap.status).toBe(200)
+    expect(snap.body.upserted).toBe(2)
+
+    const list = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/permissions/pending`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(list.status).toBe(200)
+    expect(list.body.items).toHaveLength(1)
+    expect(list.body.items[0].request_id).toBe('req-1')
+    expect(list.body.items[0].summary).toBe('ls -la')
+
+    const resolved = await devicePost('/api/device/permissions/resolved', {
+      request_ids: ['req-1'],
+    })
+    expect(resolved.status).toBe(200)
+    expect(resolved.body.deleted).toBe(1)
+
+    const after = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/permissions/pending`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(after.status).toBe(200)
+    expect(after.body.items).toEqual([])
   })
 })

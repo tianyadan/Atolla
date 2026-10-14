@@ -1,6 +1,18 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.5.0',
+    date: '2026-10-14',
+    items: [
+      '远程中继：管理台「一键部署 / 一键升级」按钮，本机执行脚本并用 SSE 实时看日志',
+      '一键部署/升级点击时弹出云机 SSH 密码输入（可留空走本机密钥）；修复 sshpass 与 ssh -f 不兼容导致 Permission denied',
+      '部署支持 China-mirror（npmmirror）；远端缺 Node 时自动安装；升级保留门禁/JWT/端口；health check 等待就绪并输出 journal 诊断',
+      'Mac 桥接增强：主机指标心跳、移动端 Hub/对话、命令审批镜像（拒绝/本次允许/本次会话允许）',
+      '手机端可同步「命令全部审批通过 / 自动审核」；修复裁决后弹窗反复出现与 auto_review 未接入',
+      'Remote Relay 移动端：实例解锁、版本更新记录、深色实例页与对话 Markdown/风险色命令展示',
+    ],
+  },
+  {
     version: 'v0.4.9',
     date: '2026-10-13',
     items: [

@@ -3,10 +3,14 @@ import { z } from 'zod'
 import type { RelayDatabase } from '../db.js'
 import { verifySiteToken } from '../auth/site.js'
 import { listInstancesPublic, revokeInstancePassword } from '../auth/instance.js'
+import type { FailLockLimiter } from '../auth/failLock.js'
+import { unlockClientIp, unlockInstance, requireInstanceUnlock } from '../auth/unlock.js'
 import { enqueueCommand } from '../commands.js'
 import {
+  deletePermissionsMirror,
   listAgentsMirror,
   listMessagesMirror,
+  listPermissionsMirror,
   listTasksMirror,
   normalizeMessagesLimit,
 } from '../mirror.js'
@@ -20,6 +24,27 @@ const enqueueBodySchema = z.object({
 const syncMessagesBodySchema = z.object({
   before_id: z.string().optional(),
   limit: z.number().int().positive().optional(),
+})
+
+const unlockBodySchema = z.object({
+  password: z.string().min(1),
+})
+
+const askBodySchema = z.object({
+  question: z.string().min(1),
+})
+
+const taskPlanBodySchema = z.object({
+  enabled: z.boolean(),
+})
+
+const enabledBodySchema = z.object({
+  enabled: z.boolean(),
+})
+
+const decideBodySchema = z.object({
+  request_id: z.string().min(1),
+  behavior: z.enum(['allow', 'deny', 'allow_session']),
 })
 
 /** Extract bearer token from Authorization header */
@@ -42,16 +67,46 @@ function requireSiteAuth(db: RelayDatabase) {
   }
 }
 
-/** Mount site-facing instance list and revoke routes */
-export function createSiteRouter(db: RelayDatabase): Router {
+/** Mount site-facing instance list, unlock, and revoke routes */
+export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimiter): Router {
   const router = express.Router()
   const guard = requireSiteAuth(db)
+  const needUnlock = requireInstanceUnlock('id')
 
   router.get('/instances', guard, (_req: Request, res: Response) => {
     res.json({ instances: listInstancesPublic(db) })
   })
 
-  router.post('/instances/:id/commands', guard, (req: Request, res: Response) => {
+  /** Enter instance: verify 6-char Mac password → unlock_token (24h) */
+  router.post('/instances/:id/unlock', guard, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    if (!instanceId) {
+      res.status(400).json({ error: 'Invalid instance id' })
+      return
+    }
+    const parsed = unlockBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid unlock payload' })
+      return
+    }
+    const result = unlockInstance(
+      db,
+      unlockFailLock,
+      instanceId,
+      parsed.data.password,
+      unlockClientIp(req),
+    )
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error })
+      return
+    }
+    res.json({
+      unlock_token: result.unlock_token,
+      expires_in: result.expires_in,
+    })
+  })
+
+  router.post('/instances/:id/commands', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     if (!instanceId) {
       res.status(400).json({ error: 'Invalid instance id' })
@@ -75,7 +130,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
     res.json({ command: result.command })
   })
 
-  router.get('/instances/:id/agents', guard, (req: Request, res: Response) => {
+  router.get('/instances/:id/agents', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     if (!instanceId) {
       res.status(400).json({ error: 'Invalid instance id' })
@@ -89,7 +144,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
     res.json({ agents: result.agents })
   })
 
-  router.get('/instances/:id/agents/:agentId/tasks', guard, (req: Request, res: Response) => {
+  router.get('/instances/:id/agents/:agentId/tasks', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     const agentId = routeParam(req.params.agentId)
     if (!instanceId || !agentId) {
@@ -104,7 +159,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
     res.json({ tasks: result.tasks })
   })
 
-  router.get('/instances/:id/agents/:agentId/messages', guard, (req: Request, res: Response) => {
+  router.get('/instances/:id/agents/:agentId/messages', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     const agentId = routeParam(req.params.agentId)
     if (!instanceId || !agentId) {
@@ -140,6 +195,7 @@ export function createSiteRouter(db: RelayDatabase): Router {
   router.post(
     '/instances/:id/agents/:agentId/sync-messages',
     guard,
+    needUnlock,
     (req: Request, res: Response) => {
       const instanceId = routeParam(req.params.id)
       const agentId = routeParam(req.params.agentId)
@@ -161,6 +217,196 @@ export function createSiteRouter(db: RelayDatabase): Router {
         res.status(result.status).json({ error: result.error })
         return
       }
+      res.json({ command: result.command })
+    },
+  )
+
+  /** Enqueue agent.ask for Mac */
+  router.post(
+    '/instances/:id/agents/:agentId/ask',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = askBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid ask payload' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'agent.ask', {
+        agent_id: agentId,
+        question: parsed.data.question.trim(),
+      })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ command: result.command })
+    },
+  )
+
+  /** Enqueue agent.stop */
+  router.post(
+    '/instances/:id/agents/:agentId/stop',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'agent.stop', { agent_id: agentId })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ command: result.command })
+    },
+  )
+
+  /** Enqueue agent.set_task_plan */
+  router.post(
+    '/instances/:id/agents/:agentId/task-plan',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = taskPlanBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid task-plan payload' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'agent.set_task_plan', {
+        agent_id: agentId,
+        enabled: parsed.data.enabled,
+      })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ command: result.command })
+    },
+  )
+
+  /** Enqueue agent.set_auto_review */
+  router.post(
+    '/instances/:id/agents/:agentId/auto-review',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = enabledBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid auto-review payload' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'agent.set_auto_review', {
+        agent_id: agentId,
+        enabled: parsed.data.enabled,
+      })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ command: result.command })
+    },
+  )
+
+  /** Enqueue agent.set_auto_approve_all */
+  router.post(
+    '/instances/:id/agents/:agentId/auto-approve-all',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = enabledBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid auto-approve-all payload' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'agent.set_auto_approve_all', {
+        agent_id: agentId,
+        enabled: parsed.data.enabled,
+      })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ command: result.command })
+    },
+  )
+
+  /** List pending permission cards for one agent */
+  router.get(
+    '/instances/:id/agents/:agentId/permissions/pending',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const result = listPermissionsMirror(db, instanceId, agentId)
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ items: result.items })
+    },
+  )
+
+  /** Enqueue permission.decide */
+  router.post(
+    '/instances/:id/agents/:agentId/permissions/decide',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = decideBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid decide payload' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'permission.decide', {
+        request_id: parsed.data.request_id,
+        behavior: parsed.data.behavior,
+        agent_id: agentId,
+      })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      // 立即从镜像移除，避免手机轮询在 Mac 裁决前又把同一张卡弹回来
+      deletePermissionsMirror(db, instanceId, [parsed.data.request_id])
       res.json({ command: result.command })
     },
   )
