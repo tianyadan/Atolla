@@ -139,3 +139,43 @@ func (s *Service) GetRemoteRelayStatus() RemoteRelayStatus {
 	}
 	return s.RemoteBridge.StatusSnapshot()
 }
+
+// ListRemoteRelayMobileSessions proxies to relay device mobile-sessions.
+func (s *Service) ListRemoteRelayMobileSessions(ctx context.Context) ([]remotebridge.MobileDeviceSession, error) {
+	client, err := s.remoteRelayClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.ListMobileSessions(ctx)
+}
+
+// KickRemoteRelayMobileSession revokes one mobile unlock session via relay.
+func (s *Service) KickRemoteRelayMobileSession(ctx context.Context, sessionID string) error {
+	client, err := s.remoteRelayClient()
+	if err != nil {
+		return err
+	}
+	return client.KickMobileSession(ctx, sessionID)
+}
+
+// remoteRelayClient builds a RelayClient when config has base URL + password.
+func (s *Service) remoteRelayClient() (*remotebridge.RelayClient, error) {
+	if s.RemoteBridge == nil || s.RemoteBridge.Config == nil {
+		return nil, fmt.Errorf("remote bridge not initialized")
+	}
+	cfg := s.RemoteBridge.Config.Get()
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil, fmt.Errorf("请先配置中继 Base URL")
+	}
+	if !remotebridge.ValidInstancePassword(cfg.Password) {
+		return nil, fmt.Errorf("请先生成并注册实例密码")
+	}
+	if strings.TrimSpace(cfg.InstanceID) == "" {
+		return nil, fmt.Errorf("instance_id missing")
+	}
+	return &remotebridge.RelayClient{
+		BaseURL:    cfg.BaseURL,
+		InstanceID: cfg.InstanceID,
+		Password:   cfg.Password,
+	}, nil
+}

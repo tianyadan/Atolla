@@ -232,6 +232,24 @@ func (b *Bridge) newClient(cfg Config) *RelayClient {
 	}
 }
 
+// PushAgentsSnapshotNow refreshes agents (+ tasks) mirror so phone drops deleted agents promptly.
+func (b *Bridge) PushAgentsSnapshotNow() {
+	if b == nil || b.Config == nil || b.Store == nil || !b.Config.Ready() {
+		return
+	}
+	cfg := b.Config.Get()
+	client := b.newClient(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ec := &ExecContext{Context: ctx, Store: b.Store, Client: client, Runtime: b.Runtime}
+	if err := PushAgentsTasksSnapshots(ec); err != nil {
+		log.Printf("remotebridge push agents after delete: %v", err)
+		b.setErr(err.Error())
+	} else {
+		b.setOK()
+	}
+}
+
 // PushAgentMessagesSnapshot pushes recent messages (+ agents/tasks) after a remote ask finishes.
 func (b *Bridge) PushAgentMessagesSnapshot(agentID int64) {
 	if b == nil || b.Config == nil || b.Store == nil || !b.Config.Ready() {

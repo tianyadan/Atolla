@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -44,6 +45,30 @@ func (h *Handler) AdminRemoteRelayPasswordRotate(c *gin.Context) {
 // AdminRemoteRelayStatus GET /api/admin/remote-relay/status
 func (h *Handler) AdminRemoteRelayStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.GetRemoteRelayStatus())
+}
+
+// AdminRemoteRelayMobileSessionsGet GET /api/admin/remote-relay/mobile-sessions
+func (h *Handler) AdminRemoteRelayMobileSessionsGet(c *gin.Context) {
+	sessions, err := h.svc.ListRemoteRelayMobileSessions(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+
+// AdminRemoteRelayMobileSessionKick DELETE /api/admin/remote-relay/mobile-sessions/:sessionId
+func (h *Handler) AdminRemoteRelayMobileSessionKick(c *gin.Context) {
+	sid := strings.TrimSpace(c.Param("sessionId"))
+	if sid == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session id required"})
+		return
+	}
+	if err := h.svc.KickRemoteRelayMobileSession(c.Request.Context(), sid); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // AdminRemoteRelayDeploy POST /api/admin/remote-relay/deploy — start one-click install job.

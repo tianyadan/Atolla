@@ -66,7 +66,63 @@ describe('instance unlock', () => {
       .send({ password: PASSWORD })
     expect(r.status).toBe(200)
     expect(r.body.unlock_token).toBeTruthy()
-    expect(r.body.expires_in).toBe(24 * 3600)
+    expect(r.body.session_id).toBeTruthy()
+    expect(r.body.expires_in).toBe(7 * 24 * 3600)
+  })
+
+  it('rejects unlock after session revoke', async () => {
+    await register()
+    const token = await login()
+    const u = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/unlock`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ password: PASSWORD, device_label: 'iPhone' })
+    expect(u.status).toBe(200)
+    const unlock = u.body.unlock_token as string
+    const sid = u.body.session_id as string
+
+    const ok = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(ok.status).toBe(200)
+
+    const kick = await request(app)
+      .delete(`/api/device/mobile-sessions/${sid}`)
+      .set('X-Instance-Id', INSTANCE_ID)
+      .set('X-Instance-Password', PASSWORD)
+    expect(kick.status).toBe(200)
+
+    const denied = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(denied.status).toBe(403)
+  })
+
+  it('heartbeat refreshes last_seen and lists online session', async () => {
+    await register()
+    const token = await login()
+    const u = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/unlock`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ password: PASSWORD, device_label: 'iPhone' })
+    const unlock = u.body.unlock_token as string
+
+    const hb = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/sessions/heartbeat`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(hb.status).toBe(200)
+
+    const list = await request(app)
+      .get('/api/device/mobile-sessions')
+      .set('X-Instance-Id', INSTANCE_ID)
+      .set('X-Instance-Password', PASSWORD)
+    expect(list.status).toBe(200)
+    expect(list.body.sessions?.length).toBeGreaterThanOrEqual(1)
+    expect(list.body.sessions[0].online).toBe(true)
+    expect(list.body.sessions[0].device_label).toBe('iPhone')
   })
 
   it('rejects wrong password with unified message', async () => {

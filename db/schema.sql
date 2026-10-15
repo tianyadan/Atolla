@@ -208,6 +208,22 @@ INSERT INTO test_server_allowed_ips (ip, note, enabled) VALUES
   ('127.0.0.1', '本机调试', 1)
 ON DUPLICATE KEY UPDATE enabled = VALUES(enabled);
 
+-- 网络域名白名单（同步到本机 Cursor/Claude/Codex 沙箱）
+CREATE TABLE IF NOT EXISTS network_allowlist (
+  id         BIGINT       NOT NULL AUTO_INCREMENT,
+  pattern    VARCHAR(255) NOT NULL,
+  source     VARCHAR(32)  NOT NULL DEFAULT 'admin',
+  agent_id   BIGINT       NULL,
+  created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_network_pattern (pattern)
+) ENGINE=InnoDB;
+
+INSERT INTO network_allowlist (pattern, source) VALUES
+  ('restapi.amap.com', 'admin'),
+  ('*.amap.com', 'admin')
+ON DUPLICATE KEY UPDATE pattern = VALUES(pattern);
+
 -- v0.2.7: 团队编排 / 占用 / 长期记忆
 CREATE TABLE IF NOT EXISTS workflow_definitions (
   id           BIGINT        NOT NULL AUTO_INCREMENT,

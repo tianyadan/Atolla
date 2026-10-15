@@ -5,9 +5,17 @@ import type { RelayDatabase } from '../db.js'
 import { AUTH_ERROR_MESSAGE, jwtSecret, resolveClientIp } from './site.js'
 import { getInstanceRow, isValidInstancePassword } from './instance.js'
 import type { FailLockLimiter } from './failLock.js'
+import {
+  DEVICE_SESSION_TTL_SECONDS,
+  createDeviceSession,
+  hashUnlockToken,
+  touchDeviceSession,
+  verifyDeviceSession,
+  type DeviceSessionRow,
+} from './deviceSession.js'
 
-/** Unlock JWT lifetime (24h) */
-export const UNLOCK_TTL_SECONDS = 24 * 3600
+/** Unlock JWT lifetime (aligned with device session, 7d) */
+export const UNLOCK_TTL_SECONDS = DEVICE_SESSION_TTL_SECONDS
 
 /** Wrong password attempts before 5-minute lock */
 export const UNLOCK_MAX_FAILURES = 5
@@ -18,22 +26,46 @@ export const UNLOCK_LOCK_MESSAGE = '尝试次数过多，请 5 分钟后再试'
 export type UnlockJwtPayload = {
   sub: 'instance_unlock'
   instance_id: string
+  sid: string
 }
 
-/** Issue unlock token scoped to one instance */
-export function issueUnlockToken(instanceId: string): string {
-  const payload: UnlockJwtPayload = { sub: 'instance_unlock', instance_id: instanceId }
+export type UnlockRequest = Request & {
+  unlockSession?: DeviceSessionRow
+}
+
+/** Issue unlock token scoped to one instance + device session id */
+export function issueUnlockToken(instanceId: string, sessionId: string): string {
+  const payload: UnlockJwtPayload = {
+    sub: 'instance_unlock',
+    instance_id: instanceId,
+    sid: sessionId,
+  }
   return jwt.sign(payload, jwtSecret(), { expiresIn: UNLOCK_TTL_SECONDS })
 }
 
-/** Verify unlock token matches expected instance */
-export function verifyUnlockToken(token: string, instanceId: string): boolean {
+/** Decode unlock JWT without session DB check (returns null if invalid shape) */
+export function decodeUnlockToken(token: string): UnlockJwtPayload | null {
   try {
     const payload = jwt.verify(token, jwtSecret()) as UnlockJwtPayload
-    return payload.sub === 'instance_unlock' && payload.instance_id === instanceId
+    if (payload.sub !== 'instance_unlock' || !payload.instance_id || !payload.sid) {
+      return null
+    }
+    return payload
   } catch {
-    return false
+    return null
   }
+}
+
+/** Verify unlock token matches expected instance and active device session */
+export function verifyUnlockToken(
+  db: RelayDatabase,
+  token: string,
+  instanceId: string,
+  now = Date.now(),
+): DeviceSessionRow | null {
+  const payload = decodeUnlockToken(token)
+  if (!payload || payload.instance_id !== instanceId) return null
+  return verifyDeviceSession(db, payload.sid, instanceId, now)
 }
 
 /** Read X-Instance-Unlock header */
@@ -44,16 +76,28 @@ export function readUnlockHeader(req: Request): string | null {
 }
 
 export type UnlockResult =
-  | { ok: true; unlock_token: string; expires_in: number }
+  | {
+      ok: true
+      unlock_token: string
+      expires_in: number
+      session_id: string
+    }
   | { ok: false; status: number; error: string }
 
-/** Verify Mac instance password and issue unlock JWT (site gate already required) */
+export type UnlockMeta = {
+  deviceLabel?: string
+  userAgent?: string
+  clientIp?: string
+}
+
+/** Verify Mac instance password and issue unlock JWT bound to a device session */
 export function unlockInstance(
   db: RelayDatabase,
   failLock: FailLockLimiter,
   instanceId: string,
   password: string,
   ip: string,
+  meta: UnlockMeta = {},
   now = Date.now(),
 ): UnlockResult {
   const lockKey = `unlock:${ip}:${instanceId}`
@@ -98,15 +142,33 @@ export function unlockInstance(
   }
 
   failLock.reset(lockKey)
+
+  // Create session with placeholder hash, then issue JWT(sid) and store real hash.
+  const placeholder = `pending:${now}:${Math.random().toString(36).slice(2)}`
+  const session = createDeviceSession(db, {
+    instanceId,
+    unlockToken: placeholder,
+    deviceLabel: meta.deviceLabel,
+    userAgent: meta.userAgent,
+    clientIp: meta.clientIp ?? ip,
+    now,
+  })
+  const unlockToken = issueUnlockToken(instanceId, session.id)
+  db.prepare(`UPDATE instance_device_sessions SET token_hash = ? WHERE id = ?`).run(
+    hashUnlockToken(unlockToken),
+    session.id,
+  )
+
   return {
     ok: true,
-    unlock_token: issueUnlockToken(instanceId),
+    unlock_token: unlockToken,
     expires_in: UNLOCK_TTL_SECONDS,
+    session_id: session.id,
   }
 }
 
-/** Require site JWT already applied; also require unlock token for this instance path param */
-export function requireInstanceUnlock(paramName = 'id') {
+/** Factory: require unlock header + active device session for :id instance */
+export function createRequireInstanceUnlock(db: RelayDatabase, paramName = 'id') {
   return (req: Request, res: Response, next: NextFunction): void => {
     const instanceId = String(req.params[paramName] || '').trim()
     if (!instanceId) {
@@ -114,10 +176,20 @@ export function requireInstanceUnlock(paramName = 'id') {
       return
     }
     const token = readUnlockHeader(req)
-    if (!token || !verifyUnlockToken(token, instanceId)) {
+    if (!token) {
       res.status(403).json({ error: '需要先验证实例密码' })
       return
     }
+    const session = verifyUnlockToken(db, token, instanceId)
+    if (!session) {
+      res.status(403).json({ error: '需要先验证实例密码' })
+      return
+    }
+    const now = Date.now()
+    if (now - session.last_seen_at >= 30_000) {
+      touchDeviceSession(db, session.id, now)
+    }
+    ;(req as UnlockRequest).unlockSession = session
     next()
   }
 }

@@ -285,6 +285,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureLegacyMemorySchema(ctx); err != nil {
 		return err
 	}
+	// 19) 网络域名白名单（同步 Cursor/Claude/Codex 沙箱）
+	if err := s.EnsureNetworkAllowlistSchema(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

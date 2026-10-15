@@ -126,10 +126,16 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.GET("/admin/browser-use", h.AdminBrowserUseStatus)
 			adm.POST("/admin/browser-use/ensure", h.AdminBrowserUseEnsure)
 
+			adm.GET("/admin/network-allowlist", h.AdminNetworkAllowlistGet)
+			adm.PUT("/admin/network-allowlist", h.AdminNetworkAllowlistPut)
+			adm.POST("/admin/network-allowlist/sync", h.AdminNetworkAllowlistSync)
+
 			adm.GET("/admin/remote-relay/config", h.AdminRemoteRelayConfigGet)
 			adm.PUT("/admin/remote-relay/config", h.AdminRemoteRelayConfigPut)
 			adm.POST("/admin/remote-relay/password/rotate", h.AdminRemoteRelayPasswordRotate)
 			adm.GET("/admin/remote-relay/status", h.AdminRemoteRelayStatus)
+			adm.GET("/admin/remote-relay/mobile-sessions", h.AdminRemoteRelayMobileSessionsGet)
+			adm.DELETE("/admin/remote-relay/mobile-sessions/:sessionId", h.AdminRemoteRelayMobileSessionKick)
 			adm.POST("/admin/remote-relay/deploy", h.AdminRemoteRelayDeploy)
 			adm.POST("/admin/remote-relay/upgrade", h.AdminRemoteRelayUpgrade)
 			adm.GET("/admin/remote-relay/deploy-job/:id/stream", h.AdminRemoteRelayDeployJobStream)

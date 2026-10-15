@@ -23,15 +23,13 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(agents) == 0 {
-		return map[string]any{"skipped": true, "reason": "no agents"}, nil
-	}
 	folderName := map[int64]string{}
 	if folders, ferr := ec.Store.ListAgentFolders(ec.Context); ferr == nil {
 		for _, f := range folders {
 			folderName[f.ID] = f.Name
 		}
 	}
+	// Empty list still posts so relay can prune deleted agents from the mirror.
 	rows := make([]map[string]any, 0, len(agents))
 	for _, a := range agents {
 		fn := ""

@@ -4,7 +4,17 @@ import type { RelayDatabase } from '../db.js'
 import { verifySiteToken } from '../auth/site.js'
 import { listInstancesPublic, revokeInstancePassword } from '../auth/instance.js'
 import type { FailLockLimiter } from '../auth/failLock.js'
-import { unlockClientIp, unlockInstance, requireInstanceUnlock } from '../auth/unlock.js'
+import {
+  unlockClientIp,
+  unlockInstance,
+  createRequireInstanceUnlock,
+  type UnlockRequest,
+} from '../auth/unlock.js'
+import {
+  listDeviceSessions,
+  revokeDeviceSession,
+  touchDeviceSession,
+} from '../auth/deviceSession.js'
 import { enqueueCommand } from '../commands.js'
 import { clearMobileViewer, setMobileViewer } from '../viewer.js'
 import {
@@ -29,6 +39,7 @@ const syncMessagesBodySchema = z.object({
 
 const unlockBodySchema = z.object({
   password: z.string().min(1),
+  device_label: z.string().max(64).optional(),
 })
 
 const askBodySchema = z.object({
@@ -72,13 +83,13 @@ function requireSiteAuth(db: RelayDatabase) {
 export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimiter): Router {
   const router = express.Router()
   const guard = requireSiteAuth(db)
-  const needUnlock = requireInstanceUnlock('id')
+  const needUnlock = createRequireInstanceUnlock(db, 'id')
 
   router.get('/instances', guard, (_req: Request, res: Response) => {
     res.json({ instances: listInstancesPublic(db) })
   })
 
-  /** Enter instance: verify 6-char Mac password → unlock_token (24h) */
+  /** Enter instance: verify 6-char Mac password → unlock_token bound to device session (7d) */
   router.post('/instances/:id/unlock', guard, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     if (!instanceId) {
@@ -90,12 +101,18 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
       res.status(400).json({ error: 'Invalid unlock payload' })
       return
     }
+    const ua = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : ''
     const result = unlockInstance(
       db,
       unlockFailLock,
       instanceId,
       parsed.data.password,
       unlockClientIp(req),
+      {
+        deviceLabel: parsed.data.device_label,
+        userAgent: ua,
+        clientIp: unlockClientIp(req),
+      },
     )
     if (!result.ok) {
       res.status(result.status).json({ error: result.error })
@@ -104,7 +121,51 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     res.json({
       unlock_token: result.unlock_token,
       expires_in: result.expires_in,
+      session_id: result.session_id,
     })
+  })
+
+  /** Mobile heartbeat: keep device online for PC panel */
+  router.post('/instances/:id/sessions/heartbeat', guard, needUnlock, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    const session = (req as UnlockRequest).unlockSession
+    if (!instanceId || !session) {
+      res.status(400).json({ error: 'Invalid session' })
+      return
+    }
+    const updated = touchDeviceSession(db, session.id)
+    if (!updated) {
+      res.status(403).json({ error: '需要先验证实例密码' })
+      return
+    }
+    res.json({
+      ok: true,
+      session_id: updated.id,
+      expires_at: updated.expires_at,
+      last_seen_at: updated.last_seen_at,
+    })
+  })
+
+  /** Logout this device unlock (keep site gate) */
+  router.delete('/instances/:id/sessions/me', guard, needUnlock, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    const session = (req as UnlockRequest).unlockSession
+    if (!instanceId || !session) {
+      res.status(400).json({ error: 'Invalid session' })
+      return
+    }
+    revokeDeviceSession(db, session.id, instanceId)
+    res.json({ ok: true })
+  })
+
+  /** Optional: list sessions visible to this unlock (same instance) */
+  router.get('/instances/:id/sessions', guard, needUnlock, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    if (!instanceId) {
+      res.status(400).json({ error: 'Invalid instance id' })
+      return
+    }
+    res.json({ sessions: listDeviceSessions(db, instanceId) })
   })
 
   router.post('/instances/:id/commands', guard, needUnlock, (req: Request, res: Response) => {

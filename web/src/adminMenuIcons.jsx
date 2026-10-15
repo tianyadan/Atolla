@@ -116,18 +116,26 @@ function iconBody(name) {
           <path d="M4 4v4h4" />
         </>
       )
-    case 'remote-relay':
+    case 'network-allowlist':
       return (
         <>
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 2v3" />
-          <path d="M12 19v3" />
-          <path d="M4.93 4.93l2.12 2.12" />
-          <path d="M16.95 16.95l2.12 2.12" />
-          <path d="M2 12h3" />
-          <path d="M19 12h3" />
-          <path d="M4.93 19.07l2.12-2.12" />
-          <path d="M16.95 7.05l2.12-2.12" />
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18" />
+          <path d="M12 3a14 14 0 0 1 0 18" />
+          <path d="M12 3a14 14 0 0 0 0 18" />
+        </>
+      )
+    case 'remote-relay':
+      // 机架服务器：顶栏指示灯 + 两层托盘 + 底座
+      return (
+        <>
+          <rect x="4" y="3" width="16" height="18" rx="2" />
+          <path d="M7 7h4" />
+          <circle cx="15.5" cy="7" r="1" fill="currentColor" stroke="none" />
+          <path d="M4 10.5h16" />
+          <path d="M7 14h4" />
+          <circle cx="15.5" cy="14" r="1" fill="currentColor" stroke="none" />
+          <path d="M4 17.5h16" />
         </>
       )
     default:

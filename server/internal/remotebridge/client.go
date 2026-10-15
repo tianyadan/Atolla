@@ -65,8 +65,8 @@ func (c *RelayClient) Register(ctx context.Context, displayName string, actions 
 
 // HeartbeatResult is the relay heartbeat response (presence fields optional).
 type HeartbeatResult struct {
-	OK                    bool   `json:"ok"`
-	MobileViewingAgentID  string `json:"mobile_viewing_agent_id"`
+	OK                   bool   `json:"ok"`
+	MobileViewingAgentID string `json:"mobile_viewing_agent_id"`
 }
 
 // Heartbeat sends registry metadata (+ optional host metrics) to the relay.
@@ -172,6 +172,70 @@ func (c *RelayClient) PostPermissionsResolved(ctx context.Context, requestIDs []
 	return c.postJSON(ctx, c.deviceURL("/permissions/resolved"), c.headers(), map[string]any{
 		"request_ids": requestIDs,
 	})
+}
+
+// MobileDeviceSession is one phone unlock session on the relay.
+type MobileDeviceSession struct {
+	SessionID   string `json:"session_id"`
+	DeviceLabel string `json:"device_label"`
+	UserAgent   string `json:"user_agent"`
+	ClientIP    string `json:"client_ip"`
+	CreatedAt   int64  `json:"created_at"`
+	ExpiresAt   int64  `json:"expires_at"`
+	LastSeenAt  int64  `json:"last_seen_at"`
+	Online      bool   `json:"online"`
+	Revoked     bool   `json:"revoked"`
+}
+
+// ListMobileSessions returns unlock sessions for this instance.
+func (c *RelayClient) ListMobileSessions(ctx context.Context) ([]MobileDeviceSession, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.deviceURL("/mobile-sessions"), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header = c.headers()
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, readAPIError(resp)
+	}
+	var out struct {
+		Sessions []MobileDeviceSession `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if out.Sessions == nil {
+		out.Sessions = []MobileDeviceSession{}
+	}
+	return out.Sessions, nil
+}
+
+// KickMobileSession revokes one phone unlock session on the relay.
+func (c *RelayClient) KickMobileSession(ctx context.Context, sessionID string) error {
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		return fmt.Errorf("session id required")
+	}
+	u := c.deviceURL("/mobile-sessions/" + url.PathEscape(sid))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header = c.headers()
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return readAPIError(resp)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
 }
 
 func (c *RelayClient) postJSON(ctx context.Context, url string, hdr http.Header, body any) error {

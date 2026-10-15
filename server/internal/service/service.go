@@ -152,10 +152,12 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	action.RulesPrompt = rulesPrompt
 	action.PolicyNote = policyNote
 	action.ContextSnippet = s.permissionContextSnippet(ctx, convID)
+	netPatterns, _ := s.Store.ListNetworkAllowlistPatterns(ctx)
 	opt := permission.EvaluateOpts{
 		Policy:           agentPolicy,
 		ServerControl:    s.LoadServerControlPolicy(ctx, lookupID),
 		AllowAllExceptRm: s.Perms.IsAllowAllExceptRm(convID),
+		NetworkPatterns:  netPatterns,
 	}
 	pd := s.Gateway.Evaluate(ctx, action, opt)
 	summary := summarize(tool, input)
@@ -191,6 +193,9 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 		}
 		pd.DecidedBy = "system"
 		pd.Reason = reason
+		if pd.RuleID == "network_allowlist_confirm" {
+			s.persistNetworkHostAllow(ctx, action, lookupID)
+		}
 		s.Perms.AutoApprove(tool, summary, reason, convID, owner)
 		s.recordPerm(ctx, convID, action, pd, "allow", "system", summary, reason)
 		_ = s.Store.InsertAutoApproveAudit(ctx, lookupID, convID, tool, summary, reason)
@@ -209,6 +214,9 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 			}
 			pd.DecidedBy = "ai"
 			pd.Reason = reason
+			if pd.RuleID == "network_allowlist_confirm" {
+				s.persistNetworkHostAllow(ctx, action, lookupID)
+			}
 			s.Perms.AutoApprove(tool, summary, reason, convID, owner)
 			s.recordPerm(ctx, convID, action, pd, "allow", "ai", summary, reason)
 			return permission.Decision{Behavior: permission.Allow, Reason: reason}
@@ -235,10 +243,57 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 		}
 	} else if out.SessionAllow {
 		_ = s.Gateway.RememberSession(action)
+		if pd.RuleID == "network_allowlist_confirm" {
+			if host := permission.ExtractNetworkHost(action); host != "" {
+				_ = s.Gateway.RememberSession(permission.NetworkHostAction(action, host))
+			}
+		}
+	}
+	if decision == "allow" && pd.RuleID == "network_allowlist_confirm" {
+		s.persistNetworkHostAllow(ctx, action, lookupID)
 	}
 	pd.DecidedBy = permission.DecidedByHuman
 	s.recordPerm(ctx, convID, action, pd, decision, hby, summary, note)
 	return out
+}
+
+// persistNetworkHostAllow writes confirmed host into allowlist and syncs home CLI configs.
+func (s *Service) persistNetworkHostAllow(ctx context.Context, action permission.ToolAction, agentID int64) {
+	host := permission.ExtractNetworkHost(action)
+	if host == "" {
+		return
+	}
+	pat, err := permission.NormalizeAllowlistPattern(host)
+	if err != nil {
+		return
+	}
+	_ = s.Store.UpsertNetworkAllowlistPattern(ctx, pat, "agent", agentID)
+	s.SyncNetworkAllowlistToHome(ctx)
+}
+
+// SyncNetworkAllowlistToHome writes current DB patterns into Cursor/Claude/Codex home configs.
+func (s *Service) SyncNetworkAllowlistToHome(ctx context.Context) agent.HomeSyncResult {
+	patterns, err := s.Store.ListNetworkAllowlistPatterns(ctx)
+	if err != nil {
+		return agent.HomeSyncResult{Errors: []string{err.Error()}}
+	}
+	return agent.SyncHomeNetworkAllowlist(patterns)
+}
+
+// ListNetworkAllowlistPatterns exposes patterns for gateway/tests.
+func (s *Service) ReplaceNetworkAllowlistAndSync(ctx context.Context, patterns []string) (agent.HomeSyncResult, error) {
+	clean := make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		n, err := permission.NormalizeAllowlistPattern(p)
+		if err != nil {
+			return agent.HomeSyncResult{}, err
+		}
+		clean = append(clean, n)
+	}
+	if err := s.Store.ReplaceNetworkAllowlist(ctx, clean); err != nil {
+		return agent.HomeSyncResult{}, err
+	}
+	return s.SyncNetworkAllowlistToHome(ctx), nil
 }
 
 func riskFromScore(score float64) string {

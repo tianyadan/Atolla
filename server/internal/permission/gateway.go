@@ -22,6 +22,8 @@ type EvaluateOpts struct {
 	ServerControl      *ServerControlPolicy // 服务器技能硬规则
 	AllowAllExceptRm   bool
 	SkipJevos          bool
+	// NetworkPatterns：平台网络白名单；AllowNetwork 时未命中则 REVIEW（首次确认后写入）。
+	NetworkPatterns []string
 }
 
 // Gateway 平台权限网关：Hard Deny → Safe Allow → Session → JEVOS → REVIEW。
@@ -54,8 +56,19 @@ func (g *Gateway) Evaluate(ctx context.Context, a ToolAction, opt EvaluateOpts) 
 		if d := applyPolicyAction(a, *opt.Policy); d.Decision == DecisionDeny {
 			return d
 		}
-		if opt.Policy.AllowNetwork && (a.ActionType == ActionNetworkRead || a.ToolName == "WebFetch" || a.ToolName == "WebSearch") {
-			return PermissionDecision{Decision: DecisionAllow, Reason: "数字员工已授权联网", DecidedBy: DecidedByStatic, RuleID: "agent_policy_network"}
+		// 「允许联网」即用户授权：高德/公开 HTTPS 等非危害性外联直接放行，不再按域名二次弹窗。
+		// 平台白名单仍用于同步本机 CLI 沙箱，不作为第二道人工闸门。
+		if opt.Policy.AllowNetwork && IsNetworkToolAction(a) {
+			host := ExtractNetworkHost(a)
+			reason := "数字员工已授权联网"
+			ruleID := "agent_policy_network"
+			if host != "" && HostMatchesAllowlist(host, opt.NetworkPatterns) {
+				reason = "数字员工已授权联网（白名单: " + host + ")"
+				ruleID = "network_allowlist"
+			} else if host != "" {
+				reason = "数字员工已授权联网（" + host + "）"
+			}
+			return PermissionDecision{Decision: DecisionAllow, Reason: reason, DecidedBy: DecidedByStatic, RuleID: ruleID}
 		}
 	}
 	if IsSafeAllow(a) {
