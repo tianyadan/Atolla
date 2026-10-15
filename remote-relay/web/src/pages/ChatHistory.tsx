@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   askAgent,
   clearToken,
+  clearViewerPresence,
   decidePermission,
   fetchAgents,
   fetchMessages,
@@ -11,6 +12,7 @@ import {
   setAgentAutoApproveAll,
   setAgentAutoReview,
   setAgentTaskPlan,
+  setViewerPresence,
   stopAgent,
   syncMessages,
   type PublicMirrorAgent,
@@ -19,18 +21,35 @@ import {
   type PublicMirrorTask,
 } from '../api'
 import { CmdBlock } from '../components/CmdBlock'
+import { ContextRing } from '../components/ContextRing'
 import { MarkdownBody } from '../components/MarkdownBody'
 import { Modal } from '../components/Modal'
 import { PageShell } from '../components/PageShell'
 import { byLabel, parseCommandMessage } from '../utils/commandMessage'
+import { loadChatDraft, saveChatDraft } from '../utils/draftCache'
 import {
   agentAutoApproveAll,
   agentAutoReview,
   agentAvatarUrl,
   agentBusy,
+  agentContextUsage,
   agentStatusLabel,
   agentTaskPlanEnabled,
 } from '../utils/agentStatus'
+
+/** Copy plain text (clipboard API with fallback) */
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+}
 
 /** Seconds left until permission deadline */
 function remainSec(deadline: string | null | undefined): number {
@@ -42,6 +61,8 @@ function remainSec(deadline: string | null | undefined): number {
 
 /** Mirror read + sync.messages cadence while chat is open */
 const POLL_MS = 4_000
+/** Heartbeat so PC can show mobile_viewing icon (~60s Mac TTL) */
+const VIEWER_HEARTBEAT_MS = 25_000
 /** Initial / poll window of newest messages */
 const PAGE_SIZE = 20
 /** Ask Mac to sync a bit more into mirror than UI shows */
@@ -90,7 +111,8 @@ export function ChatHistoryPage() {
   const [loading, setLoading] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasMoreOlder, setHasMoreOlder] = useState(false)
-  const [question, setQuestion] = useState('')
+  /** Restore unsaved composer draft for this agent (sessionStorage) */
+  const [question, setQuestion] = useState(() => loadChatDraft(instanceId, agentId))
   const [sending, setSending] = useState(false)
   const [planBusy, setPlanBusy] = useState(false)
   const [progressOpen, setProgressOpen] = useState(false)
@@ -100,9 +122,14 @@ export function ChatHistoryPage() {
   const [permQueue, setPermQueue] = useState<PublicMirrorPermission[]>([])
   const [permBusy, setPermBusy] = useState(false)
   const [, setTick] = useState(0)
+  /** Waiting for AI reply after send / while engine busy on last user turn */
+  const [awaitingReply, setAwaitingReply] = useState(false)
+  const [kbdInset, setKbdInset] = useState(0)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const threadRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(true)
   const loadingOlderRef = useRef(false)
   /** Only seed hasMoreOlder from the first newest-page fetch */
@@ -110,8 +137,19 @@ export function ChatHistoryPage() {
   const followUpTimersRef = useRef<number[]>([])
   /** 本机已点裁决的 request_id，短时忽略镜像回灌，避免弹窗反复出现 */
   const decidedIdsRef = useRef<Set<string>>(new Set())
+  const awaitSinceRef = useRef(0)
 
   const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
+
+  /** Reload draft when route agent changes */
+  useEffect(() => {
+    setQuestion(loadChatDraft(instanceId, agentId))
+  }, [instanceId, agentId])
+
+  /** Persist unsaved input so accidental back doesn't lose draft */
+  useEffect(() => {
+    saveChatDraft(instanceId, agentId, question)
+  }, [instanceId, agentId, question])
 
   /** Shared auth / unlock redirect */
   function handleApiError(err: unknown): boolean {
@@ -145,7 +183,40 @@ export function ChatHistoryPage() {
   useLayoutEffect(() => {
     if (!stickToBottomRef.current || loadingOlderRef.current) return
     scrollThreadToBottom('auto')
-  }, [messages, loading])
+  }, [messages, loading, awaitingReply])
+
+  /** Lift composer above soft keyboard via visualViewport */
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => {
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+      setKbdInset(inset)
+      if (inset > 0 && stickToBottomRef.current) {
+        requestAnimationFrame(() => scrollThreadToBottom('auto'))
+      }
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
+
+  /** Clear awaiting when a fresh assistant reply lands */
+  useEffect(() => {
+    if (!awaitingReply) return
+    const since = awaitSinceRef.current
+    const hasReply = messages.some(
+      (m) =>
+        m.role === 'assistant' &&
+        !m.pending &&
+        (m.created_at ?? 0) >= since - 8_000,
+    )
+    if (hasReply) setAwaitingReply(false)
+  }, [messages, awaitingReply])
 
   /** Refresh agent / tasks / newest message page */
   const refresh = useCallback(async () => {
@@ -244,6 +315,27 @@ export function ChatHistoryPage() {
     }
   }, [instanceId, agentId, syncThenRefresh])
 
+  /** Report phone viewing presence to Mac (PC shows mobile_viewing icon) */
+  useEffect(() => {
+    if (!instanceId || !agentId) return
+    let cancelled = false
+    const beat = () => {
+      if (cancelled) return
+      void setViewerPresence(instanceId, agentId).catch(() => {
+        /* Mac offline: ignore */
+      })
+    }
+    beat()
+    const hb = window.setInterval(beat, VIEWER_HEARTBEAT_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(hb)
+      void clearViewerPresence(instanceId, agentId).catch(() => {
+        /* ignore */
+      })
+    }
+  }, [instanceId, agentId])
+
   /** Poll pending permission cards (Mac → relay mirror) */
   const refreshPerms = useCallback(async () => {
     if (!instanceId || !agentId) return
@@ -322,6 +414,8 @@ export function ChatHistoryPage() {
     setSending(true)
     setError(null)
     stickToBottomRef.current = true
+    awaitSinceRef.current = Date.now()
+    setAwaitingReply(true)
     const optimistic: LocalBubble = {
       message_id: `local-${Date.now()}`,
       agent_id: agentId,
@@ -334,6 +428,7 @@ export function ChatHistoryPage() {
     }
     setMessages((prev) => sortMessages([...prev, optimistic]))
     setQuestion('')
+    saveChatDraft(instanceId, agentId, '')
     try {
       await askAgent(instanceId, agentId, q)
       // Immediate + delayed syncs: ask returns before Mac finishes the reply.
@@ -343,6 +438,7 @@ export function ChatHistoryPage() {
         window.setTimeout(() => void syncThenRefresh(), ms),
       )
     } catch (err) {
+      setAwaitingReply(false)
       if (!handleApiError(err)) {
         setError(err instanceof Error ? err.message : '发送失败')
         setMessages((prev) =>
@@ -354,6 +450,15 @@ export function ChatHistoryPage() {
     } finally {
       setSending(false)
     }
+  }
+
+  /** Copy assistant reply body */
+  async function onCopyMessage(id: string, text: string) {
+    const t = text.trim()
+    if (!t) return
+    await copyText(t)
+    setCopiedId(id)
+    window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1600)
   }
 
   /** Toggle task plan on Mac */
@@ -447,16 +552,27 @@ export function ChatHistoryPage() {
   }
 
   const title = agent?.display_name || agentId || '对话'
+  const agentAvatar = agentAvatarUrl(agent?.payload)
+  const ctxUsage = agentContextUsage(agent?.payload)
+  const lastSpeak = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const r = messages[i]?.role
+      if (r === 'user' || r === 'assistant') return r
+    }
+    return null
+  }, [messages])
+  /** ChatGPT-like thinking row while waiting for the next assistant turn */
+  const showThinking = awaitingReply || (busy && lastSpeak === 'user')
 
   return (
     <PageShell title={title} backTo={agentsPath} bodyClassName="page-body-chat">
-      <div className="chat-layout">
+      <div className="chat-layout" style={{ ['--kbd-inset' as string]: `${kbdInset}px` }}>
         <div className="chat-sticky-top">
           <div className="chat-header-card">
-            <img className="agent-avatar lg" src={agentAvatarUrl(agent?.payload)} alt="" />
+            <img className="agent-avatar lg" src={agentAvatar} alt="" />
             <div className="chat-header-meta">
               <div className="list-title">{title}</div>
-              <span className={`status-pill ${busy ? 'busy' : 'idle'}`}>
+              <span className={`status-pill compact ${busy ? 'busy' : 'idle'}`}>
                 {agentStatusLabel(agent?.status)}
               </span>
             </div>
@@ -515,7 +631,7 @@ export function ChatHistoryPage() {
             const label = isUser
               ? '你'
               : isAssistant
-                ? '助手'
+                ? title
                 : isCommand
                   ? cmd?.decision === 'deny'
                     ? '已拒绝命令'
@@ -537,12 +653,28 @@ export function ChatHistoryPage() {
                 key={m.message_id}
                 className={`chat-bubble role-${role}${isUser ? ' bubble-user' : ''}${isAssistant ? ' bubble-assistant' : ''}${isSpecial ? ' bubble-special' : ''}${isCommand ? ' bubble-command' : ''}${m.failed ? ' failed' : ''}${m.pending ? ' pending' : ''}`}
               >
-                <header>
-                  <span>{label}</span>
-                  {isCommand && cmd?.by ? (
-                    <span className="cmd-by">{byLabel(cmd.by)}</span>
-                  ) : null}
-                  {m.failed ? ' · 发送失败' : m.pending ? ' · 发送中' : ''}
+                <header className={isAssistant ? 'bubble-agent-head' : undefined}>
+                  {isAssistant ? (
+                    <>
+                      <img className="bubble-agent-avatar" src={agentAvatar} alt="" />
+                      <span className="bubble-agent-name">{label}</span>
+                      <button
+                        type="button"
+                        className="bubble-copy"
+                        onClick={() => void onCopyMessage(m.message_id, m.content || '')}
+                      >
+                        {copiedId === m.message_id ? '已复制' : '复制'}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span>{label}</span>
+                      {isCommand && cmd?.by ? (
+                        <span className="cmd-by">{byLabel(cmd.by)}</span>
+                      ) : null}
+                      {m.failed ? ' · 发送失败' : m.pending ? ' · 发送中' : ''}
+                    </>
+                  )}
                 </header>
                 {isCommand ? (
                   <CmdBlock content={m.content} payload={m.payload} />
@@ -570,10 +702,26 @@ export function ChatHistoryPage() {
               </article>
             )
           })}
+          {showThinking ? (
+            <article className="chat-bubble bubble-assistant bubble-thinking" aria-live="polite">
+              <header className="bubble-agent-head">
+                <img className="bubble-agent-avatar" src={agentAvatar} alt="" />
+                <span className="bubble-agent-name">{title}</span>
+              </header>
+              <div className="thinking-row">
+                <span className="thinking-label">正在思考</span>
+                <span className="thinking-dots" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              </div>
+            </article>
+          ) : null}
           <div ref={bottomRef} className="chat-thread-end" aria-hidden />
         </div>
 
-        <div className="chat-composer">
+        <div className="chat-composer" ref={composerRef}>
           <div className="chat-composer-toggles">
             <label className="capsule-toggle">
               <input
@@ -594,13 +742,31 @@ export function ChatHistoryPage() {
               {(approveAllOn || autoReviewOn) && <span className="approve-dot" aria-hidden />}
             </button>
           </div>
-          <textarea
-            rows={2}
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder={busy ? '输入插话内容…' : '输入任务…'}
-          />
+          <div className="chat-composer-input-wrap">
+            <textarea
+              rows={2}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onFocus={() => {
+                stickToBottomRef.current = true
+                window.setTimeout(() => scrollThreadToBottom('smooth'), 80)
+              }}
+              placeholder={busy ? '输入插话内容…' : '输入任务…'}
+            />
+            <ContextRing usage={ctxUsage} />
+          </div>
           <div className="chat-composer-actions">
+            <button
+              type="button"
+              className="btn outline small"
+              disabled={!question}
+              onClick={() => {
+                setQuestion('')
+                saveChatDraft(instanceId, agentId, '')
+              }}
+            >
+              清空
+            </button>
             <button
               type="button"
               className="btn primary"

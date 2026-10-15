@@ -30,15 +30,20 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 	skillCounts, _ := h.svc.Store.CountInstalledSkillsMap(ctx)
 	skillIcons, _ := h.svc.Store.ListInstalledSkillIconsByAgents(ctx)
 	occMap, _ := h.svc.Store.ListOccupancyMap(ctx)
+	viewingID, viewingOK := int64(0), false
+	if h.svc.RemoteBridge != nil {
+		viewingID, viewingOK = h.svc.RemoteBridge.MobileViewingAgentID()
+	}
 	type row struct {
 		store.ManagedAgent
-		Occupancy *store.Occupancy `json:"occupancy,omitempty"`
+		Occupancy     *store.Occupancy `json:"occupancy,omitempty"`
+		MobileViewing bool             `json:"mobile_viewing"`
 	}
 	out := make([]row, 0, len(items))
 	for _, a := range items {
 		a.SkillCount = skillCounts[a.ID]
 		a.SkillIcons = skillIcons[a.ID]
-		r := row{ManagedAgent: a}
+		r := row{ManagedAgent: a, MobileViewing: viewingOK && a.ID == viewingID}
 		if o, ok := occMap[a.ID]; ok {
 			oc := o
 			r.Occupancy = &oc

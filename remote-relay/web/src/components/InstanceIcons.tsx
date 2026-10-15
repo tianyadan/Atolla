@@ -52,6 +52,14 @@ export function IconSun(p: IconProps) {
   })
 }
 
+/** Moon for switching to dark theme */
+export function IconMoon(p: IconProps) {
+  return base({
+    ...p,
+    children: <path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5Z" />,
+  })
+}
+
 export function IconMonitor(p: IconProps) {
   return base({
     ...p,

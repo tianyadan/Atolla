@@ -6,6 +6,7 @@ import { listInstancesPublic, revokeInstancePassword } from '../auth/instance.js
 import type { FailLockLimiter } from '../auth/failLock.js'
 import { unlockClientIp, unlockInstance, requireInstanceUnlock } from '../auth/unlock.js'
 import { enqueueCommand } from '../commands.js'
+import { clearMobileViewer, setMobileViewer } from '../viewer.js'
 import {
   deletePermissionsMirror,
   listAgentsMirror,
@@ -376,6 +377,58 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         return
       }
       res.json({ items: result.items })
+    },
+  )
+
+  /** Phone presence: currently viewing this agent (persisted on relay; Mac reads via heartbeat) */
+  router.post(
+    '/instances/:id/agents/:agentId/viewer',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      // Primary path: write relay DB (does not depend on Mac action allowlist).
+      if (!setMobileViewer(db, instanceId, agentId)) {
+        res.status(404).json({ error: 'Instance not found' })
+        return
+      }
+      // Best-effort also enqueue for Mac command handlers (ignore allowlist failures).
+      const result = enqueueCommand(db, instanceId, 'viewer.set', { agent_id: agentId })
+      res.json({
+        ok: true,
+        command: result.ok ? result.command : null,
+        queued: result.ok,
+      })
+    },
+  )
+
+  /** Phone presence: left chat (clear viewing) */
+  router.delete(
+    '/instances/:id/agents/:agentId/viewer',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      if (!clearMobileViewer(db, instanceId)) {
+        res.status(404).json({ error: 'Instance not found' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'viewer.clear', { agent_id: agentId })
+      res.json({
+        ok: true,
+        command: result.ok ? result.command : null,
+        queued: result.ok,
+      })
     },
   )
 

@@ -24,6 +24,7 @@ import {
   revokePendingImages,
 } from './chatImages.js'
 import { ChatAttachPreview, ChatLightbox, ChatMessageImages } from './ChatImageUI.jsx'
+import { MobileViewerIcon } from './MobileViewerIcon.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -513,13 +514,28 @@ export default function ManagedAgentsPanel({
           .then((r) => r.json())
           .then((d) => setTasks(d.items || []))
           .catch(() => {})
+        // 与手机同看时近实时拉消息；本机 SSE 流式中跳过，避免打断打字机
+        if (active && !getAgentSession(selectedId).loading) {
+          void loadDetail(selectedId, { force: true })
+        }
       }
     }
-    const ms = anyAgentLoading() || agents.some((a) => a.status === 'running' || a.status === 'compressing' || a.status === 'initializing' || a.occupancy?.source_type === 'CLONE_INIT') ? 1500 : 4000
+    const selectedViewing = agents.some((a) => a.id === selectedId && a.mobile_viewing)
+    const busy =
+      anyAgentLoading() ||
+      selectedViewing ||
+      agents.some(
+        (a) =>
+          a.status === 'running' ||
+          a.status === 'compressing' ||
+          a.status === 'initializing' ||
+          a.occupancy?.source_type === 'CLONE_INIT',
+      )
+    const ms = busy ? 2000 : 4000
     const t = setInterval(tick, ms)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, agents.map((a) => a.status).join(',')])
+  }, [selectedId, active, agents.map((a) => `${a.status}:${a.mobile_viewing ? 1 : 0}`).join(',')])
 
   function onChatScroll() {
     const el = boxRef.current
@@ -1400,7 +1416,10 @@ export default function ManagedAgentsPanel({
       >
         <div className="ma-item-head">
           <img className="ma-avatar ma-avatar-sm" src={agentAvatarUrl(a)} alt="" />
-          <strong>{a.name}</strong>
+          <strong className="ma-item-name">
+            {a.name}
+            {a.mobile_viewing ? <MobileViewerIcon /> : null}
+          </strong>
           <span className="ma-item-badges">
             {pend > 0 && <span className="admin-badge admin-badge-perm" title="待授权">{pend}</span>}
             <span className={`ma-status st-${stClass}`}>{st}</span>
@@ -1576,7 +1595,10 @@ export default function ManagedAgentsPanel({
               <header className="ma-detail-head">
                 <div className="ma-detail-title">
                   <img className="ma-avatar ma-avatar-md" src={agentAvatarUrl(selected)} alt="" />
-                  <h3>{selected.name}</h3>
+                  <h3 className="ma-detail-name">
+                    {selected.name}
+                    {selected.mobile_viewing ? <MobileViewerIcon /> : null}
+                  </h3>
                   <EngineTagWithSkills engine={selected.engine} skillCount={selected.skill_count} />
                   <span className={`ma-status st-${cloneInitBusy ? 'initializing' : statusClass(getAgentSession(selected.id).compressing ? 'compressing' : (getAgentSession(selected.id).loading ? 'running' : selected.status))}`}>
                     {statusLabel(selected)}

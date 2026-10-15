@@ -200,6 +200,44 @@ describe('command queue and long-poll', () => {
     })
   })
 
+  it('persists viewer presence even when Mac has not advertised viewer actions', async () => {
+    // Only base actions — presence must not depend on action allowlist.
+    await register({ actions: ACTIONS })
+    const token = await siteToken()
+    const u = await unlock(token)
+
+    const set = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/9/viewer`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+      .send({})
+    expect(set.status).toBe(200)
+    expect(set.body.ok).toBe(true)
+
+    const hb = await request(app)
+      .post('/api/device/heartbeat')
+      .set('X-Instance-Id', INSTANCE_ID)
+      .set('X-Instance-Password', PASSWORD)
+      .send({ registry_version: 1, actions: ACTIONS })
+    expect(hb.status).toBe(200)
+    expect(hb.body.mobile_viewing_agent_id).toBe('9')
+
+    const clear = await request(app)
+      .delete(`/api/instances/${INSTANCE_ID}/agents/9/viewer`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+    expect(clear.status).toBe(200)
+    expect(clear.body.ok).toBe(true)
+
+    const hb2 = await request(app)
+      .post('/api/device/heartbeat')
+      .set('X-Instance-Id', INSTANCE_ID)
+      .set('X-Instance-Password', PASSWORD)
+      .send({ registry_version: 1, actions: ACTIONS })
+    expect(hb2.status).toBe(200)
+    expect(hb2.body.mobile_viewing_agent_id).toBeNull()
+  })
+
   it('permission decide removes row from permissions mirror immediately', async () => {
     await register({
       actions: [...ACTIONS, 'permission.decide'],

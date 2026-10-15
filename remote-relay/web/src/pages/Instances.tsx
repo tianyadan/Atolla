@@ -20,12 +20,14 @@ import {
   IconMemory,
   IconMonitor,
   IconMore,
+  IconMoon,
   IconSearch,
   IconSun,
   IconTrash,
 } from '../components/InstanceIcons'
 import { Modal } from '../components/Modal'
 import { SettingsIcon } from '../components/SettingsIcon'
+import { getStoredTheme, toggleTheme, type ThemeMode } from '../utils/theme'
 import {
   formatPct,
   formatUptime,
@@ -148,9 +150,11 @@ export function InstancesPage() {
     navigate('/login', { replace: true })
   }
 
-  /** Soft theme flip for this page (prototype sun toggle) */
-  function toggleThemeHint() {
-    document.documentElement.classList.toggle('force-light')
+  const [theme, setThemeMode] = useState<ThemeMode>(() => getStoredTheme())
+
+  /** Toggle global light/dark (persisted, applies to all pages) */
+  function onToggleTheme() {
+    setThemeMode(toggleTheme())
   }
 
   return (
@@ -164,15 +168,17 @@ export function InstancesPage() {
           <button
             type="button"
             className="inst-icon-btn"
-            aria-label="Theme"
-            onClick={toggleThemeHint}
+            aria-label={theme === 'light' ? '切换深色主题' : '切换浅色主题'}
+            title={theme === 'light' ? '深色' : '浅色'}
+            onClick={onToggleTheme}
           >
-            <IconSun size={20} />
+            {theme === 'light' ? <IconMoon size={20} /> : <IconSun size={20} />}
           </button>
           <button
             type="button"
             className="inst-icon-btn"
-            aria-label="Settings"
+            aria-label="设置"
+            title="设置"
             onClick={() => navigate('/settings')}
           >
             <SettingsIcon size={20} />

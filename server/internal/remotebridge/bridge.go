@@ -37,6 +37,10 @@ type Bridge struct {
 	cancel     context.CancelFunc
 	runWg      sync.WaitGroup
 	reregister chan struct{}
+
+	// Phone chat presence (viewer.set heartbeat); TTL checked in MobileViewingAgentID.
+	mobileViewerAgentID int64
+	mobileViewerAt      time.Time
 }
 
 // NewBridge constructs a bridge (does not start until Start).
@@ -195,12 +199,17 @@ func (b *Bridge) run(ctx context.Context, gen uint64) {
 		case <-heartbeatTicker.C:
 			cfg = b.Config.Get()
 			client = b.newClient(cfg)
-			if err := client.Heartbeat(ctx, actions); err != nil {
+			hb, err := client.Heartbeat(ctx, actions)
+			if err != nil {
 				b.setErr(err.Error())
 			} else {
 				// Heartbeat auth success means the instance is registered on the relay.
 				b.setOK()
 				b.setRegistered(true, gen)
+				// Sync phone viewing presence from relay DB (primary path for PC icon).
+				if hb != nil {
+					b.applyRelayMobileViewer(hb.MobileViewingAgentID)
+				}
 			}
 		case <-snapshotTicker.C:
 			cfg = b.Config.Get()
@@ -294,6 +303,7 @@ func (b *Bridge) handleCommand(ctx context.Context, client *RelayClient, cmd Dev
 		Client:  client,
 		Payload: cmd.Payload,
 		Runtime: b.Runtime,
+		Viewer:  b,
 	}
 	body, err := h(ec)
 	if err != nil {
