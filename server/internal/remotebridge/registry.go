@@ -9,6 +9,13 @@ import (
 // Handler executes one relay command action locally.
 type Handler func(ctx *ExecContext) (resultBody any, err error)
 
+// MobileViewer tracks which agent the phone UI is currently viewing.
+type MobileViewer interface {
+	SetMobileViewer(agentID int64)
+	ClearMobileViewer()
+	MobileViewingAgentID() (agentID int64, ok bool)
+}
+
 // ExecContext carries dependencies for action handlers.
 type ExecContext struct {
 	Context context.Context
@@ -16,6 +23,7 @@ type ExecContext struct {
 	Client  *RelayClient
 	Payload map[string]interface{}
 	Runtime AgentRuntime
+	Viewer  MobileViewer
 }
 
 // RegisteredActions lists actions advertised at register/heartbeat.
@@ -31,6 +39,8 @@ func RegisteredActions() []string {
 		"agent.set_auto_review",
 		"agent.set_auto_approve_all",
 		"permission.decide",
+		"viewer.set",
+		"viewer.clear",
 	}
 }
 
@@ -46,4 +56,6 @@ var Handlers = map[string]Handler{
 	"agent.set_auto_review":      handleAgentSetAutoReview,
 	"agent.set_auto_approve_all": handleAgentSetAutoApproveAll,
 	"permission.decide":          handlePermissionDecide,
+	"viewer.set":                 handleViewerSet,
+	"viewer.clear":               handleViewerClear,
 }

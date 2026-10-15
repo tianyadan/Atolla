@@ -72,10 +72,15 @@ func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question st
 	}
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
-	return s.askManagedCore(ctx, a, 0, question, askCoreOpts{
+	msg, askErr := s.askManagedCore(ctx, a, 0, question, askCoreOpts{
 		bindMainConv: true,
 		attachments:  NormalizeChatAttachments(atts),
 	}, onEvent)
+	// Push mirror after PC/SSE ask so mobile chat catches up without waiting for next poll.
+	if s.RemoteBridge != nil {
+		s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
+	}
+	return msg, askErr
 }
 
 // AskManagedIsolated 在指定会话执行(项目协作节点)；不改写数字员工主会话；占用由调用方持有。

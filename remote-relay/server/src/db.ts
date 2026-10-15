@@ -136,6 +136,18 @@ function applySchema(db: RelayDatabase): void {
   } catch {
     /* column already exists */
   }
+
+  // Phone chat presence (which agent mobile is viewing); returned on Mac heartbeat.
+  try {
+    db.exec(`ALTER TABLE instances ADD COLUMN mobile_viewing_agent_id TEXT`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE instances ADD COLUMN mobile_viewing_at INTEGER`)
+  } catch {
+    /* column already exists */
+  }
 }
 
 /** Bootstrap / sync site gate password from SITE_PASSWORD */

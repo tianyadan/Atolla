@@ -13,6 +13,8 @@ export const KNOWN_ACTIONS = [
   'agent.set_auto_review',
   'agent.set_auto_approve_all',
   'permission.decide',
+  'viewer.set',
+  'viewer.clear',
 ] as const
 
 export type KnownAction = (typeof KNOWN_ACTIONS)[number]
@@ -29,4 +31,6 @@ export const V1_EXECUTABLE = new Set<string>([
   'agent.set_auto_review',
   'agent.set_auto_approve_all',
   'permission.decide',
+  'viewer.set',
+  'viewer.clear',
 ])

@@ -1,14 +1,43 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { clearToken, fetchAgents } from '../api'
 import { AgentsHubIcon, GroupChatHubIcon } from '../components/HubIcons'
 import { PageShell } from '../components/PageShell'
+import { countBusyAgents } from '../utils/agentStatus'
 
 /** 4-grid feature menu after instance unlock */
 export function InstanceHubPage() {
   const { instanceId = '' } = useParams()
   const navigate = useNavigate()
   const [toast, setToast] = useState<string | null>(null)
+  const [busyCount, setBusyCount] = useState(0)
   const base = `/instances/${encodeURIComponent(instanceId)}`
+
+  /** Refresh busy badge count */
+  const loadBusy = useCallback(async () => {
+    if (!instanceId) return
+    try {
+      const agents = await fetchAgents(instanceId)
+      setBusyCount(countBusyAgents(agents))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : ''
+      const status = (err as { status?: number })?.status
+      if (msg.includes('Unauthorized') || status === 401) {
+        clearToken()
+        navigate('/login', { replace: true })
+        return
+      }
+      if (status === 403 || msg.includes('实例密码')) {
+        navigate('/instances', { replace: true })
+      }
+    }
+  }, [instanceId, navigate])
+
+  useEffect(() => {
+    void loadBusy()
+    const id = window.setInterval(() => void loadBusy(), 15_000)
+    return () => window.clearInterval(id)
+  }, [loadBusy])
 
   /** Show under-development notice */
   function onGroupChat() {
@@ -27,6 +56,11 @@ export function InstanceHubPage() {
         >
           <span className="hub-icon">
             <AgentsHubIcon />
+            {busyCount > 0 ? (
+              <span className="busy-count-badge hub-busy-badge" title={`忙碌中 ${busyCount}`}>
+                {busyCount}
+              </span>
+            ) : null}
           </span>
           <span className="hub-label">数字员工</span>
         </button>

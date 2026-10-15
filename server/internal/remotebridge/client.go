@@ -63,8 +63,14 @@ func (c *RelayClient) Register(ctx context.Context, displayName string, actions 
 	return c.postJSON(ctx, c.deviceURL("/register"), hdr, body)
 }
 
+// HeartbeatResult is the relay heartbeat response (presence fields optional).
+type HeartbeatResult struct {
+	OK                    bool   `json:"ok"`
+	MobileViewingAgentID  string `json:"mobile_viewing_agent_id"`
+}
+
 // Heartbeat sends registry metadata (+ optional host metrics) to the relay.
-func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) error {
+func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) (*HeartbeatResult, error) {
 	body := map[string]any{
 		"registry_version": RegistryVersion,
 		"actions":          actions,
@@ -78,7 +84,11 @@ func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) error {
 		"mem_pct":    hm.MemPct,
 		"disk_pct":   hm.DiskPct,
 	}
-	return c.postJSON(ctx, c.deviceURL("/heartbeat"), c.headers(), body)
+	var out HeartbeatResult
+	if err := c.postJSONDecode(ctx, c.deviceURL("/heartbeat"), c.headers(), body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // DeviceCommand is one leased command from long-poll.
@@ -165,6 +175,10 @@ func (c *RelayClient) PostPermissionsResolved(ctx context.Context, requestIDs []
 }
 
 func (c *RelayClient) postJSON(ctx context.Context, url string, hdr http.Header, body any) error {
+	return c.postJSONDecode(ctx, url, hdr, body, nil)
+}
+
+func (c *RelayClient) postJSONDecode(ctx context.Context, url string, hdr http.Header, body any, out any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -186,7 +200,11 @@ func (c *RelayClient) postJSON(ctx context.Context, url string, hdr http.Header,
 	if resp.StatusCode >= 300 {
 		return readAPIError(resp)
 	}
-	return nil
+	if out == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func readAPIError(resp *http.Response) error {

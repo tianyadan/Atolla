@@ -312,6 +312,22 @@ export async function setAgentAutoApproveAll(
   )
 }
 
+/** Tell Mac this phone is viewing the agent (heartbeat) */
+export async function setViewerPresence(instanceId: string, agentId: string): Promise<void> {
+  await request<{ command: unknown }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/viewer`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+/** Tell Mac this phone left the agent chat */
+export async function clearViewerPresence(instanceId: string, agentId: string): Promise<void> {
+  await request<{ command: unknown }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/viewer`,
+    { method: 'DELETE' },
+  )
+}
+
 export type PublicMirrorPermission = {
   request_id: string
   agent_id: string

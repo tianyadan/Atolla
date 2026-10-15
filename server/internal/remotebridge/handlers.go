@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"atolla/server/internal/agent"
 )
 
 const defaultMessageSyncLimit = 200
@@ -36,18 +38,46 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 		if a.FolderID > 0 {
 			fn = folderName[a.FolderID]
 		}
+		// 与 PC /admin/agents/:id/context 同源：会话 meta + PercentOf / InferEstimated
+		usedTokens := int64(0)
+		windowTokens := a.ContextWindowTokens
+		ctxSource := ""
+		ctxUpdated := int64(0)
+		anomaly := ""
+		if a.ConversationID > 0 {
+			if meta, merr := ec.Store.GetConversationEngineMeta(ec.Context, a.ConversationID); merr == nil {
+				usedTokens = meta.UsedTokens
+				if meta.WindowTokens > 0 {
+					windowTokens = meta.WindowTokens
+				}
+				ctxSource = meta.ContextSource
+				ctxUpdated = meta.ContextUpdatedAt
+			}
+		}
+		estimated := agent.InferEstimated(a.Engine, ctxSource)
+		usedPercent := agent.PercentOf(usedTokens, windowTokens)
+		if usedPercent > 100 {
+			anomaly = fmt.Sprintf("current_context_exceeds_window: used=%d window=%d", usedTokens, windowTokens)
+		}
 		rows = append(rows, map[string]any{
 			"agent_id":     strconv.FormatInt(a.ID, 10),
 			"display_name": a.Name,
 			"engine":       a.Engine,
 			"status":       a.Status,
 			"payload": map[string]any{
-				"avatar_url":        a.AvatarURL,
-				"folder_id":         a.FolderID,
-				"folder_name":       fn,
-				"task_plan_enabled": a.TaskPlanEnabled,
-				"auto_review":       a.AutoReview,
-				"auto_approve_all":  a.AutoApproveAll,
+				"avatar_url":         a.AvatarURL,
+				"folder_id":          a.FolderID,
+				"folder_name":        fn,
+				"task_plan_enabled":  a.TaskPlanEnabled,
+				"auto_review":        a.AutoReview,
+				"auto_approve_all":   a.AutoApproveAll,
+				"used_tokens":        usedTokens,
+				"window_tokens":      windowTokens,
+				"used_percent":       usedPercent,
+				"estimated":          estimated,
+				"context_source":     ctxSource,
+				"context_updated_at": ctxUpdated,
+				"anomaly":            anomaly,
 			},
 		})
 	}

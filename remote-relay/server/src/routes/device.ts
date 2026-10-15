@@ -10,6 +10,7 @@ import {
   registerInstance,
   requireInstanceAuth,
 } from '../auth/instance.js'
+import { getMobileViewerAgentId } from '../viewer.js'
 import { routeParam } from '../params.js'
 import {
   DEFAULT_LONG_POLL_WAIT_MS,
@@ -161,7 +162,12 @@ export function createDeviceRouter(
       actions: parsed.data.actions,
       host: parsed.data.host ?? null,
     })
-    res.json({ ok: true })
+    // Return phone viewing presence so Mac PC admin can show mobile_viewing icon.
+    const viewing = getMobileViewerAgentId(db, auth.instanceId)
+    res.json({
+      ok: true,
+      mobile_viewing_agent_id: viewing,
+    })
   })
 
   router.get(
