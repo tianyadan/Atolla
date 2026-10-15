@@ -2,6 +2,17 @@
 
 本文件仅记录 **remote-relay**（移动端 + API 中继），与 Atolla 本体管理台版本无关。
 
+## v0.0.9 — 2026-10-15
+
+- agents 快照全量替换：未出现在本批的 agent 从镜像删除；允许空数组清空
+- 移动设备会话列表隐藏已踢会话，并按 label+UA+IP 去重；同设备再解锁会吊销旧会话
+
+## v0.0.8 — 2026-10-15
+
+- 实例解锁改为服务端设备会话（7 天）：unlock JWT 绑定 `sid`，可踢下线 / 注销本机
+- unlock token 改存 localStorage（杀后台不再丢）；实例页 30s 心跳；Hub「注销本机解锁」
+- Device API：`GET/DELETE /api/device/mobile-sessions` 供 Mac/管理台列表与踢人
+
 ## v0.0.7 — 2026-10-15
 
 - 实例页主题开关改为全局浅色/深色（localStorage 持久化，全站 CSS 变量生效）

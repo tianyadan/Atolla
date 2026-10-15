@@ -26,6 +26,7 @@ import { MarkdownBody } from '../components/MarkdownBody'
 import { Modal } from '../components/Modal'
 import { PageShell } from '../components/PageShell'
 import { byLabel, parseCommandMessage } from '../utils/commandMessage'
+import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import { loadChatDraft, saveChatDraft } from '../utils/draftCache'
 import {
   agentAutoApproveAll,
@@ -103,6 +104,7 @@ function mergeServerMessages(prev: LocalBubble[], page: PublicMirrorMessage[]): 
 /** Chat with sticky agent header, bottom-anchored thread, older-on-scroll-up */
 export function ChatHistoryPage() {
   const { instanceId = '', agentId = '' } = useParams()
+  useUnlockHeartbeat(instanceId || undefined)
   const navigate = useNavigate()
   const [agent, setAgent] = useState<PublicMirrorAgent | null>(null)
   const [messages, setMessages] = useState<LocalBubble[]>([])

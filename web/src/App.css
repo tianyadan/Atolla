@@ -1676,6 +1676,63 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
 .rr-reg-tag.unset { color: #8a8a8a; }
 .rr-err-text { color: #fca5a5; word-break: break-all; }
 
+.rr-mobile-card .version-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.rr-mobile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.rr-mobile-device {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 14px 14px 12px;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #171717 0%, #111 100%);
+}
+.rr-mobile-device.online { border-color: color-mix(in srgb, #22c55e 35%, #2a2a2a); }
+.rr-mobile-device.revoked { opacity: 0.55; }
+.rr-mobile-device-art { color: #a3a3a3; flex: none; padding-top: 2px; }
+.rr-mobile-device.online .rr-mobile-device-art { color: #d4d4d4; }
+.rr-phone-led.on { filter: drop-shadow(0 0 4px rgba(34, 197, 94, 0.7)); }
+.rr-mobile-device-body { flex: 1; min-width: 0; }
+.rr-mobile-device-title {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  font-size: 14px;
+}
+.rr-mobile-device-state { font-size: 12px; color: #8a8a8a; }
+.rr-mobile-meta {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 4px; font-size: 12px; color: #a3a3a3;
+}
+.rr-mobile-meta li {
+  display: grid; grid-template-columns: 4.5rem 1fr; gap: 6px; align-items: baseline;
+}
+.rr-mobile-meta li > span:first-child { color: #737373; }
+.rr-mobile-meta code { font-size: 11px; color: #e5e5e5; }
+.rr-mobile-ua span:last-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rr-kick-btn { margin-top: 10px; font-size: 12px; }
+
+.rr-host-suggest { position: relative; width: 100%; }
+.rr-host-suggest input { width: 100%; }
+.rr-host-suggest-menu {
+  position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px);
+  margin: 0; padding: 4px; list-style: none;
+  max-height: 180px; overflow: auto;
+  border: 1px solid #333; border-radius: 8px;
+  background: #141414; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+.rr-host-suggest-item {
+  display: block; width: 100%; text-align: left;
+  border: 0; background: transparent; color: #e5e5e5;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.rr-host-suggest-item:hover { background: #222; }
+
 .dh-card-actions { margin-top: auto; width: 100%; display: flex; align-items: center; gap: 4px; padding-top: 8px; }
 .dh-recv-btn { flex: 1; border: 1px solid #2a2a2a; background: #141414; color: #dddddd; border-radius: 6px; padding: 4px 6px; font-size: 11px; cursor: pointer; }
 .dh-recv-btn.on { border-color: #ca8a04; color: #facc15; }

@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express'
 import type { RelayDatabase } from '../db.js'
 import type { LoginRateLimiter } from './rateLimit.js'
 import { resolveClientIp } from './site.js'
+import { revokeAllDeviceSessions } from './deviceSession.js'
 
 const BCRYPT_ROUNDS = 12
 /** Lower cost on open register path to limit event-loop DoS (verify uses stored hash rounds) */
@@ -399,6 +400,8 @@ export function revokeInstancePassword(
     )
     .run(now, instanceId)
   if (result.changes === 0) return false
+
+  revokeAllDeviceSessions(db, instanceId, now)
 
   db.prepare(
     `INSERT INTO audit_logs (event_type, instance_id, meta_json, created_at)

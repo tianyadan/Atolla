@@ -1,8 +1,20 @@
 /** Site JWT storage key */
 export const TOKEN_KEY = 'relay_site_token'
 
-/** Per-instance unlock tokens (session, 24h server TTL) */
+/** Per-instance unlock tokens (persisted; server device session, 7d TTL) */
 const UNLOCK_KEY_PREFIX = 'relay_unlock:'
+
+/** Guess a short device label from User-Agent for unlock session */
+export function guessDeviceLabel(): string {
+  if (typeof navigator === 'undefined') return 'Mobile'
+  const ua = navigator.userAgent || ''
+  if (/iPhone/i.test(ua)) return 'iPhone'
+  if (/iPad/i.test(ua)) return 'iPad'
+  if (/Android/i.test(ua)) return 'Android'
+  if (/Macintosh|Mac OS/i.test(ua)) return 'Mac'
+  if (/Windows/i.test(ua)) return 'Windows'
+  return 'Mobile'
+}
 
 export type InstanceHostMeta = {
   os?: string
@@ -74,32 +86,67 @@ export function clearToken(): void {
   clearAllUnlockTokens()
 }
 
-/** Persist unlock token for one instance */
+/** Persist unlock token for one instance (localStorage survives iOS tab discard) */
 export function setUnlockToken(instanceId: string, token: string): void {
-  sessionStorage.setItem(UNLOCK_KEY_PREFIX + instanceId, token)
+  const key = UNLOCK_KEY_PREFIX + instanceId
+  localStorage.setItem(key, token)
+  try {
+    sessionStorage.removeItem(key)
+  } catch {
+    /* ignore */
+  }
 }
 
-/** Read unlock token for instance */
+/** Read unlock token for instance (migrates legacy sessionStorage once) */
 export function getUnlockToken(instanceId: string): string | null {
-  return sessionStorage.getItem(UNLOCK_KEY_PREFIX + instanceId)
+  const key = UNLOCK_KEY_PREFIX + instanceId
+  const fromLocal = localStorage.getItem(key)
+  if (fromLocal) return fromLocal
+  try {
+    const legacy = sessionStorage.getItem(key)
+    if (legacy) {
+      localStorage.setItem(key, legacy)
+      sessionStorage.removeItem(key)
+      return legacy
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
 }
 
 /** Drop unlock for one instance (e.g. after 注销) */
 export function clearUnlockToken(instanceId: string): void {
-  sessionStorage.removeItem(UNLOCK_KEY_PREFIX + instanceId)
+  const key = UNLOCK_KEY_PREFIX + instanceId
+  localStorage.removeItem(key)
+  try {
+    sessionStorage.removeItem(key)
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Clear all unlock tokens */
 export function clearAllUnlockTokens(): void {
   const keys: string[] = []
-  for (let i = 0; i < sessionStorage.length; i++) {
-    const k = sessionStorage.key(i)
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)
     if (k?.startsWith(UNLOCK_KEY_PREFIX)) keys.push(k)
   }
-  keys.forEach((k) => sessionStorage.removeItem(k))
+  keys.forEach((k) => localStorage.removeItem(k))
+  try {
+    const sk: string[] = []
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)
+      if (k?.startsWith(UNLOCK_KEY_PREFIX)) sk.push(k)
+    }
+    sk.forEach((k) => sessionStorage.removeItem(k))
+  } catch {
+    /* ignore */
+  }
 }
 
-/** Whether this instance was unlocked in this browser session */
+/** Whether this instance has a stored unlock token */
 export function hasUnlockToken(instanceId: string): boolean {
   return !!getUnlockToken(instanceId)
 }
@@ -180,20 +227,41 @@ export async function revokeInstancePassword(instanceId: string): Promise<void> 
   clearUnlockToken(instanceId)
 }
 
-/** 进入实例：校验 6 位密码，拿到 unlock_token */
+/** 进入实例：校验 6 位密码，拿到 unlock_token（服务端设备会话） */
 export async function unlockInstance(
   instanceId: string,
   password: string,
-): Promise<{ unlock_token: string; expires_in: number }> {
-  const data = await request<{ unlock_token: string; expires_in: number }>(
-    `/api/instances/${encodeURIComponent(instanceId)}/unlock`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ password }),
-    },
-  )
+): Promise<{ unlock_token: string; expires_in: number; session_id: string }> {
+  const data = await request<{
+    unlock_token: string
+    expires_in: number
+    session_id: string
+  }>(`/api/instances/${encodeURIComponent(instanceId)}/unlock`, {
+    method: 'POST',
+    body: JSON.stringify({ password, device_label: guessDeviceLabel() }),
+  })
   setUnlockToken(instanceId, data.unlock_token)
   return data
+}
+
+/** Keep device session online while browsing an instance */
+export async function heartbeatUnlockSession(instanceId: string): Promise<void> {
+  await request<{ ok: boolean }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/sessions/heartbeat`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
+/** Revoke this device unlock on server and clear local token */
+export async function logoutUnlockSession(instanceId: string): Promise<void> {
+  try {
+    await request<{ ok: boolean }>(
+      `/api/instances/${encodeURIComponent(instanceId)}/sessions/me`,
+      { method: 'DELETE' },
+    )
+  } finally {
+    clearUnlockToken(instanceId)
+  }
 }
 
 /** Mirror agents for an instance */

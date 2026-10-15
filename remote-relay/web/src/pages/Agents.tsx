@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { clearToken, fetchAgents, type PublicMirrorAgent } from '../api'
 import { PageShell } from '../components/PageShell'
+import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import {
   agentAvatarUrl,
   agentBusy,
@@ -18,6 +19,7 @@ const SEARCH_DEBOUNCE_MS = 300
 export function AgentsPage() {
   const { instanceId = '' } = useParams()
   const navigate = useNavigate()
+  useUnlockHeartbeat(instanceId || undefined)
   const [agents, setAgents] = useState<PublicMirrorAgent[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)

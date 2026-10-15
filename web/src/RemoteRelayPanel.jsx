@@ -2,6 +2,32 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const API = '/api'
 const PW_SESSION_KEY = 'atolla_relay_instance_password_once'
+const DEPLOY_HOST_HISTORY_KEY = 'atolla_relay_deploy_hosts'
+const DEPLOY_HOST_HISTORY_MAX = 12
+
+/** 读取部署/升级过的主机历史（新到旧） */
+function loadDeployHostHistory() {
+  try {
+    const raw = localStorage.getItem(DEPLOY_HOST_HISTORY_KEY)
+    const arr = JSON.parse(raw || '[]')
+    return Array.isArray(arr) ? arr.map((x) => String(x || '').trim()).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+/** 成功部署/升级后记住 SSH 主机，供 datalist 联想 */
+function rememberDeployHost(host) {
+  const h = String(host || '').trim()
+  if (!h) return loadDeployHostHistory()
+  const next = [h, ...loadDeployHostHistory().filter((x) => x !== h)].slice(0, DEPLOY_HOST_HISTORY_MAX)
+  try {
+    localStorage.setItem(DEPLOY_HOST_HISTORY_KEY, JSON.stringify(next))
+  } catch {
+    /* ignore */
+  }
+  return next
+}
 
 /** Bash 单引号包裹（等价于常见 shell 参数转义，避免空格/元字符破坏命令） */
 function shellSingleQuote(value) {
@@ -27,6 +53,34 @@ function EyeIcon({ open }) {
       <circle cx="12" cy="12.5" r="3" />
     </svg>
   )
+}
+
+/** 简易 iPhone 线稿（设备卡片装饰） */
+function IPhoneSvg({ online }) {
+  return (
+    <svg width="36" height="56" viewBox="0 0 36 56" fill="none" aria-hidden className="rr-phone-svg">
+      <rect x="2" y="1" width="32" height="54" rx="6" stroke="currentColor" strokeWidth="1.5" opacity="0.85" />
+      <rect x="6" y="8" width="24" height="36" rx="1.5" stroke="currentColor" strokeWidth="1.2" opacity="0.55" />
+      <circle cx="18" cy="49" r="2.2" stroke="currentColor" strokeWidth="1.2" opacity="0.7" />
+      <circle cx="28" cy="6" r="2.5" fill={online ? '#22c55e' : '#ef4444'} className={online ? 'rr-phone-led on' : 'rr-phone-led off'} />
+    </svg>
+  )
+}
+
+/** 相对时间（入参为 epoch ms） */
+function formatRelative(ms) {
+  if (!ms) return '—'
+  const n = Number(ms)
+  const d = Date.now() - n
+  if (d < 5_000) return '刚刚'
+  if (d < 60_000) return `${Math.floor(d / 1000)} 秒前`
+  if (d < 3600_000) return `${Math.floor(d / 60_000)} 分钟前`
+  if (d < 86400_000) return `${Math.floor(d / 3600_000)} 小时前`
+  try {
+    return new Date(n).toLocaleString()
+  } catch {
+    return String(ms)
+  }
 }
 
 /** 桥接运行态：绿呼吸 / 灰未连接 / 红错误 */
@@ -70,8 +124,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
   const [passwordVisible, setPasswordVisible] = useState(false)
 
   const [status, setStatus] = useState(null)
+  const [mobileSessions, setMobileSessions] = useState([])
+  const [mobileErr, setMobileErr] = useState('')
+  const [kickId, setKickId] = useState('')
 
   const [deployHost, setDeployHost] = useState('')
+  const [deployHostHistory, setDeployHostHistory] = useState(() => loadDeployHostHistory())
+  const [deployHostSuggestOpen, setDeployHostSuggestOpen] = useState(false)
   const [deployUser, setDeployUser] = useState('root')
   const [deploySshPort, setDeploySshPort] = useState(22)
   const [deployRemoteDir, setDeployRemoteDir] = useState('/opt/atolla-remote-relay')
@@ -136,9 +195,32 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
     if (active) load()
   }, [active, load])
 
-  // 运行中时定期刷新状态（注册标记依赖心跳成功）
+  /** 拉取移动端解锁会话列表 */
+  const loadMobileSessions = useCallback(async () => {
+    setMobileErr('')
+    try {
+      const res = await fetch(`${API}/admin/remote-relay/mobile-sessions`, { headers: authHeaders() })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setMobileSessions([])
+        setMobileErr(d.error || `加载失败(${res.status})`)
+        return
+      }
+      setMobileSessions(Array.isArray(d.sessions) ? d.sessions : [])
+    } catch (e) {
+      setMobileSessions([])
+      setMobileErr(String(e.message || e))
+    }
+  }, [authHeaders, onUnauthorized])
+
+  // 运行中时定期刷新状态（注册标记依赖心跳成功）+ 移动设备
   useEffect(() => {
     if (!active) return undefined
+    void loadMobileSessions()
     const id = window.setInterval(() => {
       void (async () => {
         try {
@@ -151,10 +233,37 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         } catch {
           /* ignore poll errors */
         }
+        void loadMobileSessions()
       })()
-    }, 5000)
+    }, 10000)
     return () => window.clearInterval(id)
-  }, [active, authHeaders, onUnauthorized])
+  }, [active, authHeaders, onUnauthorized, loadMobileSessions])
+
+  /** PC 踢下线某一移动解锁会话 */
+  async function kickMobileSession(sessionId) {
+    if (!sessionId || kickId) return
+    if (!window.confirm('踢下线后该手机需重新输入 6 位实例密码，确定？')) return
+    setKickId(sessionId)
+    setErr('')
+    try {
+      const res = await fetch(
+        `${API}/admin/remote-relay/mobile-sessions/${encodeURIComponent(sessionId)}`,
+        { method: 'DELETE', headers: authHeaders() },
+      )
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `踢下线失败(${res.status})`)
+      setMsg('已踢下线该移动设备')
+      await loadMobileSessions()
+    } catch (e) {
+      setErr(String(e.message || e))
+    } finally {
+      setKickId('')
+    }
+  }
 
   /** 仅保存本机连接参数并重载桥接（不会向中继注册密码） */
   async function saveConfig(e) {
@@ -407,6 +516,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       const result = await streamDeployJob(d.job_id)
       setJobStatus(result)
       setMsg(result === 'ok' ? '部署完成' : '部署失败，见下方日志')
+      if (result === 'ok') setDeployHostHistory(rememberDeployHost(host))
     } catch (e) {
       if (e?.name === 'AbortError') return
       setJobStatus('error')
@@ -453,6 +563,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       const result = await streamDeployJob(d.job_id)
       setJobStatus(result)
       setMsg(result === 'ok' ? '升级完成' : '升级失败，见下方日志')
+      if (result === 'ok') setDeployHostHistory(rememberDeployHost(host))
     } catch (e) {
       if (e?.name === 'AbortError') return
       setJobStatus('error')
@@ -462,6 +573,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       setJobRunning(false)
     }
   }
+
+  /** 主机输入联想：历史 IP/域名过滤 */
+  const deployHostSuggestions = useMemo(() => {
+    const q = deployHost.trim().toLowerCase()
+    if (!q) return deployHostHistory
+    return deployHostHistory.filter((h) => h.toLowerCase().includes(q))
+  }, [deployHost, deployHostHistory])
 
   function formatTime(iso) {
     if (!iso) return '—'
@@ -594,6 +712,71 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </ul>
       </article>
 
+      <article className="version-card rr-mobile-card">
+        <div className="version-head">
+          <span className="version-tag">移动端访问</span>
+          <button type="button" className="ghost" disabled={busy || !!kickId} onClick={() => void loadMobileSessions()}>
+            刷新
+          </button>
+        </div>
+        <p className="empty-hint">
+          绿点 = 约 90 秒内有心跳（页面打开中）；红点 = 离线但解锁会话可能仍有效（7 天内免再输密码）。踢下线立即作废。
+        </p>
+        {mobileErr ? <pre className="error" style={{ marginTop: 8 }}>{mobileErr}</pre> : null}
+        {!mobileErr && mobileSessions.length === 0 ? (
+          <p className="empty-hint" style={{ marginTop: 12 }}>暂无移动设备会话</p>
+        ) : null}
+        <div className="rr-mobile-grid">
+          {mobileSessions.map((s) => {
+            const online = !!s.online && !s.revoked
+            return (
+              <div key={s.session_id} className={`rr-mobile-device ${online ? 'online' : 'offline'}${s.revoked ? ' revoked' : ''}`}>
+                <div className="rr-mobile-device-art">
+                  <IPhoneSvg online={online} />
+                </div>
+                <div className="rr-mobile-device-body">
+                  <div className="rr-mobile-device-title">
+                    <strong>{s.device_label || 'Mobile'}</strong>
+                    <span className={`rr-dot ${online ? 'running' : 'error'}`} title={online ? '在线' : '离线'} />
+                    <span className="rr-mobile-device-state">{online ? '在线' : s.revoked ? '已注销' : '离线'}</span>
+                  </div>
+                  <ul className="rr-mobile-meta">
+                    <li>
+                      <span>IP</span>
+                      <code>{s.client_ip || '—'}</code>
+                    </li>
+                    <li>
+                      <span>最近活跃</span>
+                      <span>{formatRelative(s.last_seen_at)}</span>
+                    </li>
+                    <li>
+                      <span>过期</span>
+                      <span>{s.expires_at ? new Date(s.expires_at).toLocaleString() : '—'}</span>
+                    </li>
+                    {s.user_agent ? (
+                      <li className="rr-mobile-ua">
+                        <span>UA</span>
+                        <span title={s.user_agent}>{String(s.user_agent).slice(0, 72)}{String(s.user_agent).length > 72 ? '…' : ''}</span>
+                      </li>
+                    ) : null}
+                  </ul>
+                  {!s.revoked ? (
+                    <button
+                      type="button"
+                      className="ghost rr-kick-btn"
+                      disabled={!!kickId}
+                      onClick={() => void kickMobileSession(s.session_id)}
+                    >
+                      {kickId === s.session_id ? '处理中…' : '踢下线'}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </article>
+
       <article className="version-card">
         <div className="version-head">
           <span className="version-tag">服务器部署</span>
@@ -605,7 +788,43 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         <div className="tm-form-row" style={{ maxWidth: 640 }}>
           <label>
             <span>SSH 主机</span>
-            <input type="text" placeholder="1.2.3.4" value={deployHost} onChange={(e) => setDeployHost(e.target.value)} disabled={jobRunning} />
+            <div className="rr-host-suggest">
+              <input
+                type="text"
+                placeholder="1.2.3.4（支持历史联想）"
+                value={deployHost}
+                list="rr-deploy-host-list"
+                autoComplete="off"
+                disabled={jobRunning}
+                onChange={(e) => setDeployHost(e.target.value)}
+                onFocus={() => setDeployHostSuggestOpen(true)}
+                onBlur={() => window.setTimeout(() => setDeployHostSuggestOpen(false), 150)}
+              />
+              <datalist id="rr-deploy-host-list">
+                {deployHostHistory.map((h) => (
+                  <option key={h} value={h} />
+                ))}
+              </datalist>
+              {deployHostSuggestOpen && deployHostSuggestions.length > 0 ? (
+                <ul className="rr-host-suggest-menu" role="listbox">
+                  {deployHostSuggestions.map((h) => (
+                    <li key={h}>
+                      <button
+                        type="button"
+                        className="rr-host-suggest-item"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          setDeployHost(h)
+                          setDeployHostSuggestOpen(false)
+                        }}
+                      >
+                        {h}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
           </label>
           <label>
             <span>SSH 用户</span>

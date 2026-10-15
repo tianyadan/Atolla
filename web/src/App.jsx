@@ -13,6 +13,7 @@ import DigitalHumanCards from './DigitalHumanCards.jsx'
 import VisitorAskAudit from './VisitorAskAudit.jsx'
 import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
 import RemoteRelayPanel from './RemoteRelayPanel.jsx'
+import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -35,6 +36,7 @@ const ADMIN_MENUS = [
   { id: 'memos', label: '备忘录' },
   { id: 'analytics', label: '数据分析' },
   { id: 'remote-relay', label: '远程中继' },
+  { id: 'network-allowlist', label: '网络白名单' },
   { id: 'manual', label: '产品手册' },
   { id: 'changelog', label: '版本' },
 ]
@@ -949,6 +951,13 @@ export default function App() {
                 active={adminMenu === 'remote-relay'}
               />
             )}
+            {adminMenu === 'network-allowlist' && (
+              <NetworkPolicyPanel
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'network-allowlist'}
+              />
+            )}
             <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
               <WorkflowPanel
                 authHeaders={authHeaders}
@@ -985,7 +994,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'stats', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'stats', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'network-allowlist', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>

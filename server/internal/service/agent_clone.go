@@ -200,11 +200,17 @@ func (s *Service) RetryCloneInit(ctx context.Context, cloneID int64) (*store.Man
 	return s.Store.GetManagedAgent(ctx, cloneID)
 }
 
-// DeleteManaged 解聘：取消初始化任务后删库。
+// DeleteManaged 解聘：取消初始化任务后删库，并刷新远程中继 agents 镜像。
 func (s *Service) DeleteManaged(ctx context.Context, id int64) error {
 	s.cancelCloneJob(id)
 	s.StopManaged(id)
-	return s.Store.DeleteManagedAgent(ctx, id)
+	if err := s.Store.DeleteManagedAgent(ctx, id); err != nil {
+		return err
+	}
+	if s.RemoteBridge != nil {
+		go s.RemoteBridge.PushAgentsSnapshotNow()
+	}
+	return nil
 }
 
 func (s *Service) startCloneInit(cloneID, srcID int64) {

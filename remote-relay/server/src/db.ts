@@ -128,6 +128,23 @@ function applySchema(db: RelayDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created
       ON audit_logs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS instance_device_sessions (
+      id TEXT PRIMARY KEY,
+      instance_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      device_label TEXT NOT NULL DEFAULT 'Mobile',
+      user_agent TEXT NOT NULL DEFAULT '',
+      client_ip TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      revoked_at INTEGER,
+      FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_device_sessions_instance
+      ON instance_device_sessions(instance_id, revoked_at, expires_at);
   `)
 
   // Optional host metrics JSON from Mac heartbeat (os/ip/uptime/cpu/mem/disk).

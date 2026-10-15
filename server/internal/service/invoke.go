@@ -72,6 +72,8 @@ func (s *Service) releaseAgentRun(agentID int64, slot *managedRun) {
 // permConvID/policyAgentID：授权路由（委托时弹窗挂调用方，策略取被调方）。
 // noHook=true 用于任务拆分等轻量调用,避免再次弹授权。
 func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink, atts []ChatAttachment) (string, int, error) {
+	// Ensure local CLI sandbox allowlists track DB before engine starts.
+	_ = s.SyncNetworkAllowlistToHome(ctx)
 	bin := a.BinPath
 	if bin == "" {
 		bin = store.DefaultBin(a.Engine)

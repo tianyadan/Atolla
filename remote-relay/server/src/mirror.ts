@@ -91,7 +91,7 @@ export type PublicMirrorPermission = {
   synced_at: number
 }
 
-/** Upsert agent rows from a device snapshot batch */
+/** Upsert agent rows from a device snapshot batch, then prune agents missing from this full sync. */
 export function upsertAgentsMirror(
   db: RelayDatabase,
   instanceId: string,
@@ -110,10 +110,14 @@ export function upsertAgentsMirror(
        synced_at = excluded.synced_at`,
   )
   let count = 0
+  const keepIds: string[] = []
   for (const a of agents) {
+    const id = String(a.agent_id || '').trim()
+    if (!id) continue
+    keepIds.push(id)
     stmt.run(
       instanceId,
-      a.agent_id,
+      id,
       a.display_name ?? null,
       a.engine ?? null,
       a.status ?? null,
@@ -121,6 +125,15 @@ export function upsertAgentsMirror(
       syncedAt,
     )
     count += 1
+  }
+  // Full-replace semantics: PC-deleted agents must disappear on mobile.
+  if (keepIds.length === 0) {
+    db.prepare(`DELETE FROM agents_mirror WHERE instance_id = ?`).run(instanceId)
+  } else {
+    const placeholders = keepIds.map(() => '?').join(',')
+    db.prepare(
+      `DELETE FROM agents_mirror WHERE instance_id = ? AND agent_id NOT IN (${placeholders})`,
+    ).run(instanceId, ...keepIds)
   }
   return count
 }

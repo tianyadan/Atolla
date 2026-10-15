@@ -12,6 +12,7 @@ import {
 } from '../auth/instance.js'
 import { getMobileViewerAgentId } from '../viewer.js'
 import { routeParam } from '../params.js'
+import { listDeviceSessions, revokeDeviceSession } from '../auth/deviceSession.js'
 import {
   DEFAULT_LONG_POLL_WAIT_MS,
   longPollCommands,
@@ -65,7 +66,8 @@ const mirrorAgentItemSchema = z.object({
 })
 
 const agentsSnapshotBodySchema = z.object({
-  agents: z.array(mirrorAgentItemSchema).min(1),
+  // Empty array clears mirror (all agents deleted on Mac).
+  agents: z.array(mirrorAgentItemSchema),
 })
 
 const mirrorTaskItemSchema = z.object({
@@ -316,6 +318,36 @@ export function createDeviceRouter(
       )
       if (!outcome.ok) {
         res.status(outcome.status).json({ error: outcome.error })
+        return
+      }
+      res.json({ ok: true })
+    },
+  )
+
+  /** List mobile unlock sessions for this Mac instance (PC admin via bridge) */
+  router.get(
+    '/mobile-sessions',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      res.json({ sessions: listDeviceSessions(db, auth.instanceId) })
+    },
+  )
+
+  /** Kick one mobile unlock session */
+  router.delete(
+    '/mobile-sessions/:sessionId',
+    requireInstanceAuth(db, instanceRateLimiter),
+    (req: Request, res: Response) => {
+      const auth = (req as InstanceAuthedRequest).instanceAuth
+      const sessionId = routeParam(req.params.sessionId)
+      if (!sessionId) {
+        res.status(400).json({ error: 'Invalid session id' })
+        return
+      }
+      const ok = revokeDeviceSession(db, sessionId, auth.instanceId)
+      if (!ok) {
+        res.status(404).json({ error: 'Session not found' })
         return
       }
       res.json({ ok: true })

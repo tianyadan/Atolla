@@ -72,6 +72,39 @@ afterEach(() => {
 })
 
 describe('mirror snapshot ingest and site read', () => {
+  it('prunes agents removed from a later full snapshot', async () => {
+    await register()
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+
+    expect(
+      (
+        await devicePost('/api/device/snapshot/agents', {
+          agents: [
+            { agent_id: 'a1', display_name: 'Keep', engine: 'claude', status: 'idle' },
+            { agent_id: 'a2', display_name: 'Gone', engine: 'claude', status: 'idle' },
+          ],
+        })
+      ).status,
+    ).toBe(200)
+
+    expect(
+      (
+        await devicePost('/api/device/snapshot/agents', {
+          agents: [{ agent_id: 'a1', display_name: 'Keep', engine: 'claude', status: 'idle' }],
+        })
+      ).status,
+    ).toBe(200)
+
+    const listed = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(listed.status).toBe(200)
+    const ids = (listed.body.agents || []).map((a: { agent_id: string }) => a.agent_id)
+    expect(ids).toEqual(['a1'])
+  })
+
   it('upserts agents/tasks/messages and reads them with pagination', async () => {
     await register()
     const token = await siteToken()
