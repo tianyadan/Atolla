@@ -33,7 +33,7 @@ function parseSSE(buf) {
 /**
  * 首页前台对话：Kimi 风黑白布局 + 访客登记 + 唯一前台助理。
  */
-export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
+export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin = false }) {
   const [receptionist, setReceptionist] = useState(null) // null=loading
   const [visitor, setVisitor] = useState({ registered: false, name: '' })
   const [registerOpen, setRegisterOpen] = useState(false)
@@ -408,7 +408,19 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
           {authToken ? (
             <button type="button" className="ph-ghost" onClick={onOpenAdmin}>管理台</button>
           ) : (
-            <button type="button" className="ph-ghost" onClick={onLogin}>登录</button>
+            <span className="ph-login-wrap">
+              <button
+                type="button"
+                className={`ph-ghost${guideLogin ? ' ph-login-guide' : ''}`}
+                onClick={onLogin}
+                aria-describedby={guideLogin ? 'login-guide-tip' : undefined}
+              >
+                登录
+              </button>
+              {guideLogin && (
+                <span id="login-guide-tip" className="ph-login-tip" role="status">点这里登录。首次需要注册管理员账号。</span>
+              )}
+            </span>
           )}
         </div>
       </header>

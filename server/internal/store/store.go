@@ -297,6 +297,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureNotifyPrefsSchema(ctx); err != nil {
 		return err
 	}
+	// 21) 首位管理员注册账号
+	if err := s.EnsureAdminAccountSchema(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import SettingsFold from './SettingsFold.jsx'
 
 const API = '/api'
 
@@ -7,6 +8,7 @@ export default function NotifySettings({ authHeaders, onUnauthorized, active }) 
   const [prefs, setPrefs] = useState({ task_done: true, permission: true })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [open, setOpen] = useState(true)
 
   async function load() {
     setErr('')
@@ -65,17 +67,12 @@ export default function NotifySettings({ authHeaders, onUnauthorized, active }) 
   }
 
   return (
-    <section className="list rr-panel">
-      <div className="lm-shelf-head">
-        <div>
-          <h2>设置</h2>
-          <p className="empty-hint">离开数字人对话后，Bark 是否推送到手机。</p>
-        </div>
-      </div>
-      <article className="version-card settings-notify-card">
-        <div className="version-head">
-          <span className="version-tag">通知</span>
-        </div>
+    <SettingsFold
+        title="通知"
+        desc="离开数字人对话后，Bark 是否推送到手机"
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      >
         <div className="ma-capsule-row">
           <div className="ma-capsule-text">
             <span className="ma-capsule-label">完成通知</span>
@@ -107,7 +104,6 @@ export default function NotifySettings({ authHeaders, onUnauthorized, active }) 
           </label>
         </div>
         {err && <pre className="error" style={{ marginTop: 12 }}>{err}</pre>}
-      </article>
-    </section>
+    </SettingsFold>
   )
 }

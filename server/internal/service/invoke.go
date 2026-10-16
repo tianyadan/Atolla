@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"atolla/server/internal/agent"
+	"atolla/server/internal/permission"
 	"atolla/server/internal/store"
 )
 
@@ -187,7 +189,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				"decision": "allow", "decided_by": "codex",
 				"risk": "low", "meaning": "Codex 已执行命令（未保证执行前拦截）",
 				"pre_exec_intercept": false,
-				"output": ev.Output, "exit_code": ev.ExitCode,
+				"output":             ev.Output, "exit_code": ev.ExitCode,
 			})
 			if hookConv > 0 {
 				s.recordCommand(context.WithoutCancel(ctx), hookConv, "Bash", summary, "allow", "codex", "low", "Codex 已执行命令（未保证执行前拦截）", strings.TrimSpace(ev.Output))
@@ -206,7 +208,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				history = FormatResumeHistory(turns, engineQ)
 			}
 			emitAsk(onEvent, map[string]any{
-				"type": "system_note",
+				"type":    "system_note",
 				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
 			})
 			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact)
@@ -217,8 +219,86 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
 			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
-		return agent.GenericAskMeta(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume)
+		ask := agent.GenericAskMeta
+		if s.workspaceTrusted(dir) {
+			ask = agent.GenericAskMetaTrusted
+		}
+		out, ms, err := ask(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume)
+		if err == nil || !agent.IsCursorWorkspaceTrustRequired(err.Error()) || s.workspaceTrusted(dir) {
+			return out, ms, err
+		}
+		// 新机器上 Cursor 会拦住未信任目录。先弹授权卡，用户同意后再带 --trust 重试。
+		ok, reason := s.confirmCursorWorkspaceTrust(ctx, hookConv, dir)
+		if !ok {
+			if reason == "" {
+				reason = "已拒绝"
+			}
+			return "", ms, fmt.Errorf("工作区信任未确认（%s）: %s", reason, dir)
+		}
+		s.rememberWorkspaceTrust(dir)
+		return agent.GenericAskMetaTrusted(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume)
 	}
+}
+
+// workspaceTrusted 该目录是否已经过用户确认。
+func (s *Service) workspaceTrusted(dir string) bool {
+	key := workspaceTrustKey(dir)
+	if key == "" || s == nil {
+		return false
+	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	_, ok := s.trustedDirs[key]
+	return ok
+}
+
+// rememberWorkspaceTrust 记下用户已同意信任的目录。
+func (s *Service) rememberWorkspaceTrust(dir string) {
+	key := workspaceTrustKey(dir)
+	if key == "" || s == nil {
+		return
+	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	if s.trustedDirs == nil {
+		s.trustedDirs = map[string]struct{}{}
+	}
+	s.trustedDirs[key] = struct{}{}
+}
+
+func workspaceTrustKey(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Clean(dir)
+}
+
+// confirmCursorWorkspaceTrust 挂起一张工作区信任授权卡，等待用户点同意或拒绝。
+func (s *Service) confirmCursorWorkspaceTrust(ctx context.Context, convID int64, dir string) (bool, string) {
+	if s == nil || s.Perms == nil {
+		return false, "授权中枢不可用"
+	}
+	owner := ""
+	agentID := int64(0)
+	if convID > 0 && s.Store != nil {
+		owner, _ = s.Store.ConversationOwner(ctx, convID)
+		agentID, _ = s.Store.ConversationAgentID(ctx, convID)
+	}
+	note := "Cursor 需要先确认你是否信任该工作区。同意后会以 --trust 启动 Agent；拒绝则不会执行。"
+	input := map[string]interface{}{"path": dir, "flag": "--trust"}
+	req := s.Perms.Register("WorkspaceTrust", input, dir, note, convID, owner)
+	req.Meaning = "信任该目录后，Cursor Agent 可以在其中读取文件并执行代码"
+	req.Risk = "high"
+	s.notifyPermissionPending(agentID, req.ID)
+	out := s.Perms.Wait(ctx, req.ID)
+	if out.Behavior == permission.Allow {
+		return true, ""
+	}
+	if strings.TrimSpace(out.Reason) == "" {
+		return false, "已拒绝"
+	}
+	return false, out.Reason
 }
 
 // invokeOne 委托单个同事(不写入其对话正文,只返回结果)。

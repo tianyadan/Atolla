@@ -23,6 +23,15 @@ func testAuthHandler() *Handler {
 	return New(&service.Service{Cfg: cfg})
 }
 
+func TestValidateAdminSignup(t *testing.T) {
+	if validateAdminSignup("ab", "12345678", "12345678") != "" {
+		t.Fatal("valid signup rejected")
+	}
+	if validateAdminSignup("ab", "12345678", "12345679") == "" {
+		t.Fatal("mismatch should fail")
+	}
+}
+
 func TestLoginWrongPassword(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := testAuthHandler()
