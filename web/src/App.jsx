@@ -15,9 +15,12 @@ import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
 import RemoteRelayPanel from './RemoteRelayPanel.jsx'
 import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
 import NotifySettings from './NotifySettings.jsx'
+import EngineOnboarding from './EngineOnboarding.jsx'
+import EngineSettings from './EngineSettings.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
+const ONBOARD_KEY = 'atolla_onboard_v1'
 const CHANGELOG_PAGE_SIZE = 5
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -55,8 +58,12 @@ export default function App() {
   const [openHire, setOpenHire] = useState(false)
   const [jumpWorkflowRunId, setJumpWorkflowRunId] = useState(0)
   const [loginOpen, setLoginOpen] = useState(false)
-  const [loginUser, setLoginUser] = useState('tianhaowen')
+  const [needsRegister, setNeedsRegister] = useState(false)
+  const [loginUser, setLoginUser] = useState('')
   const [loginPass, setLoginPass] = useState('')
+  const [loginConfirm, setLoginConfirm] = useState('')
+  const [showOnboard, setShowOnboard] = useState(() => !localStorage.getItem(ONBOARD_KEY) && !localStorage.getItem(AUTH_TOKEN_KEY))
+  const [guideLogin, setGuideLogin] = useState(false)
   const [loginErr, setLoginErr] = useState('')
   const [loginBusy, setLoginBusy] = useState(false)
   const [authChecking, setAuthChecking] = useState(!!localStorage.getItem(AUTH_TOKEN_KEY))
@@ -128,8 +135,74 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  /** 打开登录框时询问是否还要注册首位管理员。 */
+  function openLogin() {
+    setLoginErr('')
+    setLoginOpen(true)
+    fetch(`${API}/auth/setup`)
+      .then((r) => r.json())
+      .then((d) => {
+        const need = !!d.needs_register
+        setNeedsRegister(need)
+        if (!need && !loginUser) setLoginUser('tianhaowen')
+      })
+      .catch(() => {})
+  }
+
+  /** 注册首位管理员并进入后台。 */
+  async function doRegister(e) {
+    e?.preventDefault?.()
+    if (loginBusy) return
+    if (loginPass !== loginConfirm) {
+      setLoginErr('两次密码不一致')
+      return
+    }
+    setLoginBusy(true)
+    setLoginErr('')
+    try {
+      const res = await fetch(`${API}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: loginUser.trim(),
+          password: loginPass,
+          confirm_password: loginConfirm,
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setLoginErr(d.error || '注册失败')
+        return
+      }
+      finishAuth(d)
+    } catch {
+      setLoginErr('网络错误，请稍后重试')
+    } finally {
+      setLoginBusy(false)
+    }
+  }
+
+  /** 写入令牌并进入管理台。 */
+  function finishAuth(d) {
+    localStorage.setItem(AUTH_TOKEN_KEY, d.token)
+    localStorage.setItem(ONBOARD_KEY, '1')
+    setAuthToken(d.token)
+    bgTokenRef.current = ''
+    setUsername(d.username || loginUser.trim())
+    setLoginPass('')
+    setLoginConfirm('')
+    setLoginOpen(false)
+    setShowOnboard(false)
+    setGuideLogin(false)
+    setAdminMenu('agents')
+    setDigitalOpen(true)
+    setView('admin')
+    setError('')
+  }
+
   async function doLogin(e) {
     e?.preventDefault?.()
+    if (needsRegister) return doRegister(e)
     if (loginBusy) return
     setLoginBusy(true)
     setLoginErr('')
@@ -144,16 +217,7 @@ export default function App() {
         setLoginErr(d.error || '账号或密码错误')
         return
       }
-      localStorage.setItem(AUTH_TOKEN_KEY, d.token)
-      setAuthToken(d.token)
-      bgTokenRef.current = ''
-      setUsername(d.username || loginUser.trim())
-      setLoginPass('')
-      setLoginOpen(false)
-      setAdminMenu('agents')
-      setDigitalOpen(true)
-      setView('admin')
-      setError('')
+      finishAuth(d)
     } catch {
       setLoginErr('网络错误，请稍后重试')
     } finally {
@@ -954,11 +1018,15 @@ export default function App() {
               />
             )}
             {adminMenu === 'settings' && (
-              <NotifySettings
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'settings'}
-              />
+              <section className="settings-page">
+                <h2 className="settings-page-title">设置</h2>
+                <NotifySettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
+                <EngineSettings active={adminMenu === 'settings'} />
+              </section>
             )}
             {adminMenu === 'network-allowlist' && (
               <NetworkPolicyPanel
@@ -1030,28 +1098,43 @@ export default function App() {
 
   return (
     <div className="app app-public">
+      {showOnboard && !authToken && (
+        <EngineOnboarding onReady={() => {
+          localStorage.setItem(ONBOARD_KEY, '1')
+          setShowOnboard(false)
+          setGuideLogin(true)
+        }} />
+      )}
       <PublicHome
         authToken={authToken}
-        onLogin={() => { setLoginErr(''); setLoginOpen(true) }}
+        guideLogin={guideLogin && !authToken}
+        onLogin={openLogin}
         onOpenAdmin={() => { setView('admin'); setAdminMenu('agents'); setDigitalOpen(true) }}
       />
 
       {loginOpen && (
         <div className="modal-mask" onClick={() => !loginBusy && setLoginOpen(false)}>
           <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={doLogin}>
-            <h2>管理员登录</h2>
+            <h2>{needsRegister ? '注册管理员' : '管理员登录'}</h2>
+            {needsRegister && <p className="engine-note">首次登录需要先注册，这个账号将成为本机管理员。</p>}
             <label>
               账号
               <input value={loginUser} onChange={(e) => setLoginUser(e.target.value)} autoComplete="username" disabled={loginBusy} />
             </label>
             <label>
               密码
-              <input type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} autoComplete="current-password" disabled={loginBusy} />
+              <input type="password" value={loginPass} onChange={(e) => setLoginPass(e.target.value)} autoComplete={needsRegister ? 'new-password' : 'current-password'} disabled={loginBusy} />
             </label>
+            {needsRegister && (
+              <label>
+                确认密码
+                <input type="password" value={loginConfirm} onChange={(e) => setLoginConfirm(e.target.value)} autoComplete="new-password" disabled={loginBusy} />
+              </label>
+            )}
             {loginErr && <p className="login-err">{loginErr}</p>}
             <div className="modal-actions">
               <button type="button" disabled={loginBusy} onClick={() => setLoginOpen(false)}>取消</button>
-              <button type="submit" disabled={loginBusy}>{loginBusy ? '登录中…' : '登录'}</button>
+              <button type="submit" disabled={loginBusy}>{loginBusy ? '提交中…' : (needsRegister ? '注册并进入' : '登录')}</button>
             </div>
           </form>
         </div>

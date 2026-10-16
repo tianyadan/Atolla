@@ -38,8 +38,11 @@ func (h *Handler) Register(r *gin.Engine) {
 	{
 		// 认证
 		api.POST("/auth/login", h.Login)
+		api.POST("/auth/register", h.RegisterAdmin)
+		api.GET("/auth/setup", h.SetupStatus)
 		api.POST("/auth/logout", h.Logout)
 		api.GET("/auth/me", auth.RequireAdminJWT(h.svc.Cfg.JWTSecret), h.Me)
+		api.GET("/setup/status", h.SetupStatus)
 
 		// 公开:对话必需（旧首页接口保留兼容）
 		api.POST("/question", h.Question)

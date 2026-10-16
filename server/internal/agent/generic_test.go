@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseCursorPrintOutput(t *testing.T) {
 	raw := `{"type":"result","subtype":"success","result":"hello","session_id":"abc-123","usage":{"inputTokens":10,"outputTokens":2,"cacheReadTokens":1}}`
@@ -21,6 +24,31 @@ func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
 	_, meta := ParseCursorPrintOutput(raw)
 	if meta.SessionID != "chat-xyz" {
 		t.Fatalf("session=%q", meta.SessionID)
+	}
+}
+
+func TestCursorCLIArgsTrust(t *testing.T) {
+	args := CursorCLIArgs("hi", "sess", "json", true)
+	if len(args) < 2 || args[0] != "--trust" {
+		t.Fatalf("args=%v", args)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--yolo") || strings.Contains(joined, " -f") {
+		t.Fatalf("must not skip all approvals: %v", args)
+	}
+	plain := CursorCLIArgs("hi", "", "json", false)
+	if plain[0] == "--trust" {
+		t.Fatalf("untrusted args=%v", plain)
+	}
+}
+
+func TestIsCursorWorkspaceTrustRequired(t *testing.T) {
+	msg := "agent: ⚠ Workspace Trust Required\nPass --trust"
+	if !IsCursorWorkspaceTrustRequired(msg) {
+		t.Fatal("expected trust required")
+	}
+	if IsCursorWorkspaceTrustRequired("exit status 1") {
+		t.Fatal("unrelated error")
 	}
 }
 

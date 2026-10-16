@@ -54,10 +54,11 @@ export function PermissionCard({ p, more = 0, busy, onDecide, title }) {
   }, [])
   if (!p) return null
   const left = remainSec(p)
+  const trust = p.tool_name === 'WorkspaceTrust'
   return (
     <div className="perm-card">
       <div className="perm-title">
-        {title || '🔐 申请使用工具,需要你授权'}
+        {trust ? '需要确认是否信任该工作区' : (title || '🔐 申请使用工具,需要你授权')}
         <span className={`perm-count ${left <= 10 ? 'urgent' : ''}`}>剩余 {left}s</span>
       </div>
       {p.note && <div className="perm-note">{p.note}</div>}
@@ -72,10 +73,18 @@ export function PermissionCard({ p, more = 0, busy, onDecide, title }) {
       {more > 0 && <div className="perm-more">+{more} 条排队中</div>}
       <div className="perm-actions">
         <button type="button" className="deny" disabled={busy} onClick={() => onDecide(p.request_id, 'deny')}>拒绝</button>
-        <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow')}>本次允许</button>
-        <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow_session')}>本次会话允许</button>
+        {trust ? (
+          <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow')}>信任并继续</button>
+        ) : (
+          <>
+            <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow')}>本次允许</button>
+            <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow_session')}>本次会话允许</button>
+          </>
+        )}
       </div>
-      <div className="perm-hint">Hard Deny 规则始终生效。「本次会话允许」只授权当前规范化命令签名，不扩大到同类命令。超时自动拒绝。</div>
+      <div className="perm-hint">{trust
+        ? '同意后才会带 --trust 启动 Cursor Agent。拒绝或超时都不会执行。'
+        : 'Hard Deny 规则始终生效。「本次会话允许」只授权当前规范化命令签名，不扩大到同类命令。超时自动拒绝。'}</div>
     </div>
   )
 }

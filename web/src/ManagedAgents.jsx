@@ -2394,10 +2394,11 @@ export function ManagedAgentPermOverlay({ authHeaders, onUnauthorized }) {
 }
 
 function PermCard({ p, more, busy, onDecide }) {
+  const trust = p?.tool_name === 'WorkspaceTrust'
   return (
     <div className="perm-card">
       <div className="perm-title">
-        🔐 申请使用工具,需要你授权
+        {trust ? '需要确认是否信任该工作区' : '🔐 申请使用工具,需要你授权'}
         <span className={`perm-count ${remainSec(p) <= 10 ? 'urgent' : ''}`}>剩余 {remainSec(p)}s</span>
       </div>
       {p.note && <div className="perm-note">{p.note}</div>}
@@ -2406,10 +2407,18 @@ function PermCard({ p, more, busy, onDecide }) {
       {more > 0 && <div className="perm-more">+{more} 条排队中</div>}
       <div className="perm-actions">
         <button type="button" className="deny" onClick={() => onDecide(p.request_id, 'deny')}>拒绝</button>
-        <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow')} disabled={busy}>本次允许</button>
-        <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow_session')} disabled={busy}>本次会话允许</button>
+        {trust ? (
+          <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow')} disabled={busy}>信任并继续</button>
+        ) : (
+          <>
+            <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow')} disabled={busy}>本次允许</button>
+            <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow_session')} disabled={busy}>本次会话允许</button>
+          </>
+        )}
       </div>
-      <div className="perm-hint">Hard Deny 不可绕过。会话允许仅匹配规范化命令签名。超时自动拒绝。</div>
+      <div className="perm-hint">{trust
+        ? '同意后才会带 --trust 启动 Cursor Agent。拒绝或超时都不会执行。'
+        : 'Hard Deny 不可绕过。会话允许仅匹配规范化命令签名。超时自动拒绝。'}</div>
     </div>
   )
 }

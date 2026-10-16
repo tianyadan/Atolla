@@ -63,6 +63,10 @@ type Service struct {
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
 
+	// trustedDirs 用户已确认信任的工作区（进程内）。同意后后续 Cursor 启动带 --trust。
+	trustMu     sync.Mutex
+	trustedDirs map[string]struct{}
+
 	pcViewMu    sync.Mutex
 	pcViewAgent int64
 	pcViewAt    time.Time
@@ -86,6 +90,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		TestHub:               testsrv.NewHub(cfg.PermissionWaitSeconds()),
 		Notify:                notify.New(cfg.NotifyScript, cfg.BarkNotify),
 		runs:                  map[int64]*managedRun{},
+		trustedDirs:           map[string]struct{}{},
 		cloneJobMap:           &sync.Map{},
 		compactPending:        &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),

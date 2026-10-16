@@ -20,6 +20,38 @@ func GenericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // GenericAskMeta 同 GenericAsk，支持 Cursor --resume 与 session/usage 回调。
 // history 保留参数以兼容旧调用；v0.2.18 起调用方应传空，由引擎 resume 维护上下文。
 func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, false)
+}
+
+// GenericAskMetaTrusted 在用户已确认工作区信任后，为 Cursor Agent 附加 --trust 再执行。
+func GenericAskMetaTrusted(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, true)
+}
+
+// IsCursorWorkspaceTrustRequired 判断 CLI 是否因工作区未信任而中止（无交互模式无法自行确认）。
+func IsCursorWorkspaceTrustRequired(msg string) bool {
+	return strings.Contains(msg, "Workspace Trust Required")
+}
+
+// CursorCLIArgs 构造 agent 打印模式参数。trust 为真时只追加 --trust，不使用 --yolo / -f。
+func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
+	args := make([]string, 0, 8)
+	if trust {
+		args = append(args, "--trust")
+	}
+	switch mode {
+	case "json":
+		args = append(args, "-p", "--output-format", "json")
+	case "text":
+		args = append(args, "-p")
+	}
+	if rs := strings.TrimSpace(resume); rs != "" {
+		args = append(args, "--resume", rs)
+	}
+	return append(args, prompt)
+}
+
+func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, trust bool) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -46,28 +78,19 @@ func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, histo
 
 	start := time.Now()
 	// 优先 JSON：便于解析 session_id（Cursor Agent）
-	argsJSON := []string{"-p", "--output-format", "json"}
-	if rs := strings.TrimSpace(resumeSession); rs != "" {
-		argsJSON = append(argsJSON, "--resume", rs)
-	}
-	argsJSON = append(argsJSON, prompt)
-
-	out, err := runOnce(cctx, bin, dir, argsJSON)
+	out, err := runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "json", trust))
 	if err != nil {
-		// 回退：纯文本 -p / 无 -p
-		argsText := []string{"-p"}
-		if rs := strings.TrimSpace(resumeSession); rs != "" {
-			argsText = append(argsText, "--resume", rs)
+		// 工作区信任必须先交给用户确认，不能用其它参数组合把同一拒绝重复三遍。
+		if IsCursorWorkspaceTrustRequired(err.Error()) {
+			return "", int(time.Since(start).Milliseconds()), err
 		}
-		argsText = append(argsText, prompt)
-		out2, err2 := runOnce(cctx, bin, dir, argsText)
+		// 回退：纯文本 -p / 无 -p
+		out2, err2 := runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "text", trust))
 		if err2 != nil {
-			argsBare := []string{}
-			if rs := strings.TrimSpace(resumeSession); rs != "" {
-				argsBare = append(argsBare, "--resume", rs)
+			if IsCursorWorkspaceTrustRequired(err2.Error()) {
+				return "", int(time.Since(start).Milliseconds()), err2
 			}
-			argsBare = append(argsBare, prompt)
-			out3, err3 := runOnce(cctx, bin, dir, argsBare)
+			out3, err3 := runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "bare", trust))
 			if err3 != nil {
 				return "", int(time.Since(start).Milliseconds()), fmt.Errorf("%v; fallback: %v; %v", err, err2, err3)
 			}
