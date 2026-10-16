@@ -354,25 +354,28 @@ export default function ManagedAgentsPanel({
     })
   }
 
-  /** 不在该 agent 详情页时请求 Bark(策略 A) */
-  function maybeBarkNotify(agentId, ev) {
-    const v = viewRef.current
-    if (v.active && v.selectedId === agentId) return
-    const agent = (v.agents || []).find((a) => a.id === agentId)
-    fetch(`${API}/admin/agents/notify-permission`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        request_id: ev.request_id,
-        agent_id: agentId,
-        agent_name: agent?.name || `数字员工#${agentId}`,
-        tool_name: ev.tool_name,
-        command: ev.summary,
-        risk: ev.risk,
-        meaning: ev.meaning,
-      }),
-    }).catch(() => {})
-  }
+  const authHeadersRef = useRef(authHeaders)
+  authHeadersRef.current = authHeaders
+  /** 告诉后端电脑是否正打开这个数字人的对话（含挂机未关页面） */
+  useEffect(() => {
+    const send = (agentId) => {
+      fetch(`${API}/admin/agents/pc-viewer`, {
+        method: 'POST',
+        headers: authHeadersRef.current({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ agent_id: agentId }),
+      }).catch(() => {})
+    }
+    if (!active || !selectedId) {
+      send(0)
+      return undefined
+    }
+    send(selectedId)
+    const timer = window.setInterval(() => send(selectedId), 12000)
+    return () => {
+      window.clearInterval(timer)
+      send(0)
+    }
+  }, [active, selectedId])
 
   async function loadDetail(id, { force = false } = {}) {
     if (!id) { setTasks([]); return }
@@ -1041,7 +1044,6 @@ export default function ManagedAgentsPanel({
             at: Date.now(),
           },
         })
-        maybeBarkNotify(agentId, ev)
       } else if (ev.type === 'permission_auto') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,

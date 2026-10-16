@@ -37,6 +37,8 @@ export type InstanceHostMeta = {
   cpu_pct?: number
   mem_pct?: number
   disk_pct?: number
+  /** Representative host temperature in °C (optional) */
+  temp_c?: number
 }
 
 export type RegisterInput = {

@@ -23,6 +23,7 @@ import {
   IconMoon,
   IconSearch,
   IconSun,
+  IconTemp,
   IconTrash,
 } from '../components/InstanceIcons'
 import { Modal } from '../components/Modal'
@@ -30,8 +31,10 @@ import { SettingsIcon } from '../components/SettingsIcon'
 import { getStoredTheme, toggleTheme, type ThemeMode } from '../utils/theme'
 import {
   formatPct,
+  formatTempC,
   formatUptime,
   isInstanceOnline,
+  tempBarPct,
 } from '../utils/instance'
 
 type StatusFilter = 'all' | 'online' | 'offline'
@@ -223,6 +226,8 @@ export function InstancesPage() {
             const cpu = formatPct(host.cpu_pct)
             const mem = formatPct(host.mem_pct)
             const disk = formatPct(host.disk_pct)
+            const tempLabel = formatTempC(host.temp_c)
+            const tempBar = tempBarPct(host.temp_c)
             const statusLabel = (inst.status || 'unknown').toLowerCase()
 
             return (
@@ -336,6 +341,16 @@ export function InstancesPage() {
                       <div className="inst-bar-fill disk" style={{ width: `${disk}%` }} />
                     </div>
                   </div>
+                  <div className="inst-res-card">
+                    <div className="inst-res-top">
+                      <IconTemp size={14} />
+                      <span>温度</span>
+                      <strong>{tempLabel}</strong>
+                    </div>
+                    <div className="inst-bar">
+                      <div className="inst-bar-fill temp" style={{ width: `${tempBar}%` }} />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="inst-card-actions">
@@ -430,6 +445,9 @@ export function InstancesPage() {
               <strong>CPU / 内存 / 磁盘</strong>{' '}
               {formatPct(detailTarget.host?.cpu_pct)}% / {formatPct(detailTarget.host?.mem_pct)}% /{' '}
               {formatPct(detailTarget.host?.disk_pct)}%
+            </p>
+            <p>
+              <strong>温度</strong> {formatTempC(detailTarget.host?.temp_c)}
             </p>
           </div>
         ) : null}

@@ -422,6 +422,7 @@ th { background: #0a0a0a; color: #8a8a8a; }
   background: #111111; border: 1px dashed #2a2a2a; border-radius: 12px;
 }
 .admin-placeholder h2 { color: #f5f5f5; margin: 0 0 8px; font-size: 18px; }
+.settings-notify-card { max-width: 560px; }
 
 .modal-mask {
   position: fixed; inset: 0; background: rgba(2, 6, 23, 0.72);

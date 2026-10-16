@@ -3,6 +3,8 @@ package remotebridge
 import (
 	"context"
 	"testing"
+
+	"atolla/server/internal/store"
 )
 
 type stubRuntime struct {
@@ -16,11 +18,15 @@ type stubRuntime struct {
 	decideBeh  string
 }
 
-func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string) error {
+func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string, _ []ChatAtt) error {
 	s.asked = true
 	s.agent = agentID
 	s.q = question
 	return nil
+}
+
+func (s *stubRuntime) SaveChatImageFromBytes(context.Context, []byte, string) (*ChatAtt, error) {
+	return &ChatAtt{ID: "x", URL: "https://example.com/x.jpg", Mime: "image/jpeg", Name: "x.jpg"}, nil
 }
 
 func (s *stubRuntime) StopManaged(agentID int64) bool {
@@ -44,6 +50,26 @@ func (s *stubRuntime) DecidePermission(requestID, behavior string) error {
 	s.decideID = requestID
 	s.decideBeh = behavior
 	return nil
+}
+
+func (s *stubRuntime) ListAgentSkills(context.Context, int64) ([]store.AgentSkillView, error) {
+	return nil, nil
+}
+
+func (s *stubRuntime) ListSkillStore(context.Context, string, string, string) ([]store.SkillCatalogItem, error) {
+	return nil, nil
+}
+
+func (s *stubRuntime) InstallAgentSkill(context.Context, int64, string, string, []string) ([]store.AgentSkillView, error) {
+	return nil, nil
+}
+
+func (s *stubRuntime) UninstallAgentSkill(context.Context, int64, string) ([]store.AgentSkillView, error) {
+	return nil, nil
+}
+
+func (s *stubRuntime) ListAgentLegacyMounts(context.Context, int64) ([]store.AgentLegacyMemoryMount, error) {
+	return nil, nil
 }
 
 func TestHandleAgentAskAccepts(t *testing.T) {

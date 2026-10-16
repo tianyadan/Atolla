@@ -15,7 +15,7 @@ import {
   revokeDeviceSession,
   touchDeviceSession,
 } from '../auth/deviceSession.js'
-import { enqueueCommand } from '../commands.js'
+import { enqueueAndWait, enqueueCommand } from '../commands.js'
 import { clearMobileViewer, setMobileViewer } from '../viewer.js'
 import {
   deletePermissionsMirror,
@@ -26,6 +26,11 @@ import {
   normalizeMessagesLimit,
 } from '../mirror.js'
 import { routeParam } from '../params.js'
+
+const notifyPrefsBodySchema = z.object({
+  task_done: z.boolean(),
+  permission: z.boolean(),
+})
 
 const enqueueBodySchema = z.object({
   action: z.string().min(1),
@@ -43,7 +48,31 @@ const unlockBodySchema = z.object({
 })
 
 const askBodySchema = z.object({
-  question: z.string().min(1),
+  question: z.string().optional().default(''),
+  attachments: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        url: z.string().optional(),
+        mime: z.string().optional(),
+        name: z.string().optional(),
+      }),
+    )
+    .optional(),
+})
+
+const chatImageUploadBodySchema = z.object({
+  data_base64: z.string().min(1),
+  filename: z.string().optional(),
+})
+
+const settingsUpdateBodySchema = z.object({
+  rules_prompt: z.string(),
+})
+
+const skillInstallBodySchema = z.object({
+  skill_id: z.string().min(1),
+  capabilities: z.array(z.string()).optional(),
 })
 
 const taskPlanBodySchema = z.object({
@@ -300,10 +329,20 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         res.status(400).json({ error: 'Invalid ask payload' })
         return
       }
-      const result = enqueueCommand(db, instanceId, 'agent.ask', {
+      const question = (parsed.data.question || '').trim()
+      const attachments = (parsed.data.attachments || []).filter(
+        (a) => (a.url && a.url.trim()) || (a.id && a.id.trim()),
+      )
+      if (!question && attachments.length === 0) {
+        res.status(400).json({ error: 'question or attachments required' })
+        return
+      }
+      const payload: Record<string, unknown> = {
         agent_id: agentId,
-        question: parsed.data.question.trim(),
-      })
+        question,
+      }
+      if (attachments.length) payload.attachments = attachments
+      const result = enqueueCommand(db, instanceId, 'agent.ask', payload)
       if (!result.ok) {
         res.status(result.status).json({ error: result.error })
         return
@@ -538,6 +577,224 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     }
     res.json({ ok: true })
   })
+
+  /** Send enqueueAndWait outcome to the client */
+  async function respondRpc(
+    res: Response,
+    instanceId: string,
+    action: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const result = await enqueueAndWait(db, instanceId, action, payload)
+    if (!result.ok) {
+      res.status(result.httpStatus).json({ error: result.error })
+      return
+    }
+    res.json(result.body ?? {})
+  }
+
+  /** Mobile settings: load agent rules / engine (read-only engine) */
+  router.get(
+    '/instances/:id/agents/:agentId/settings',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.settings.get', { agent_id: agentId })
+    },
+  )
+
+  /** Mobile settings: save rules_prompt only */
+  router.patch(
+    '/instances/:id/agents/:agentId/settings',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = settingsUpdateBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid settings payload' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.settings.update', {
+        agent_id: agentId,
+        rules_prompt: parsed.data.rules_prompt,
+      })
+    },
+  )
+
+  /** List skills for one agent (installed + catalog merge) */
+  router.get(
+    '/instances/:id/agents/:agentId/skills',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.skills.list', { agent_id: agentId })
+    },
+  )
+
+  /** Skill store catalog (optional q / category) */
+  router.get(
+    '/instances/:id/agents/:agentId/skills/store',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const q = typeof req.query.q === 'string' ? req.query.q : ''
+      const category = typeof req.query.category === 'string' ? req.query.category : ''
+      await respondRpc(res, instanceId, 'agent.skills.store', {
+        agent_id: agentId,
+        q,
+        category,
+      })
+    },
+  )
+
+  /** Install a catalog skill */
+  router.post(
+    '/instances/:id/agents/:agentId/skills/install',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = skillInstallBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid install payload' })
+        return
+      }
+      const payload: Record<string, unknown> = {
+        agent_id: agentId,
+        skill_id: parsed.data.skill_id.trim(),
+      }
+      if (parsed.data.capabilities) payload.capabilities = parsed.data.capabilities
+      await respondRpc(res, instanceId, 'agent.skills.install', payload)
+    },
+  )
+
+  /** Uninstall a skill */
+  router.delete(
+    '/instances/:id/agents/:agentId/skills/:skillId',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      const skillId = routeParam(req.params.skillId)
+      if (!instanceId || !agentId || !skillId) {
+        res.status(400).json({ error: 'Invalid instance, agent or skill id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.skills.uninstall', {
+        agent_id: agentId,
+        skill_id: skillId,
+      })
+    },
+  )
+
+  /** Read-only legacy memory mounts */
+  router.get(
+    '/instances/:id/agents/:agentId/legacy-mounts',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.legacy_mounts.list', { agent_id: agentId })
+    },
+  )
+
+  /** Upload compressed chat image (base64) via Mac SaveChatImage */
+  router.post(
+    '/instances/:id/agents/:agentId/chat-images',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = chatImageUploadBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid chat-image payload' })
+        return
+      }
+      await respondRpc(res, instanceId, 'chat.image.upload', {
+        agent_id: agentId,
+        data_base64: parsed.data.data_base64,
+        filename: parsed.data.filename || 'mobile.jpg',
+      })
+    },
+  )
+
+  /** 读取该电脑的完成通知 / 命令审批通知开关 */
+  router.get(
+    '/instances/:id/notify-prefs',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'notify.prefs.get', {})
+    },
+  )
+
+  /** 保存该电脑的完成通知 / 命令审批通知开关 */
+  router.put(
+    '/instances/:id/notify-prefs',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const parsed = notifyPrefsBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid notify prefs payload' })
+        return
+      }
+      await respondRpc(res, instanceId, 'notify.prefs.update', {
+        task_done: parsed.data.task_done,
+        permission: parsed.data.permission,
+      })
+    },
+  )
 
   return router
 }

@@ -114,6 +114,8 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.GET("/admin/agents/:id/tasks", h.AdminAgentsTasks)
 			adm.GET("/admin/agents/:id/command-audits", h.AdminAgentsCommandAudits)
 			adm.POST("/admin/agents/notify-permission", h.AdminNotifyPermission)
+			adm.POST("/admin/agents/notify-task-done", h.AdminNotifyTaskDone)
+			adm.POST("/admin/agents/pc-viewer", h.AdminPCViewer)
 
 			adm.GET("/admin/skills/store", h.AdminSkillStoreList)
 			adm.GET("/admin/skills/store/:id", h.AdminSkillStoreGet)
@@ -125,6 +127,9 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/browser-use", h.AdminBrowserUseStatus)
 			adm.POST("/admin/browser-use/ensure", h.AdminBrowserUseEnsure)
+
+			adm.GET("/admin/notify-prefs", h.AdminNotifyPrefsGet)
+			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)
 
 			adm.GET("/admin/network-allowlist", h.AdminNetworkAllowlistGet)
 			adm.PUT("/admin/network-allowlist", h.AdminNetworkAllowlistPut)

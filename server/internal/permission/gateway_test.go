@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -188,6 +189,61 @@ func TestFromClaudeMapsActionType(t *testing.T) {
 	w := FromClaude("claude", 1, 2, "Write", map[string]any{"file_path": "/ws/a.go"}, "/ws")
 	if w.ActionType != ActionFileWrite {
 		t.Fatalf("got %s", w.ActionType)
+	}
+}
+
+// Cursor 工具名须映射到可识别动作，不能整类落到 SHELL_EXEC。
+func TestFromClaudeMapsCursorTools(t *testing.T) {
+	sh := FromClaude("cursor", 1, 2, "Shell", map[string]any{"command": "ls -la"}, "/ws")
+	if sh.ActionType != ActionShellRead {
+		t.Fatalf("Shell ls → SHELL_READ, got %s cmd=%q", sh.ActionType, sh.Command)
+	}
+	sr := FromClaude("cursor", 1, 2, "StrReplace", map[string]any{"path": "/ws/a.go"}, "/ws")
+	if sr.ActionType != ActionFileWrite {
+		t.Fatalf("StrReplace → FILE_WRITE, got %s", sr.ActionType)
+	}
+	del := FromClaude("cursor", 1, 2, "Delete", map[string]any{"path": "/ws/a.go"}, "/ws")
+	if del.ActionType != ActionFileDelete {
+		t.Fatalf("Delete → FILE_DELETE, got %s", del.ActionType)
+	}
+}
+
+// AllowWrite=true：工作区内写操作直接放行；rm 仍拒绝；未知工具走 REVIEW。
+func TestGatewayAllowWriteAutoAllowsFileEdit(t *testing.T) {
+	g := NewGateway(nil, nil)
+	opt := EvaluateOpts{Policy: &AgentPolicy{AllowWrite: true, AllowNetwork: false, AllowRm: false}, SkipJevos: true}
+
+	w := FromClaude("cursor", 1, 2, "Write", map[string]any{"file_path": "/ws/a.go"}, "/ws")
+	if pd := g.Evaluate(nil, w, opt); pd.Decision != DecisionAllow {
+		t.Fatalf("Write want ALLOW got %+v", pd)
+	}
+	sr := FromClaude("cursor", 1, 2, "StrReplace", map[string]any{"path": "/ws/a.go"}, "/ws")
+	if pd := g.Evaluate(nil, sr, opt); pd.Decision != DecisionAllow {
+		t.Fatalf("StrReplace want ALLOW got %+v", pd)
+	}
+	rm := FromClaude("cursor", 1, 2, "Shell", map[string]any{"command": "rm -rf ./dist"}, "/ws")
+	if pd := g.Evaluate(nil, rm, opt); pd.Decision != DecisionDeny {
+		t.Fatalf("rm want DENY got %+v", pd)
+	}
+	unk := FromClaude("cursor", 1, 2, "CallDynamicTool", map[string]any{"toolName": "x"}, "/ws")
+	if pd := g.Evaluate(nil, unk, opt); pd.Decision != DecisionReview {
+		t.Fatalf("unknown want REVIEW got %+v", pd)
+	}
+}
+
+// AllowNetwork 不得把工具名 / 纯 shell 词误判成联网放行。
+func TestGatewayAllowNetworkDoesNotTreatToolNameAsHost(t *testing.T) {
+	g := NewGateway(nil, nil)
+	opt := EvaluateOpts{Policy: &AgentPolicy{AllowWrite: false, AllowNetwork: true, AllowRm: false}, SkipJevos: true}
+	sr := FromClaude("cursor", 1, 2, "StrReplace", map[string]any{"path": "/ws/a.go"}, "/ws")
+	pd := g.Evaluate(nil, sr, opt)
+	if pd.Decision == DecisionAllow && strings.Contains(pd.Reason, "联网") {
+		t.Fatalf("StrReplace must not allow via fake network host: %+v", pd)
+	}
+	sh := FromClaude("cursor", 1, 2, "Shell", map[string]any{"command": "ls"}, "/ws")
+	pd2 := g.Evaluate(nil, sh, opt)
+	if pd2.Decision == DecisionAllow && strings.Contains(pd2.Reason, "联网") {
+		t.Fatalf("Shell ls must not allow via fake host: %+v", pd2)
 	}
 }
 

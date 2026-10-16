@@ -42,6 +42,15 @@ export const defaultCommandClock: CommandClock = {
 }
 
 const waitersByInstance = new Map<string, Set<() => void>>()
+/** Waiters for a specific command reaching a terminal status */
+const waitersByCommandId = new Map<string, Set<() => void>>()
+
+const TERMINAL_COMMAND_STATUSES = new Set([
+  'done',
+  'error',
+  'rejected',
+  'expired',
+])
 
 /** Wake long-poll waiters after a new command is enqueued */
 function notifyLongPollWaiters(instanceId: string): void {
@@ -49,6 +58,15 @@ function notifyLongPollWaiters(instanceId: string): void {
   if (!waiters?.size) return
   for (const wake of waiters) wake()
   waiters.clear()
+}
+
+/** Wake callers waiting on enqueueAndWait for this command */
+function notifyCommandResultWaiters(commandId: string): void {
+  const waiters = waitersByCommandId.get(commandId)
+  if (!waiters?.size) return
+  for (const wake of waiters) wake()
+  waiters.clear()
+  waitersByCommandId.delete(commandId)
 }
 
 /** Register a waiter until timeout or notify */
@@ -257,10 +275,134 @@ export function submitCommandResult(
      WHERE id = ? AND instance_id = ?`,
   ).run(status, resultJson, now, commandId, instanceId)
 
+  notifyCommandResultWaiters(commandId)
   return { ok: true }
+}
+
+export type EnqueueAndWaitResult =
+  | { ok: true; status: 'done'; body: unknown }
+  | { ok: false; httpStatus: number; error: string; commandStatus?: string }
+
+/** Default timeout for mobile settings RPC (ms) */
+export const DEFAULT_ENQUEUE_WAIT_MS = 35_000
+
+/** Read command row status + result */
+function readCommandOutcome(
+  db: RelayDatabase,
+  commandId: string,
+): { status: string; result_json: string | null } | undefined {
+  return db
+    .prepare(`SELECT status, result_json FROM commands WHERE id = ?`)
+    .get(commandId) as { status: string; result_json: string | null } | undefined
+}
+
+/** Wait until command reaches a terminal status or timeout */
+async function waitCommandTerminal(
+  db: RelayDatabase,
+  commandId: string,
+  timeoutMs: number,
+  clock: CommandClock,
+): Promise<{ status: string; result_json: string | null } | undefined> {
+  const safeWait = Math.max(0, Math.min(timeoutMs, 120_000))
+  const deadline = clock.now() + safeWait
+
+  let row = readCommandOutcome(db, commandId)
+  if (row && TERMINAL_COMMAND_STATUSES.has(row.status)) return row
+
+  while (clock.now() < deadline) {
+    expireLeasedCommands(db, clock.now())
+    row = readCommandOutcome(db, commandId)
+    if (row && TERMINAL_COMMAND_STATUSES.has(row.status)) return row
+
+    const remaining = deadline - clock.now()
+    if (remaining <= 0) break
+
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+      const timer = setTimeout(finish, remaining)
+      let set = waitersByCommandId.get(commandId)
+      if (!set) {
+        set = new Set()
+        waitersByCommandId.set(commandId, set)
+      }
+      const wake = () => {
+        clearTimeout(timer)
+        set!.delete(wake)
+        finish()
+      }
+      set.add(wake)
+    })
+
+    row = readCommandOutcome(db, commandId)
+    if (row && TERMINAL_COMMAND_STATUSES.has(row.status)) return row
+  }
+
+  return readCommandOutcome(db, commandId)
+}
+
+/**
+ * Enqueue an action and wait for Mac result (settings / skills RPC).
+ * Ask/stop remain fire-and-forget via enqueueCommand alone.
+ */
+export async function enqueueAndWait(
+  db: RelayDatabase,
+  instanceId: string,
+  action: string,
+  payload: Record<string, unknown>,
+  timeoutMs: number = DEFAULT_ENQUEUE_WAIT_MS,
+  clock: CommandClock = defaultCommandClock,
+): Promise<EnqueueAndWaitResult> {
+  const enq = enqueueCommand(db, instanceId, action, payload, clock)
+  if (!enq.ok) {
+    return { ok: false, httpStatus: enq.status, error: enq.error }
+  }
+
+  const outcome = await waitCommandTerminal(db, enq.command.id, timeoutMs, clock)
+  if (!outcome || !TERMINAL_COMMAND_STATUSES.has(outcome.status)) {
+    return {
+      ok: false,
+      httpStatus: 504,
+      error: 'Mac 未在时限内响应，请确认本机 Atolla 在线后重试',
+      commandStatus: outcome?.status,
+    }
+  }
+
+  if (outcome.status !== 'done') {
+    let errMsg = `命令失败: ${outcome.status}`
+    if (outcome.result_json) {
+      try {
+        const parsed = JSON.parse(outcome.result_json) as { error?: string; message?: string }
+        errMsg = parsed.error || parsed.message || errMsg
+      } catch {
+        /* keep default */
+      }
+    }
+    return {
+      ok: false,
+      httpStatus: 502,
+      error: errMsg,
+      commandStatus: outcome.status,
+    }
+  }
+
+  let body: unknown = null
+  if (outcome.result_json) {
+    try {
+      body = JSON.parse(outcome.result_json)
+    } catch {
+      body = outcome.result_json
+    }
+  }
+  return { ok: true, status: 'done', body }
 }
 
 /** Reset long-poll waiters (tests only) */
 export function resetLongPollWaitersForTests(): void {
   waitersByInstance.clear()
+  waitersByCommandId.clear()
 }

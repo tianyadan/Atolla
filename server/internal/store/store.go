@@ -20,16 +20,16 @@ type Conversation struct {
 
 // Message 一条消息。
 type Message struct {
-	ID                  int64     `json:"id"`
-	ConversationID      int64     `json:"conversation_id"`
-	Role                string    `json:"role"` // user / assistant / invoke_quote / invoke_divider
-	Content             string    `json:"content"`
-	Status              string    `json:"status"`
-	WorkspacePath       string    `json:"workspace_path"`
-	ReplyMs             int       `json:"reply_ms"`
-	ExcludeFromContext  bool      `json:"exclude_from_context"`
-	MetaJSON            string    `json:"meta_json,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
+	ID                 int64     `json:"id"`
+	ConversationID     int64     `json:"conversation_id"`
+	Role               string    `json:"role"` // user / assistant / invoke_quote / invoke_divider
+	Content            string    `json:"content"`
+	Status             string    `json:"status"`
+	WorkspacePath      string    `json:"workspace_path"`
+	ReplyMs            int       `json:"reply_ms"`
+	ExcludeFromContext bool      `json:"exclude_from_context"`
+	MetaJSON           string    `json:"meta_json,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // Workspace 一条授权工作区记录。
@@ -261,9 +261,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	// 13) v0.3.5 每位数字员工独立设置上下文窗口
 	var contextColCount int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'context_window_tokens'`).Scan(&contextColCount); err != nil { return err }
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'context_window_tokens'`).Scan(&contextColCount); err != nil {
+		return err
+	}
 	if contextColCount == 0 {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE managed_agents ADD COLUMN context_window_tokens BIGINT NOT NULL DEFAULT 1000000 AFTER engine`); err != nil { return err }
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE managed_agents ADD COLUMN context_window_tokens BIGINT NOT NULL DEFAULT 1000000 AFTER engine`); err != nil {
+			return err
+		}
 	}
 	// 14) v0.4.0 技能商店：目录 + 按数字人安装
 	if err := s.EnsureSkillSchema(ctx); err != nil {
@@ -287,6 +291,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	// 19) 网络域名白名单（同步 Cursor/Claude/Codex 沙箱）
 	if err := s.EnsureNetworkAllowlistSchema(ctx); err != nil {
+		return err
+	}
+	// 20) 电脑端通知开关（完成通知 / 命令审批通知）
+	if err := s.EnsureNotifyPrefsSchema(ctx); err != nil {
 		return err
 	}
 	return nil

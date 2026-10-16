@@ -39,11 +39,30 @@ func (sch *Scheduler) startMaintenanceJobs() {
 	// 每天 12:00（上海时区）清理超过 7 天的自动审批审计
 	_, err := sch.cron.AddFunc("0 12 * * *", func() {
 		sch.purgeAutoApproveAudits()
+		sch.purgeLocalChatImages()
 	})
 	if err != nil {
 		log.Printf("scheduler maintenance auto-approve purge: %v", err)
 	} else {
 		log.Printf("scheduler armed auto-approve audit purge cron=0 12 * * * (Asia/Shanghai)")
+	}
+	// Best-effort OSS lifecycle for chat images (7 days)
+	go sch.svc.EnsureChatImageOSSLifecycle()
+}
+
+// purgeLocalChatImages deletes local chat images older than 7 days.
+func (sch *Scheduler) purgeLocalChatImages() {
+	if sch == nil || sch.svc == nil {
+		return
+	}
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	n, err := sch.svc.PurgeLocalChatImagesOlderThan(cutoff)
+	if err != nil {
+		log.Printf("chat-image local purge: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("chat-image local purged %d files older than %s", n, cutoff.Format(time.RFC3339))
 	}
 }
 

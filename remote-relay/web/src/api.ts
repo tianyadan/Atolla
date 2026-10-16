@@ -23,6 +23,8 @@ export type InstanceHostMeta = {
   cpu_pct?: number
   mem_pct?: number
   disk_pct?: number
+  /** Representative host temperature in °C */
+  temp_c?: number
 }
 
 export type PublicInstance = {
@@ -312,17 +314,46 @@ export async function syncMessages(
   )
 }
 
-/** Enqueue agent.ask on Mac */
+export type ChatImageAttachment = {
+  id?: string
+  url?: string
+  mime?: string
+  name?: string
+}
+
+/** Enqueue agent.ask on Mac (optional attachments) */
 export async function askAgent(
   instanceId: string,
   agentId: string,
   question: string,
+  attachments?: ChatImageAttachment[],
 ): Promise<void> {
+  const body: Record<string, unknown> = { question }
+  if (attachments?.length) body.attachments = attachments
   await request<{ command: unknown }>(
     `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/ask`,
     {
       method: 'POST',
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+/** Upload compressed chat image (base64) via Mac */
+export async function uploadChatImage(
+  instanceId: string,
+  agentId: string,
+  dataBase64: string,
+  filename?: string,
+): Promise<{ id: string; url: string; mime: string; name: string }> {
+  return request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/chat-images`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        data_base64: dataBase64,
+        filename: filename || 'mobile.jpg',
+      }),
     },
   )
 }
@@ -435,6 +466,161 @@ export async function decidePermission(
       body: JSON.stringify({ request_id: requestId, behavior }),
     },
   )
+}
+
+/** Agent settings payload from Mac via relay RPC */
+export type AgentSettings = {
+  agent_id: string
+  name: string
+  engine: string
+  rules_prompt: string
+  skill_count: number
+}
+
+/** Skill row (installed merge or store catalog) */
+export type AgentSkill = {
+  id: string
+  name: string
+  summary?: string
+  description?: string
+  icon_key?: string
+  icon_url?: string
+  category?: string
+  risk?: string
+  installed?: boolean
+  enabled?: boolean
+  capabilities?: string[]
+}
+
+/** Read-only legacy memory mount */
+export type LegacyMount = {
+  id: number
+  agent_id: number
+  legacy_memory_id: number
+  source_agent_name: string
+  source_job_title: string
+  source_avatar_url: string
+  mounted_at?: string
+}
+
+/** 完成通知与命令审批通知，与电脑端设置同一份 */
+export type NotifyPrefs = {
+  task_done: boolean
+  permission: boolean
+}
+
+/** 读取某台电脑的通知开关 */
+export async function fetchNotifyPrefs(instanceId: string): Promise<NotifyPrefs> {
+  return request<NotifyPrefs>(
+    `/api/instances/${encodeURIComponent(instanceId)}/notify-prefs`,
+  )
+}
+
+/** 保存某台电脑的通知开关 */
+export async function updateNotifyPrefs(
+  instanceId: string,
+  prefs: NotifyPrefs,
+): Promise<NotifyPrefs> {
+  return request<NotifyPrefs>(
+    `/api/instances/${encodeURIComponent(instanceId)}/notify-prefs`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(prefs),
+    },
+  )
+}
+
+/** Load agent settings (rules_prompt etc.) */
+export async function fetchAgentSettings(
+  instanceId: string,
+  agentId: string,
+): Promise<AgentSettings> {
+  return request<AgentSettings>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/settings`,
+  )
+}
+
+/** Save rules_prompt only */
+export async function updateAgentSettings(
+  instanceId: string,
+  agentId: string,
+  rulesPrompt: string,
+): Promise<AgentSettings> {
+  return request<AgentSettings>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/settings`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ rules_prompt: rulesPrompt }),
+    },
+  )
+}
+
+/** List agent skills (catalog + install state) */
+export async function fetchAgentSkills(
+  instanceId: string,
+  agentId: string,
+): Promise<AgentSkill[]> {
+  const data = await request<{ skills: AgentSkill[] }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/skills`,
+  )
+  return data.skills ?? []
+}
+
+/** Skill store catalog */
+export async function fetchSkillStore(
+  instanceId: string,
+  agentId: string,
+  opts?: { q?: string; category?: string },
+): Promise<AgentSkill[]> {
+  const params = new URLSearchParams()
+  if (opts?.q) params.set('q', opts.q)
+  if (opts?.category) params.set('category', opts.category)
+  const qs = params.toString()
+  const data = await request<{ skills: AgentSkill[] }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/skills/store${qs ? `?${qs}` : ''}`,
+  )
+  return data.skills ?? []
+}
+
+/** Install a catalog skill */
+export async function installAgentSkill(
+  instanceId: string,
+  agentId: string,
+  skillId: string,
+  capabilities?: string[],
+): Promise<AgentSkill[]> {
+  const data = await request<{ skills: AgentSkill[] }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/skills/install`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ skill_id: skillId, capabilities }),
+    },
+  )
+  return data.skills ?? []
+}
+
+/** Uninstall a skill */
+export async function uninstallAgentSkill(
+  instanceId: string,
+  agentId: string,
+  skillId: string,
+): Promise<AgentSkill[]> {
+  const data = await request<{ skills: AgentSkill[] }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(skillId)}`,
+    { method: 'DELETE' },
+  )
+  return data.skills ?? []
+}
+
+/** Read-only legacy memory mounts */
+export async function fetchLegacyMounts(
+  instanceId: string,
+  agentId: string,
+): Promise<LegacyMount[]> {
+  const data = await request<{ items: LegacyMount[]; max?: number }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/legacy-mounts`,
+  )
+  return data.items ?? []
 }
 
 export type ChangelogEntry = {

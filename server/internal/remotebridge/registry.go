@@ -41,6 +41,16 @@ func RegisteredActions() []string {
 		"permission.decide",
 		"viewer.set",
 		"viewer.clear",
+		"agent.settings.get",
+		"agent.settings.update",
+		"agent.skills.list",
+		"agent.skills.store",
+		"agent.skills.install",
+		"agent.skills.uninstall",
+		"agent.legacy_mounts.list",
+		"chat.image.upload",
+		"notify.prefs.get",
+		"notify.prefs.update",
 	}
 }
 
@@ -58,4 +68,14 @@ var Handlers = map[string]Handler{
 	"permission.decide":          handlePermissionDecide,
 	"viewer.set":                 handleViewerSet,
 	"viewer.clear":               handleViewerClear,
+	"agent.settings.get":         handleAgentSettingsGet,
+	"agent.settings.update":      handleAgentSettingsUpdate,
+	"agent.skills.list":          handleAgentSkillsList,
+	"agent.skills.store":         handleAgentSkillsStore,
+	"agent.skills.install":       handleAgentSkillsInstall,
+	"agent.skills.uninstall":     handleAgentSkillsUninstall,
+	"agent.legacy_mounts.list":   handleAgentLegacyMountsList,
+	"chat.image.upload":          handleChatImageUpload,
+	"notify.prefs.get":           handleNotifyPrefsGet,
+	"notify.prefs.update":        handleNotifyPrefsUpdate,
 }

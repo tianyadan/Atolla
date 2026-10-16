@@ -29,6 +29,23 @@ func TestExtractNetworkHost(t *testing.T) {
 	}
 }
 
+// 工具名 / 纯命令词不得被当成 hostname（否则 AllowNetwork 会误放行全部 Cursor 工具）。
+func TestExtractNetworkHostRejectsBareWords(t *testing.T) {
+	for _, tool := range []string{"Shell", "StrReplace", "CallDynamicTool"} {
+		a := FromClaude("cursor", 1, 2, tool, map[string]any{"command": "ls", "path": "/tmp/x"}, "/tmp")
+		if got := ExtractNetworkHost(a); got != "" {
+			t.Fatalf("%s: want empty host, got %q (action=%s cmd=%q)", tool, got, a.ActionType, a.Command)
+		}
+		if IsNetworkToolAction(a) {
+			t.Fatalf("%s: must not be network tool action", tool)
+		}
+	}
+	ls := FromClaude("claude", 1, 2, "Bash", map[string]any{"command": "ls"}, "/tmp")
+	if got := ExtractNetworkHost(ls); got != "" {
+		t.Fatalf("Bash ls: want empty host, got %q", got)
+	}
+}
+
 func TestNormalizeAllowlistPatternRejectsPrivate(t *testing.T) {
 	if _, err := NormalizeAllowlistPattern("127.0.0.1"); err == nil {
 		t.Fatal("expected reject loopback")

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { clearToken, fetchAgents, type PublicMirrorAgent } from '../api'
+import { AgentSettingsSheet } from '../components/AgentSettingsSheet'
 import { PageShell } from '../components/PageShell'
+import { SettingsIcon } from '../components/SettingsIcon'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import {
   agentAvatarUrl,
@@ -28,6 +30,8 @@ export function AgentsPage() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchInput, setSearchInput] = useState('')
   const [debouncedQuery, setDebouncedQuery] = useState('')
+  /** Open agent settings sheet for this agent id */
+  const [settingsAgent, setSettingsAgent] = useState<PublicMirrorAgent | null>(null)
 
   /** Reload collapse prefs when switching instance */
   useEffect(() => {
@@ -189,32 +193,45 @@ export function AgentsPage() {
               <ul className="list">
                 {g.agents.map((a) => (
                   <li key={a.agent_id} className="list-item agent-card">
-                    <button
-                      type="button"
-                      className="agent-card-btn"
-                      onClick={() =>
-                        navigate(`${chatBase}/${encodeURIComponent(a.agent_id)}/chat`)
-                      }
-                    >
-                      <img
-                        className="agent-avatar"
-                        src={agentAvatarUrl(a.payload)}
-                        alt=""
-                      />
-                      <div className="agent-card-meta">
-                        <div className="list-title">{a.display_name || a.agent_id}</div>
-                        <div className="list-sub">
-                          <span
-                            className={`status-pill ${
-                              agentStatusLabel(a.status) === '忙碌中' ? 'busy' : 'idle'
-                            }`}
-                          >
-                            {agentStatusLabel(a.status)}
-                          </span>
-                          {a.engine ? <span className="muted"> · {a.engine}</span> : null}
+                    <div className="agent-card-row">
+                      <button
+                        type="button"
+                        className="agent-card-btn"
+                        onClick={() =>
+                          navigate(`${chatBase}/${encodeURIComponent(a.agent_id)}/chat`)
+                        }
+                      >
+                        <img
+                          className="agent-avatar"
+                          src={agentAvatarUrl(a.payload)}
+                          alt=""
+                        />
+                        <div className="agent-card-meta">
+                          <div className="list-title">{a.display_name || a.agent_id}</div>
+                          <div className="list-sub">
+                            <span
+                              className={`status-pill ${
+                                agentBusy(a.status) ? 'busy' : 'idle'
+                              }`}
+                            >
+                              {agentStatusLabel(a.status)}
+                            </span>
+                            {a.engine ? <span className="muted"> · {a.engine}</span> : null}
+                          </div>
                         </div>
-                      </div>
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn agent-settings-btn"
+                        aria-label={`设置 ${a.display_name || a.agent_id}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSettingsAgent(a)
+                        }}
+                      >
+                        <SettingsIcon size={20} />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -222,6 +239,14 @@ export function AgentsPage() {
           </section>
         )
       })}
+
+      <AgentSettingsSheet
+        open={!!settingsAgent}
+        instanceId={instanceId}
+        agentId={settingsAgent?.agent_id ?? ''}
+        agentName={settingsAgent?.display_name ?? undefined}
+        onClose={() => setSettingsAgent(null)}
+      />
     </PageShell>
   )
 }

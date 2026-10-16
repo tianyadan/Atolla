@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"atolla/server/internal/notify"
 	"atolla/server/internal/service"
 	"atolla/server/internal/store"
 )
@@ -56,19 +57,19 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 // AdminAgentsCreate 一键招聘数字员工。
 func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	var body struct {
-		Name            string `json:"name"`
-		Engine          string `json:"engine"`
+		Name                string `json:"name"`
+		Engine              string `json:"engine"`
 		ContextWindowTokens *int64 `json:"context_window_tokens"`
-		BinPath         string `json:"bin_path"`
-		RulesPrompt     string `json:"rules_prompt"`
-		AllowWrite      *bool  `json:"allow_write"`
-		AllowNetwork    *bool  `json:"allow_network"`
-		AllowRm         *bool  `json:"allow_rm"`
-		AllowBrowser    *bool  `json:"allow_browser"`
-		WorkspacePath   string `json:"workspace_path"`
-		ScheduleEnabled bool   `json:"schedule_enabled"`
-		ScheduleCron    string `json:"schedule_cron"`
-		ScheduleLabel   string `json:"schedule_label"`
+		BinPath             string `json:"bin_path"`
+		RulesPrompt         string `json:"rules_prompt"`
+		AllowWrite          *bool  `json:"allow_write"`
+		AllowNetwork        *bool  `json:"allow_network"`
+		AllowRm             *bool  `json:"allow_rm"`
+		AllowBrowser        *bool  `json:"allow_browser"`
+		WorkspacePath       string `json:"workspace_path"`
+		ScheduleEnabled     bool   `json:"schedule_enabled"`
+		ScheduleCron        string `json:"schedule_cron"`
+		ScheduleLabel       string `json:"schedule_label"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -84,7 +85,8 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 		return
 	}
 	if body.ContextWindowTokens != nil && !store.ValidContextWindow(*body.ContextWindowTokens) {
-		c.JSON(http.StatusBadRequest, gin.H{"error":"invalid context_window_tokens"}); return
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid context_window_tokens"})
+		return
 	}
 	ws := strings.TrimSpace(body.WorkspacePath)
 	se := body.ScheduleEnabled
@@ -237,7 +239,8 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	if v, ok := body["context_window_tokens"]; ok {
 		var window int64
 		if json.Unmarshal(v, &window) != nil || !store.ValidContextWindow(window) {
-			c.JSON(http.StatusBadRequest, gin.H{"error":"invalid context_window_tokens"}); return
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid context_window_tokens"})
+			return
 		}
 		in.ContextWindowTokens = &window
 	}
@@ -649,50 +652,48 @@ func (h *Handler) AdminAgentsCommandAudits(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// AdminNotifyPermission 前端在未查看该 agent 时请求 Bark 推送(策略 A)。
+// AdminPCViewer 电脑端对话页心跳。agent_id≤0 表示离开。
+func (h *Handler) AdminPCViewer(c *gin.Context) {
+	var body struct {
+		AgentID int64 `json:"agent_id"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if body.AgentID <= 0 {
+		h.svc.ClearPCViewer()
+	} else {
+		h.svc.SetPCViewer(body.AgentID)
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// AdminNotifyPermission 未停留在该数字人对话时，推送待审批卡片（名称 + 头像 + 固定文案）。
 func (h *Handler) AdminNotifyPermission(c *gin.Context) {
 	var body struct {
-		RequestID  string `json:"request_id"`
-		AgentID    int64  `json:"agent_id"`
-		AgentName  string `json:"agent_name"`
-		ToolName   string `json:"tool_name"`
-		Command    string `json:"command"`
-		Risk       string `json:"risk"`
-		Meaning    string `json:"meaning"`
+		RequestID string `json:"request_id"`
+		AgentID   int64  `json:"agent_id"`
+		AgentName string `json:"agent_name"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.RequestID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request_id required"})
 		return
 	}
-	name := strings.TrimSpace(body.AgentName)
-	if name == "" && body.AgentID > 0 {
-		if a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), body.AgentID); a != nil {
-			name = a.Name
-		}
+	sent := h.svc.PushBarkIfAllowed(body.AgentID, "perm:"+body.RequestID, notify.PermissionPendingText)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "sent": sent})
+}
+
+// AdminNotifyTaskDone 未停留在该数字人对话时，推送任务完成卡片。
+func (h *Handler) AdminNotifyTaskDone(c *gin.Context) {
+	var body struct {
+		DedupeKey string `json:"dedupe_key"`
+		AgentID   int64  `json:"agent_id"`
+		AgentName string `json:"agent_name"`
+		Task      string `json:"task"`
 	}
-	if name == "" {
-		name = "未命名员工"
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.DedupeKey) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "dedupe_key required"})
+		return
 	}
-	cmd := strings.TrimSpace(body.Command)
-	if cmd == "" {
-		cmd = body.ToolName
-	}
-	risk := strings.TrimSpace(body.Risk)
-	if risk == "" {
-		risk = "未知"
-	}
-	riskLabel := map[string]string{"low": "低", "mid": "中", "high": "高", "未知": "未知"}[risk]
-	if riskLabel == "" {
-		riskLabel = risk
-	}
-	msg := "数字员工: " + name + "\n待执行命令: " + cmd + "\n风险等级: " + riskLabel
-	if m := strings.TrimSpace(body.Meaning); m != "" {
-		msg += "\n含义/风险说明: " + m
-	}
-	sent := false
-	if h.svc.Notify != nil {
-		sent = h.svc.Notify.PermissionOnce(body.RequestID, msg)
-	}
+	sent := h.svc.PushBarkIfAllowed(body.AgentID, "done:"+strings.TrimSpace(body.DedupeKey), notify.TaskDoneText(body.Task))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "sent": sent})
 }
 
@@ -875,4 +876,3 @@ func (h *Handler) AdminAgentsContext(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, ctx)
 }
-

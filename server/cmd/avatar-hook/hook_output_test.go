@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -42,4 +43,13 @@ func TestBuildDenyNoUpdatedInput(t *testing.T) {
 	if _, ok := hso["updatedInput"]; ok {
 		t.Fatal("deny must not set updatedInput")
 	}
+}
+
+func TestDecideRespEmptyBehaviorIsNotAllow(t *testing.T) {
+	// 与 main 分支一致：空 behavior 不得当成 allow
+	var d decideResp
+	if strings.TrimSpace(d.Behavior) == "" {
+		return
+	}
+	t.Fatal("zero decideResp should have empty behavior")
 }

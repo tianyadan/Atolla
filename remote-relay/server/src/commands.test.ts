@@ -366,4 +366,73 @@ describe('command queue and long-poll', () => {
       .get(cmdId) as { status: string }
     expect(row.status).toBe('expired')
   })
+
+  it('settings get waits for Mac result via enqueueAndWait', async () => {
+    await register({
+      actions: [...ACTIONS, 'agent.settings.get'],
+    })
+    const token = await siteToken()
+    const u = await unlock(token)
+
+    /** Simulate Mac: wait for queued command, lease, submit result */
+    const macSide = (async () => {
+      let cmdId = ''
+      for (let i = 0; i < 100; i++) {
+        const row = db
+          .prepare(
+            `SELECT id FROM commands WHERE action_type = ? ORDER BY created_at DESC LIMIT 1`,
+          )
+          .get('agent.settings.get') as { id: string } | undefined
+        if (row?.id) {
+          cmdId = row.id
+          break
+        }
+        await new Promise((r) => setTimeout(r, 15))
+      }
+      expect(cmdId).toBeTruthy()
+      const poll = await longPoll(200)
+      expect(poll.body.commands.some((c: { id: string }) => c.id === cmdId)).toBe(true)
+      await postResult(cmdId, {
+        status: 'done',
+        body: {
+          agent_id: '7',
+          name: 'Ada',
+          engine: 'claude',
+          rules_prompt: 'hi',
+          skill_count: 1,
+        },
+      })
+    })()
+
+    // Promise.all starts the HTTP request (supertest thenable) in parallel with Mac
+    const [res] = await Promise.all([
+      request(app)
+        .get(`/api/instances/${INSTANCE_ID}/agents/7/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Instance-Unlock', u),
+      macSide,
+    ])
+
+    expect(res.status).toBe(200)
+    expect(res.body.name).toBe('Ada')
+    expect(res.body.rules_prompt).toBe('hi')
+  })
+
+  it('settings get returns 504 when Mac never replies', async () => {
+    await register({
+      actions: [...ACTIONS, 'agent.settings.get'],
+    })
+    const { enqueueAndWait } = await import('./commands.js')
+    const result = await enqueueAndWait(
+      db,
+      INSTANCE_ID,
+      'agent.settings.get',
+      { agent_id: '1' },
+      80,
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.httpStatus).toBe(504)
+    }
+  })
 })

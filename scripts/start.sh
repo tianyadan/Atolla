@@ -50,7 +50,7 @@ export AVATAR_PERMISSION_WAIT_SEC="${AVATAR_PERMISSION_WAIT_SEC:-120}"
 export AVATAR_REVIEW_TIMEOUT_SEC="${AVATAR_REVIEW_TIMEOUT_SEC:-20}"
 export AVATAR_HOOK_BIN="${AVATAR_HOOK_BIN:-$(pwd)/bin/avatar-hook}"
 # 待授权 Bark 提醒脚本在仓库根 scripts/(当前 cwd 为 server/)
-export AVATAR_NOTIFY_SCRIPT="${AVATAR_NOTIFY_SCRIPT:-$(cd .. && pwd)/scripts/notify-permission.sh}"
+export AVATAR_NOTIFY_SCRIPT="${AVATAR_NOTIFY_SCRIPT:-$(cd .. && pwd)/scripts/notify-bark-card.sh}"
 export AVATAR_BARK_NOTIFY="${AVATAR_BARK_NOTIFY:-1}"
 chmod +x "$AVATAR_NOTIFY_SCRIPT" 2>/dev/null || true
 

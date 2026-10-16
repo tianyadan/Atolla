@@ -48,3 +48,15 @@ export function formatPct(v: number | undefined | null): number {
   if (v == null || !Number.isFinite(v)) return 0
   return Math.max(0, Math.min(100, Math.round(v)))
 }
+
+/** Format host temperature for display; missing → "—" */
+export function formatTempC(v: number | undefined | null): string {
+  if (v == null || !Number.isFinite(v)) return '—'
+  return `${(Math.round(v * 10) / 10).toFixed(1)}℃`
+}
+
+/** Map °C (20–100) to a 0–100 bar width for the instances UI */
+export function tempBarPct(v: number | undefined | null): number {
+  if (v == null || !Number.isFinite(v)) return 0
+  return Math.max(0, Math.min(100, Math.round(((v - 20) / 80) * 100)))
+}

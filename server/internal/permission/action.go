@@ -92,7 +92,7 @@ func (a ToolAction) SideEffecting() bool {
 	}
 }
 
-// FromClaude 把 Claude PreToolUse 转为 ToolAction。
+// FromClaude 把 Claude/Cursor PreToolUse 转为 ToolAction。
 func FromClaude(engine string, convID, agentID int64, tool string, input map[string]any, cwd string) ToolAction {
 	a := ToolAction{
 		Engine: engine, ConversationID: convID, AgentID: agentID,
@@ -102,8 +102,11 @@ func FromClaude(engine string, convID, agentID int64, tool string, input map[str
 	case "Read", "Grep", "Glob", "LS", "NotebookRead":
 		a.ActionType = ActionFileRead
 		a.Command = briefPath(input)
-	case "Write", "Edit", "MultiEdit", "NotebookEdit":
+	case "Write", "Edit", "MultiEdit", "NotebookEdit", "StrReplace":
 		a.ActionType = ActionFileWrite
+		a.Command = briefPath(input)
+	case "Delete":
+		a.ActionType = ActionFileDelete
 		a.Command = briefPath(input)
 	case "WebFetch", "WebSearch":
 		a.ActionType = ActionNetworkRead
@@ -111,12 +114,18 @@ func FromClaude(engine string, convID, agentID int64, tool string, input map[str
 	case "Browser":
 		a.ActionType = ActionNetworkWrite
 		a.Command = tool
-	case "Bash":
+	case "Bash", "Shell":
+		// Cursor 用 Shell；命令在 command（偶见 cmd）
+		a.ToolName = "Bash"
 		a.Command = strAny(input["command"])
+		if a.Command == "" {
+			a.Command = strAny(input["cmd"])
+		}
 		return finishShellAction(a)
 	default:
+		// 未知工具：保留原名，走 REVIEW；禁止把工具名当成 shell/主机名
 		a.ActionType = ActionShellExec
-		a.Command = tool
+		a.Command = ""
 	}
 	return a
 }
