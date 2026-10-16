@@ -21,7 +21,7 @@ func AgentPolicyBlock(a *store.ManagedAgent) string {
 	var b strings.Builder
 	b.WriteString("【数字员工权限策略 — 必须遵守】\n")
 	if a.AllowWrite {
-		b.WriteString("- 写入权限:允许修改/创建文件(仍可能需用户授权弹窗)。\n")
+		b.WriteString("- 写入权限:允许修改/创建文件（Hard Deny / rm / 越界仍拦截）。\n")
 	} else {
 		b.WriteString("- 写入权限:禁止。不得创建/修改/删除文件,不得重定向写入。\n")
 	}

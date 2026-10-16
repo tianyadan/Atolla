@@ -46,10 +46,11 @@ func handleAgentAsk(ec *ExecContext) (any, error) {
 	}
 	q, _ := ec.Payload["question"].(string)
 	q = strings.TrimSpace(q)
-	if q == "" {
+	atts := payloadChatAtts(ec.Payload)
+	if q == "" && len(atts) == 0 {
 		return nil, fmt.Errorf("question required")
 	}
-	if err := ec.Runtime.AskManagedBackground(ec.Context, agentID, q); err != nil {
+	if err := ec.Runtime.AskManagedBackground(ec.Context, agentID, q, atts); err != nil {
 		return nil, err
 	}
 	return map[string]any{"accepted": true, "agent_id": strconv.FormatInt(agentID, 10)}, nil
@@ -166,4 +167,34 @@ func pushAgentsAfterPolicy(ec *ExecContext) error {
 		return nil
 	}
 	return PushAgentsTasksSnapshots(ec)
+}
+
+
+// payloadChatAtts parses optional attachments from ask payload.
+func payloadChatAtts(payload map[string]interface{}) []ChatAtt {
+	raw, ok := payload["attachments"]
+	if !ok || raw == nil {
+		return nil
+	}
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]ChatAtt, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		get := func(k string) string {
+			s, _ := m[k].(string)
+			return strings.TrimSpace(s)
+		}
+		att := ChatAtt{ID: get("id"), URL: get("url"), Mime: get("mime"), Name: get("name")}
+		if att.URL == "" && att.ID == "" {
+			continue
+		}
+		out = append(out, att)
+	}
+	return out
 }

@@ -53,11 +53,11 @@ func (g *Gateway) Evaluate(ctx context.Context, a ToolAction, opt EvaluateOpts) 
 		}
 	}
 	if opt.Policy != nil {
-		if d := applyPolicyAction(a, *opt.Policy); d.Decision == DecisionDeny {
+		d := applyPolicyAction(a, *opt.Policy)
+		if d.Decision == DecisionDeny {
 			return d
 		}
-		// 「允许联网」即用户授权：高德/公开 HTTPS 等非危害性外联直接放行，不再按域名二次弹窗。
-		// 平台白名单仍用于同步本机 CLI 沙箱，不作为第二道人工闸门。
+		// 「允许联网」优先走域名规则（白名单文案/RuleID），再采纳策略 Allow（如写入）。
 		if opt.Policy.AllowNetwork && IsNetworkToolAction(a) {
 			host := ExtractNetworkHost(a)
 			reason := "数字员工已授权联网"
@@ -69,6 +69,9 @@ func (g *Gateway) Evaluate(ctx context.Context, a ToolAction, opt EvaluateOpts) 
 				reason = "数字员工已授权联网（" + host + "）"
 			}
 			return PermissionDecision{Decision: DecisionAllow, Reason: reason, DecidedBy: DecidedByStatic, RuleID: ruleID}
+		}
+		if d.Decision == DecisionAllow {
+			return d
 		}
 	}
 	if IsSafeAllow(a) {
@@ -107,10 +110,23 @@ func applyPolicyAction(a ToolAction, p AgentPolicy) PermissionDecision {
 	if input == nil {
 		input = map[string]interface{}{"command": a.Command}
 	}
+	// 已映射的写/删动作：用规范工具名走策略，避免 Cursor 原名未进 isWriteTool
+	tool := a.ToolName
+	switch a.ActionType {
+	case ActionFileWrite:
+		tool = "Write"
+	case ActionFileDelete:
+		tool = "Delete"
+	case ActionFileRead:
+		tool = "Read"
+	}
 	dec := Decision{Behavior: Ask, Reason: ""}
-	out := ApplyAgentPolicy(a.ToolName, input, dec, p)
+	out := ApplyAgentPolicy(tool, input, dec, p)
 	if out.Behavior == Deny {
 		return PermissionDecision{Decision: DecisionDeny, Reason: out.Reason, DecidedBy: DecidedByStatic, RuleID: "agent_policy"}
+	}
+	if out.Behavior == Allow {
+		return PermissionDecision{Decision: DecisionAllow, Reason: out.Reason, DecidedBy: DecidedByStatic, RuleID: "agent_policy"}
 	}
 	return PermissionDecision{Decision: DecisionReview}
 }

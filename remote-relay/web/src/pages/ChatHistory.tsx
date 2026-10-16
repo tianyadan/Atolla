@@ -15,19 +15,31 @@ import {
   setViewerPresence,
   stopAgent,
   syncMessages,
+  uploadChatImage,
   type PublicMirrorAgent,
   type PublicMirrorMessage,
   type PublicMirrorPermission,
   type PublicMirrorTask,
 } from '../api'
+import { AgentSettingsSheet } from '../components/AgentSettingsSheet'
 import { CmdBlock } from '../components/CmdBlock'
 import { ContextRing } from '../components/ContextRing'
 import { MarkdownBody } from '../components/MarkdownBody'
 import { Modal } from '../components/Modal'
 import { PageShell } from '../components/PageShell'
+import { SettingsIcon } from '../components/SettingsIcon'
 import { byLabel, parseCommandMessage } from '../utils/commandMessage'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import { loadChatDraft, saveChatDraft } from '../utils/draftCache'
+import {
+  appendPendingImages,
+  attachmentsFromPayload,
+  blobToBase64,
+  compressImageFile,
+  MAX_CHAT_IMAGES,
+  revokePendingImages,
+  type PendingImage,
+} from '../utils/chatImages'
 import {
   agentAutoApproveAll,
   agentAutoReview,
@@ -119,6 +131,7 @@ export function ChatHistoryPage() {
   const [planBusy, setPlanBusy] = useState(false)
   const [progressOpen, setProgressOpen] = useState(false)
   const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
   const [autoReviewBusy, setAutoReviewBusy] = useState(false)
   const [approveAllBusy, setApproveAllBusy] = useState(false)
   const [permQueue, setPermQueue] = useState<PublicMirrorPermission[]>([])
@@ -128,6 +141,10 @@ export function ChatHistoryPage() {
   const [awaitingReply, setAwaitingReply] = useState(false)
   const [kbdInset, setKbdInset] = useState(0)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+  const [lightboxSrc, setLightboxSrc] = useState('')
+  /** Album / screenshot picker (no capture) */
+  const albumInputRef = useRef<HTMLInputElement | null>(null)
 
   const threadRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -143,10 +160,23 @@ export function ChatHistoryPage() {
 
   const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
 
-  /** Reload draft when route agent changes */
+  /** Reload draft when route agent changes; clear pending images */
   useEffect(() => {
     setQuestion(loadChatDraft(instanceId, agentId))
+    setPendingImages((prev) => {
+      revokePendingImages(prev)
+      return []
+    })
   }, [instanceId, agentId])
+
+  useEffect(() => {
+    return () => {
+      setPendingImages((prev) => {
+        revokePendingImages(prev)
+        return prev
+      })
+    }
+  }, [])
 
   /** Persist unsaved input so accidental back doesn't lose draft */
   useEffect(() => {
@@ -323,15 +353,22 @@ export function ChatHistoryPage() {
     let cancelled = false
     const beat = () => {
       if (cancelled) return
+      // 锁屏或切到后台视为离开对话，允许 Bark；回到前台再上报
+      if (document.visibilityState === 'hidden') {
+        void clearViewerPresence(instanceId, agentId).catch(() => {})
+        return
+      }
       void setViewerPresence(instanceId, agentId).catch(() => {
         /* Mac offline: ignore */
       })
     }
     beat()
     const hb = window.setInterval(beat, VIEWER_HEARTBEAT_MS)
+    document.addEventListener('visibilitychange', beat)
     return () => {
       cancelled = true
       window.clearInterval(hb)
+      document.removeEventListener('visibilitychange', beat)
       void clearViewerPresence(instanceId, agentId).catch(() => {
         /* ignore */
       })
@@ -409,31 +446,88 @@ export function ChatHistoryPage() {
     return message ? [message] : []
   }, [activeTask])
 
+  /** Pick images from album / camera */
+  function onPickImages(files: FileList | null) {
+    if (!files?.length) return
+    const { next, overflow } = appendPendingImages(pendingImages, Array.from(files))
+    setPendingImages(next)
+    if (overflow) setError(`最多附带 ${MAX_CHAT_IMAGES} 张图片`)
+  }
+
+  /** Remove one pending preview before send */
+  function onRemovePending(localId: string) {
+    setPendingImages((prev) => {
+      const target = prev.find((p) => p.localId === localId)
+      if (target) revokePendingImages([target])
+      return prev.filter((p) => p.localId !== localId)
+    })
+  }
+
+  /** Compress + upload pending images, then ask with attachments */
+  async function ensureUploaded(items: PendingImage[]) {
+    const out: { id: string; url: string; mime: string; name: string }[] = []
+    for (const it of items) {
+      if (it.uploaded?.url || it.uploaded?.id) {
+        out.push(it.uploaded)
+        continue
+      }
+      setPendingImages((prev) =>
+        prev.map((p) => (p.localId === it.localId ? { ...p, uploading: true, error: '' } : p)),
+      )
+      try {
+        const blob = await compressImageFile(it.file)
+        const b64 = await blobToBase64(blob)
+        const name = (it.file.name || 'mobile.jpg').replace(/\.[^.]+$/, '') + '.jpg'
+        const att = await uploadChatImage(instanceId, agentId, b64, name)
+        setPendingImages((prev) =>
+          prev.map((p) =>
+            p.localId === it.localId ? { ...p, uploading: false, uploaded: att } : p,
+          ),
+        )
+        out.push(att)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '上传失败'
+        setPendingImages((prev) =>
+          prev.map((p) =>
+            p.localId === it.localId ? { ...p, uploading: false, error: msg } : p,
+          ),
+        )
+        throw err
+      }
+    }
+    return out
+  }
+
   /** Send or interrupt — pin to bottom */
   async function onSend() {
     const q = question.trim()
-    if (!q || sending) return
+    if (sending) return
+    if (!q && pendingImages.length === 0) return
     setSending(true)
     setError(null)
     stickToBottomRef.current = true
     awaitSinceRef.current = Date.now()
     setAwaitingReply(true)
-    const optimistic: LocalBubble = {
-      message_id: `local-${Date.now()}`,
-      agent_id: agentId,
-      role: 'user',
-      content: q,
-      payload: {},
-      created_at: Date.now(),
-      synced_at: Date.now(),
-      pending: true,
-    }
-    setMessages((prev) => sortMessages([...prev, optimistic]))
-    setQuestion('')
-    saveChatDraft(instanceId, agentId, '')
+    const optimisticId = `local-${Date.now()}`
     try {
-      await askAgent(instanceId, agentId, q)
-      // Immediate + delayed syncs: ask returns before Mac finishes the reply.
+      const atts = await ensureUploaded(pendingImages)
+      const displayQ = q || (atts.length ? '请查看图片' : '')
+      const optimistic: LocalBubble = {
+        message_id: optimisticId,
+        agent_id: agentId,
+        role: 'user',
+        content: displayQ,
+        payload: atts.length ? { attachments: atts } : {},
+        created_at: Date.now(),
+        synced_at: Date.now(),
+        pending: true,
+      }
+      setMessages((prev) => sortMessages([...prev, optimistic]))
+      setQuestion('')
+      saveChatDraft(instanceId, agentId, '')
+      revokePendingImages(pendingImages)
+      setPendingImages([])
+      await askAgent(instanceId, agentId, q, atts)
       await syncThenRefresh()
       followUpTimersRef.current.forEach((id) => window.clearTimeout(id))
       followUpTimersRef.current = [2_000, 6_000, 12_000].map((ms) =>
@@ -445,7 +539,7 @@ export function ChatHistoryPage() {
         setError(err instanceof Error ? err.message : '发送失败')
         setMessages((prev) =>
           prev.map((m) =>
-            m.message_id === optimistic.message_id ? { ...m, failed: true, pending: false } : m,
+            m.message_id === optimisticId ? { ...m, failed: true, pending: false } : m,
           ),
         )
       }
@@ -578,6 +672,14 @@ export function ChatHistoryPage() {
                 {agentStatusLabel(agent?.status)}
               </span>
             </div>
+            <button
+              type="button"
+              className="icon-btn chat-agent-settings-btn"
+              aria-label="员工设置"
+              onClick={() => setAgentSettingsOpen(true)}
+            >
+              <SettingsIcon size={22} />
+            </button>
           </div>
 
           {taskPlanOn ? (
@@ -701,6 +803,26 @@ export function ChatHistoryPage() {
                 ) : (
                   <p className="bubble-plain">{m.content || ''}</p>
                 )}
+                {(() => {
+                  const imgs = attachmentsFromPayload(m.payload)
+                  if (!imgs.length) return null
+                  return (
+                    <div className="chat-msg-images">
+                      {imgs.map((a, i) =>
+                        a.url ? (
+                          <button
+                            key={a.id || a.url || i}
+                            type="button"
+                            className="chat-msg-img"
+                            onClick={() => setLightboxSrc(a.url)}
+                          >
+                            <img src={a.url} alt={a.name || ''} loading="lazy" />
+                          </button>
+                        ) : null,
+                      )}
+                    </div>
+                  )
+                })()}
               </article>
             )
           })}
@@ -744,6 +866,29 @@ export function ChatHistoryPage() {
               {(approveAllOn || autoReviewOn) && <span className="approve-dot" aria-hidden />}
             </button>
           </div>
+          {pendingImages.length > 0 ? (
+            <div className="chat-attach-preview" aria-label="待发送图片">
+              {pendingImages.map((it) => (
+                <div
+                  key={it.localId}
+                  className={`chat-attach-thumb${it.uploading ? ' uploading' : ''}${it.error ? ' err' : ''}`}
+                >
+                  <img src={it.previewUrl} alt="" />
+                  {it.uploading ? <span className="chat-attach-spin" aria-hidden /> : null}
+                  {it.error ? <span className="chat-attach-err" title={it.error}>!</span> : null}
+                  <button
+                    type="button"
+                    className="chat-attach-rm"
+                    aria-label="移除图片"
+                    disabled={sending}
+                    onClick={() => onRemovePending(it.localId)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="chat-composer-input-wrap">
             <textarea
               rows={2}
@@ -753,18 +898,39 @@ export function ChatHistoryPage() {
                 stickToBottomRef.current = true
                 window.setTimeout(() => scrollThreadToBottom('smooth'), 80)
               }}
-              placeholder={busy ? '输入插话内容…' : '输入任务…'}
+              placeholder={busy ? '输入插话内容…' : '输入任务或附图…'}
             />
             <ContextRing usage={ctxUsage} />
           </div>
           <div className="chat-composer-actions">
+            <input
+              ref={albumInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                onPickImages(e.target.files)
+                e.target.value = ''
+              }}
+            />
             <button
               type="button"
               className="btn outline small"
-              disabled={!question}
+              disabled={sending || pendingImages.length >= MAX_CHAT_IMAGES}
+              onClick={() => albumInputRef.current?.click()}
+            >
+              图片
+            </button>
+            <button
+              type="button"
+              className="btn outline small"
+              disabled={!question && pendingImages.length === 0}
               onClick={() => {
                 setQuestion('')
                 saveChatDraft(instanceId, agentId, '')
+                revokePendingImages(pendingImages)
+                setPendingImages([])
               }}
             >
               清空
@@ -772,7 +938,7 @@ export function ChatHistoryPage() {
             <button
               type="button"
               className="btn primary"
-              disabled={sending || !question.trim()}
+              disabled={sending || (!question.trim() && pendingImages.length === 0)}
               onClick={() => void onSend()}
             >
               {sending ? '发送中…' : busy ? '插话' : '发送'}
@@ -927,6 +1093,34 @@ export function ChatHistoryPage() {
           <p className="muted">暂无进行中的任务</p>
         )}
       </Modal>
+
+      <AgentSettingsSheet
+        open={agentSettingsOpen}
+        instanceId={instanceId}
+        agentId={agentId}
+        agentName={agent?.display_name ?? undefined}
+        onClose={() => setAgentSettingsOpen(false)}
+      />
+
+      {lightboxSrc ? (
+        <div
+          className="chat-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label="图片预览"
+          onClick={() => setLightboxSrc('')}
+        >
+          <button
+            type="button"
+            className="chat-lightbox-close"
+            aria-label="关闭"
+            onClick={() => setLightboxSrc('')}
+          >
+            ×
+          </button>
+          <img src={lightboxSrc} alt="" onClick={(e) => e.stopPropagation()} />
+        </div>
+      ) : null}
     </PageShell>
   )
 }

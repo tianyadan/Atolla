@@ -34,6 +34,14 @@ func TestApplyAgentPolicyDenyWrite(t *testing.T) {
 	}
 }
 
+func TestApplyAgentPolicyAllowWrite(t *testing.T) {
+	p := AgentPolicy{AllowWrite: true, AllowNetwork: false, AllowRm: false}
+	d := ApplyAgentPolicy("Write", map[string]interface{}{"file_path": "/ws/a.go"}, Decision{Behavior: Ask, Reason: ""}, p)
+	if d.Behavior != Allow {
+		t.Fatalf("want allow write, got %v %s", d.Behavior, d.Reason)
+	}
+}
+
 func TestApplyAgentPolicyWorkspace(t *testing.T) {
 	p := AgentPolicy{AllowWrite: true, AllowNetwork: true, AllowRm: true, WorkspacePath: "/Users/t/ws"}
 	d := ApplyAgentPolicy("Read", map[string]interface{}{"file_path": "/etc/passwd"}, Decision{Behavior: Allow, Reason: ""}, p)

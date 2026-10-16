@@ -11,9 +11,9 @@ export function agentBusy(status: string | null | undefined): boolean {
   )
 }
 
-/** 空闲 / 忙碌中 */
+/** 闲 / 忙（移动端状态 pill 宜短） */
 export function agentStatusLabel(status: string | null | undefined): string {
-  return agentBusy(status) ? '忙碌中' : '空闲'
+  return agentBusy(status) ? '忙' : '闲'
 }
 
 /** Default avatar (same strategy as PC) */

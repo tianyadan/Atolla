@@ -1,13 +1,100 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { clearToken, fetchVersion } from '../api'
+import {
+  clearToken,
+  fetchInstances,
+  fetchNotifyPrefs,
+  fetchVersion,
+  hasUnlockToken,
+  updateNotifyPrefs,
+  type NotifyPrefs,
+  type PublicInstance,
+} from '../api'
 import { PageShell } from '../components/PageShell'
 
-/** Site settings: version + changelog entry */
+/** 一台已解锁电脑上的两条 Bark 开关 */
+function NotifyInstanceCard({ inst }: { inst: PublicInstance }) {
+  const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const next = await fetchNotifyPrefs(inst.instance_id)
+        if (!cancelled) setPrefs(next)
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : '加载通知设置失败')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [inst.instance_id])
+
+  /** 改一条开关并立刻写回这台电脑 */
+  async function toggle(key: keyof NotifyPrefs, next: boolean) {
+    if (!prefs || busy) return
+    const prev = prefs
+    const body = { ...prefs, [key]: next }
+    setPrefs(body)
+    setBusy(true)
+    setErr(null)
+    try {
+      setPrefs(await updateNotifyPrefs(inst.instance_id, body))
+    } catch (e) {
+      setPrefs(prev)
+      setErr(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="settings-block">
+      <div className="settings-block-title">{inst.display_name || inst.instance_id}</div>
+      {err ? <p className="error-banner">{err}</p> : null}
+      <label className="settings-row settings-toggle-row">
+        <span>
+          <span className="settings-label">完成通知</span>
+          <span className="settings-hint">任务结束且两端都没看对话时推送</span>
+        </span>
+        <span className={`settings-switch${busy ? ' busy' : ''}`}>
+          <input
+            type="checkbox"
+            checked={!!prefs?.task_done}
+            disabled={busy || !prefs}
+            onChange={(e) => void toggle('task_done', e.target.checked)}
+          />
+          <span />
+        </span>
+      </label>
+      <label className="settings-row settings-toggle-row">
+        <span>
+          <span className="settings-label">命令审批通知</span>
+          <span className="settings-hint">有命令待审批且两端都没看对话时推送</span>
+        </span>
+        <span className={`settings-switch${busy ? ' busy' : ''}`}>
+          <input
+            type="checkbox"
+            checked={!!prefs?.permission}
+            disabled={busy || !prefs}
+            onChange={(e) => void toggle('permission', e.target.checked)}
+          />
+          <span />
+        </span>
+      </label>
+    </div>
+  )
+}
+
+/** Site settings: version + Bark 通知开关 + changelog entry */
 export function SettingsPage() {
   const navigate = useNavigate()
   const [version, setVersion] = useState<string>('…')
   const [error, setError] = useState<string | null>(null)
+  const [instances, setInstances] = useState<PublicInstance[]>([])
 
   useEffect(() => {
     void (async () => {
@@ -27,6 +114,22 @@ export function SettingsPage() {
     })()
   }, [navigate])
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        setInstances(await fetchInstances())
+      } catch (err) {
+        const status = (err as { status?: number })?.status
+        if (status === 401) {
+          clearToken()
+          navigate('/login', { replace: true })
+        }
+      }
+    })()
+  }, [navigate])
+
+  const unlocked = instances.filter((inst) => hasUnlockToken(inst.instance_id))
+
   return (
     <PageShell title="设置" backTo="/instances">
       {error ? <p className="error-banner">{error}</p> : null}
@@ -36,6 +139,15 @@ export function SettingsPage() {
           <span className="settings-value">{version}</span>
         </div>
       </div>
+      <h2 className="settings-section-title">通知</h2>
+      <p className="settings-section-hint">与电脑端「设置 · 通知」同一开关。离开对话后是否推送到手机。</p>
+      {unlocked.length === 0 ? (
+        <div className="settings-block">
+          <p className="settings-hint">请先进入一台电脑，再回来开关通知。</p>
+        </div>
+      ) : (
+        unlocked.map((inst) => <NotifyInstanceCard key={inst.instance_id} inst={inst} />)
+      )}
       <ul className="list settings-menu">
         <li className="list-item">
           <Link to="/settings/changelog" className="list-link">

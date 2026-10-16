@@ -62,14 +62,38 @@ func hostFromURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
+	// 无 scheme 时仅接受「像域名/IP」的串，避免 ls/Shell/StrReplace 被当成 host
 	if !strings.Contains(raw, "://") {
+		if !looksLikeHostname(raw) {
+			return ""
+		}
 		raw = "https://" + raw
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
 		return ""
 	}
-	return strings.ToLower(strings.TrimSpace(u.Hostname()))
+	h := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if !looksLikeHostname(h) {
+		return ""
+	}
+	return h
+}
+
+// looksLikeHostname 拒绝纯单词工具名/命令（shell、ls、strreplace）。
+func looksLikeHostname(h string) bool {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if h == "" || strings.ContainsAny(h, " /\\") {
+		return false
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return true
+	}
+	// 至少含一个点（example.com）或显式 localhost
+	if h == "localhost" {
+		return true
+	}
+	return strings.Contains(h, ".")
 }
 
 // HostMatchesAllowlist checks exact host or *.domain wildcards.

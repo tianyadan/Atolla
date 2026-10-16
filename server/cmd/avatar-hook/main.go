@@ -95,9 +95,19 @@ func main() {
 	defer resp.Body.Close()
 
 	var d decideResp
-	_ = json.NewDecoder(resp.Body).Decode(&d)
-	if d.Behavior == "allow" {
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil || strings.TrimSpace(d.Behavior) == "" {
+		// 空/非法响应：不表态，交给引擎默认策略（禁止静默「未获授权」）
+		emitEmpty()
+		return
+	}
+	behavior := strings.ToLower(strings.TrimSpace(d.Behavior))
+	if behavior == "allow" {
 		_ = json.NewEncoder(os.Stdout).Encode(buildHookOutput("allow", d.Reason, in.ToolName, in.ToolInput))
+		return
+	}
+	if behavior != "deny" {
+		// 非 allow/deny（例如未来 ask）：不表态，避免误拒
+		emitEmpty()
 		return
 	}
 	reason := d.Reason

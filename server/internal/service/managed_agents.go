@@ -10,10 +10,12 @@ import (
 
 	"atolla/server/internal/permission"
 	"atolla/server/internal/store"
+
+	"atolla/server/internal/remotebridge"
 )
 
-// AskManagedBackground validates the agent then runs AskManaged on a detached goroutine (remote-relay).
-func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string) error {
+// AskManagedBackground validates the agent then runs AskManagedWith on a detached goroutine (remote-relay).
+func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt) error {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return err
@@ -25,12 +27,16 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		return err
 	}
 	q := strings.TrimSpace(question)
-	if q == "" {
+	chatAtts := chatAttsFromBridge(atts)
+	if q == "" && len(chatAtts) == 0 {
 		return fmt.Errorf("question required")
+	}
+	if q == "" {
+		q = "请查看图片"
 	}
 	go func() {
 		bg := context.Background()
-		_, askErr := s.AskManaged(bg, agentID, q, nil)
+		_, askErr := s.AskManagedWith(bg, agentID, q, chatAtts, nil)
 		if askErr != nil {
 			log.Printf("remotebridge agent.ask agent=%d: %v", agentID, askErr)
 		}
@@ -40,6 +46,26 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		}
 	}()
 	return nil
+}
+
+// SaveChatImageFromBytes implements remotebridge.AgentRuntime for mobile upload RPC.
+func (s *Service) SaveChatImageFromBytes(ctx context.Context, raw []byte, filename string) (*remotebridge.ChatAtt, error) {
+	att, err := s.SaveChatImage(ctx, raw, filename)
+	if err != nil {
+		return nil, err
+	}
+	return &remotebridge.ChatAtt{ID: att.ID, URL: att.URL, Mime: att.Mime, Name: att.Name}, nil
+}
+
+func chatAttsFromBridge(atts []remotebridge.ChatAtt) []ChatAttachment {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]ChatAttachment, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, ChatAttachment{ID: a.ID, URL: a.URL, Mime: a.Mime, Name: a.Name})
+	}
+	return NormalizeChatAttachments(out)
 }
 
 // AskManaged 管理台数字员工一轮对话;onEvent 推送 SSE 事件(chunk/invoke_*/…)。可被 StopManaged 取消。
@@ -76,6 +102,9 @@ func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question st
 		bindMainConv: true,
 		attachments:  NormalizeChatAttachments(atts),
 	}, onEvent)
+	if askErr == nil && msg != nil {
+		s.notifyTaskDone(agentID, question, fmt.Sprintf("%d-%d", agentID, msg.ID))
+	}
 	// Push mirror after PC/SSE ask so mobile chat catches up without waiting for next poll.
 	if s.RemoteBridge != nil {
 		s.RemoteBridge.PushAgentMessagesSnapshot(agentID)

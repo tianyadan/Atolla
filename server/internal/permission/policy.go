@@ -35,19 +35,28 @@ func ApplyAgentPolicy(tool string, input map[string]interface{}, dec Decision, p
 	if !p.AllowRm && looksLikeRm(tool, cmd) {
 		return Decision{Behavior: Deny, Reason: "数字员工策略禁止 rm 操作"}
 	}
-	if !p.AllowWrite && isWriteTool(tool, cmd, input) {
-		return Decision{Behavior: Deny, Reason: "数字员工策略禁止写入"}
+	// Delete 工具：未开 AllowRm 时拒绝（与 rm 策略一致）
+	if tool == "Delete" && !p.AllowRm {
+		return Decision{Behavior: Deny, Reason: "数字员工策略禁止 rm 操作"}
 	}
-	if !p.AllowNetwork && isNetworkTool(tool, cmd) {
-		return Decision{Behavior: Deny, Reason: "数字员工策略禁止联网"}
-	}
+	// 工作区边界优先于写入放行，避免 AllowWrite 误放行越界路径
 	if ws := strings.TrimSpace(p.WorkspacePath); ws != "" {
 		if path := toolPath(tool, input); path != "" && !underRoot(path, ws) {
 			return Decision{Behavior: Deny, Reason: "越出绑定工作区:" + path}
 		}
-		if tool == "Bash" && cmdHasPathOutside(cmd, ws) {
+		if (tool == "Bash" || tool == "Shell") && cmdHasPathOutside(cmd, ws) {
 			return Decision{Behavior: Deny, Reason: "命令路径越出绑定工作区"}
 		}
+	}
+	if isWriteTool(tool, cmd, input) {
+		if !p.AllowWrite {
+			return Decision{Behavior: Deny, Reason: "数字员工策略禁止写入"}
+		}
+		// 策略已授权写入：直接放行（Hard Deny / rm 已在上方拦截）
+		return Decision{Behavior: Allow, Reason: "数字员工已授权写入"}
+	}
+	if !p.AllowNetwork && isNetworkTool(tool, cmd) {
+		return Decision{Behavior: Deny, Reason: "数字员工策略禁止联网"}
 	}
 	return dec
 }

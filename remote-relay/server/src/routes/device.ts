@@ -43,6 +43,7 @@ const hostMetaSchema = z
     cpu_pct: z.number().optional(),
     mem_pct: z.number().optional(),
     disk_pct: z.number().optional(),
+    temp_c: z.number().optional(),
   })
   .optional()
 

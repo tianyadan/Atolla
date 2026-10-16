@@ -63,6 +63,10 @@ type Service struct {
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
 
+	pcViewMu    sync.Mutex
+	pcViewAgent int64
+	pcViewAt    time.Time
+
 	cloneJobMap    *sync.Map
 	compactPending *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
 }
@@ -231,6 +235,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	req.Meaning = meaning
 	req.Risk = risk
 	req.Action = action
+	s.notifyPermissionPending(lookupID, req.ID)
 	out := s.Perms.Wait(ctx, req.ID)
 	hby := "human"
 	decision := "allow"

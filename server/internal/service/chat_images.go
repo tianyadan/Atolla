@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,4 +214,84 @@ func NormalizeChatAttachments(in []ChatAttachment) []ChatAttachment {
 		}
 	}
 	return out
+}
+
+const chatImageLifecycleRuleID = "atolla-chat-images-7d"
+
+// chatImageOSSPrefix returns the object key prefix used for chat uploads.
+func (s *Service) chatImageOSSPrefix() string {
+	prefix := strings.Trim(s.Cfg.OSSPrefix, "/")
+	if prefix != "" {
+		return prefix + "/chat/"
+	}
+	return "chat/"
+}
+
+// EnsureChatImageOSSLifecycle merges a 7-day expiration rule for chat/ prefix.
+// Best-effort: logs and returns on permission / API errors without failing boot.
+func (s *Service) EnsureChatImageOSSLifecycle() {
+	if s == nil || !s.Cfg.OSSConfigured() {
+		return
+	}
+	client, err := oss.New(s.Cfg.OSSEndpoint, s.Cfg.OSSAccessKeyID, s.Cfg.OSSAccessKeySecret)
+	if err != nil {
+		log.Printf("chat-image OSS lifecycle: client: %v", err)
+		return
+	}
+	prefix := s.chatImageOSSPrefix()
+	days := 7
+	rule := oss.LifecycleRule{
+		ID:     chatImageLifecycleRuleID,
+		Prefix: prefix,
+		Status: "Enabled",
+		Expiration: &oss.LifecycleExpiration{Days: days},
+	}
+	var rules []oss.LifecycleRule
+	existing, gerr := client.GetBucketLifecycle(s.Cfg.OSSBucket)
+	if gerr == nil {
+		for _, r := range existing.Rules {
+			if r.ID == chatImageLifecycleRuleID {
+				continue // replace ours
+			}
+			rules = append(rules, r)
+		}
+	}
+	rules = append(rules, rule)
+	if err := client.SetBucketLifecycle(s.Cfg.OSSBucket, rules); err != nil {
+		log.Printf("chat-image OSS lifecycle: set: %v", err)
+		return
+	}
+	log.Printf("chat-image OSS lifecycle ensured id=%s prefix=%s days=%d", chatImageLifecycleRuleID, prefix, days)
+}
+
+// PurgeLocalChatImagesOlderThan deletes local chat image files older than cutoff.
+func (s *Service) PurgeLocalChatImagesOlderThan(cutoff time.Time) (int, error) {
+	dir := s.ChatImageDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		info, ierr := e.Info()
+		if ierr != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if err := os.Remove(path); err != nil {
+			continue
+		}
+		n++
+	}
+	return n, nil
 }

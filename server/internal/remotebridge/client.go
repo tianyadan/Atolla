@@ -76,7 +76,7 @@ func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) (*Heartbe
 		"actions":          actions,
 	}
 	hm := CollectHostMetrics()
-	body["host"] = map[string]any{
+	hostMap := map[string]any{
 		"os":         hm.OS,
 		"ip":         hm.IP,
 		"uptime_sec": hm.UptimeSec,
@@ -84,6 +84,10 @@ func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) (*Heartbe
 		"mem_pct":    hm.MemPct,
 		"disk_pct":   hm.DiskPct,
 	}
+	if hm.TempC != nil {
+		hostMap["temp_c"] = *hm.TempC
+	}
+	body["host"] = hostMap
 	var out HeartbeatResult
 	if err := c.postJSONDecode(ctx, c.deviceURL("/heartbeat"), c.headers(), body, &out); err != nil {
 		return nil, err

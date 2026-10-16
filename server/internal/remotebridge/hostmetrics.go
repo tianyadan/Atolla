@@ -2,6 +2,7 @@ package remotebridge
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strings"
@@ -11,19 +12,21 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/sensors"
 )
 
 // HostMetrics is reported on heartbeat for the mobile instances UI.
 type HostMetrics struct {
-	OS        string  `json:"os"`
-	IP        string  `json:"ip"`
-	UptimeSec int64   `json:"uptime_sec"`
-	CPUPct    float64 `json:"cpu_pct"`
-	MemPct    float64 `json:"mem_pct"`
-	DiskPct   float64 `json:"disk_pct"`
+	OS        string   `json:"os"`
+	IP        string   `json:"ip"`
+	UptimeSec int64    `json:"uptime_sec"`
+	CPUPct    float64  `json:"cpu_pct"`
+	MemPct    float64  `json:"mem_pct"`
+	DiskPct   float64  `json:"disk_pct"`
+	TempC     *float64 `json:"temp_c,omitempty"` // optional host temperature °C
 }
 
-// CollectHostMetrics gathers OS / IP / uptime / CPU / memory / disk for relay heartbeat.
+// CollectHostMetrics gathers OS / IP / uptime / CPU / memory / disk / temp for relay heartbeat.
 func CollectHostMetrics() HostMetrics {
 	m := HostMetrics{
 		OS: displayOS(),
@@ -41,7 +44,47 @@ func CollectHostMetrics() HostMetrics {
 	if usage, err := disk.Usage("/"); err == nil {
 		m.DiskPct = clampPct(usage.UsedPercent)
 	}
+	if stats, err := sensors.SensorsTemperatures(); err == nil {
+		if t, ok := pickHostTempC(stats); ok {
+			m.TempC = &t
+		}
+	}
 	return m
+}
+
+// pickHostTempC selects a representative °C: prefer CPU/package-like sensors, else max valid.
+func pickHostTempC(stats []sensors.TemperatureStat) (float64, bool) {
+	const minT, maxT = 5.0, 120.0
+	var preferred, anyValid []float64
+	for _, s := range stats {
+		t := s.Temperature
+		if math.IsNaN(t) || math.IsInf(t, 0) || t < minT || t > maxT {
+			continue
+		}
+		anyValid = append(anyValid, t)
+		key := strings.ToLower(s.SensorKey)
+		if strings.Contains(key, "cpu") ||
+			strings.Contains(key, "package") ||
+			strings.Contains(key, "tdie") ||
+			strings.Contains(key, "tc0") ||
+			strings.Contains(key, "core") {
+			preferred = append(preferred, t)
+		}
+	}
+	pick := preferred
+	if len(pick) == 0 {
+		pick = anyValid
+	}
+	if len(pick) == 0 {
+		return 0, false
+	}
+	max := pick[0]
+	for _, v := range pick[1:] {
+		if v > max {
+			max = v
+		}
+	}
+	return float64(int(max*10+0.5)) / 10, true
 }
 
 func displayOS() string {

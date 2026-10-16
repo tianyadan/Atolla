@@ -15,6 +15,16 @@ export const KNOWN_ACTIONS = [
   'permission.decide',
   'viewer.set',
   'viewer.clear',
+  'agent.settings.get',
+  'agent.settings.update',
+  'agent.skills.list',
+  'agent.skills.store',
+  'agent.skills.install',
+  'agent.skills.uninstall',
+  'agent.legacy_mounts.list',
+  'chat.image.upload',
+  'notify.prefs.get',
+  'notify.prefs.update',
 ] as const
 
 export type KnownAction = (typeof KNOWN_ACTIONS)[number]
@@ -33,4 +43,14 @@ export const V1_EXECUTABLE = new Set<string>([
   'permission.decide',
   'viewer.set',
   'viewer.clear',
+  'agent.settings.get',
+  'agent.settings.update',
+  'agent.skills.list',
+  'agent.skills.store',
+  'agent.skills.install',
+  'agent.skills.uninstall',
+  'agent.legacy_mounts.list',
+  'chat.image.upload',
+  'notify.prefs.get',
+  'notify.prefs.update',
 ])
