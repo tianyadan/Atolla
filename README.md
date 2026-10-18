@@ -31,6 +31,22 @@ Go backend + React admin UI + MySQL. Agents work in authorized workspaces with t
 
 交互图：[docs/architecture/atolla-architecture.html](docs/architecture/atolla-architecture.html)
 
+### 提问数据流
+
+浏览器 `POST /api/question` 或管理端 `POST /api/admin/agents/:id/ask`，Gin 用 `text/event-stream` 回写。员工提问先占住该员工（`TryAcquireOccupancy`），再进 `askManagedCore`。引擎在 `invoke.go` 按 `claude` / `codex` / 其它 CLI 分发：Claude 走 `claude -p` 流式 JSON，Codex 走 `codex exec --json`，Cursor Agent 走 `agent -p`。回复写入 MySQL `messages`，成功后 Mac 桥把该员工消息快照推到 Remote Relay。上下文优先用引擎自己的 session resume，不再把整段平台历史塞进提示词。
+
+### 工具授权
+
+引擎的 PreToolUse 调 `avatar-hook`。hook `POST /api/permissions/request`，`HandlePermissionRequest` 分类后要么自动放行，要么等管理端裁决。裁决结果从 hook 的 stdout 回到 CLI。压缩事件走同一条 hook，用来同步清平台对话。
+
+### 项目协作
+
+`POST /api/admin/workflows/:id/runs` 调用 `StartWorkflowRun`。定义存在 MySQL，图在进程内的 `WorkflowEngine` 里异步跑。节点类型是 `agent`、`parallel`、`merge`、`condition`、`human_review`/`review`、`end`。启动前查占用；冲突员工默认拒绝启动，`forceTakeover` 才会先打断。协作节点用 `AskManagedIsolated`，不改员工主会话。
+
+### 管理端配置面
+
+这些接口都挂在 JWT 管理路由上，不进上面的主链路：人才市场聘用、技能安装、员工数据库源、服务器源、browser-use 安装检查。外部进度上报是公开的 `POST/GET /api/agents/tasks`。
+
 ## Layout
 
 ```
