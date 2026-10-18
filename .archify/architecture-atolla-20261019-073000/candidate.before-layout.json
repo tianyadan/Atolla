@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Atolla 系统架构",
+    "locale": "zh-CN",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "output": "docs/architecture/atolla-architecture.html",
+    "repository": {
+      "url": "git@github.com:tianyadan/Atolla.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "09b29770340c436a22e3f5cdcfac91c1b766be26"
+    }
+  },
+  "components": [
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "管理端与首页",
+      "sublabel": "React · Vite",
+      "pos": [40, 168],
+      "size": [168, 72],
+      "sources": [
+        { "path": "web/src/main.jsx", "line": 1, "end_line": 14 },
+        { "path": "web/vite.config.js", "line": 5, "end_line": 26 }
+      ]
+    },
+    {
+      "id": "phone",
+      "type": "frontend",
+      "label": "手机只读端",
+      "sublabel": "remote-relay/web",
+      "pos": [1100, 168],
+      "size": [130, 72],
+      "sources": [
+        { "path": "remote-relay/web/src/main.tsx", "line": 1, "end_line": 14 }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Atolla API",
+      "sublabel": "Go · Gin :8080",
+      "pos": [300, 168],
+      "size": [188, 76],
+      "sources": [
+        { "path": "server/main.go", "line": 15, "end_line": 34 },
+        { "path": "server/internal/handler/handler.go", "line": 36, "end_line": 65 },
+        { "path": "server/internal/handler/handler.go", "line": 248, "end_line": 274 }
+      ]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL",
+      "sublabel": "colleague_avatar",
+      "pos": [300, 360],
+      "size": [188, 68],
+      "sources": [
+        { "path": "db/schema.sql", "line": 11, "end_line": 31 },
+        { "path": "server/internal/store/store.go", "line": 49, "end_line": 64 }
+      ]
+    },
+    {
+      "id": "engines",
+      "type": "external",
+      "label": "引擎 CLI",
+      "sublabel": "claude / codex / agent",
+      "pos": [580, 48],
+      "size": [196, 68],
+      "sources": [
+        { "path": "server/internal/agent/agent.go", "line": 204, "end_line": 243 }
+      ]
+    },
+    {
+      "id": "hook",
+      "type": "security",
+      "label": "avatar-hook",
+      "sublabel": "PreToolUse",
+      "pos": [580, 248],
+      "size": [196, 68],
+      "sources": [
+        { "path": "server/cmd/avatar-hook/main.go", "line": 1, "end_line": 6 },
+        { "path": "server/cmd/avatar-hook/main.go", "line": 70, "end_line": 90 },
+        { "path": "server/internal/handler/handler.go", "line": 204, "end_line": 206 }
+      ]
+    },
+    {
+      "id": "relay",
+      "type": "backend",
+      "label": "Remote Relay",
+      "sublabel": "Node · HTTP",
+      "pos": [820, 168],
+      "size": [188, 76],
+      "sources": [
+        { "path": "server/internal/remotebridge/bridge.go", "line": 27, "end_line": 27 },
+        { "path": "server/internal/remotebridge/client.go", "line": 106, "end_line": 111 },
+        { "path": "server/internal/remotebridge/bridge.go", "line": 286, "end_line": 294 }
+      ]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "Relay SQLite",
+      "sublabel": "relay.db",
+      "pos": [820, 360],
+      "size": [188, 68],
+      "sources": [
+        { "path": "remote-relay/server/src/db.ts", "line": 13, "end_line": 40 }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "本机 Atolla",
+      "wraps": ["web", "api", "mysql", "engines", "hook"]
+    },
+    {
+      "kind": "region",
+      "label": "远程中继",
+      "wraps": ["relay", "sqlite"]
+    }
+  ],
+  "connections": [
+    { "id": "web-api", "from": "web", "to": "api", "label": "SSE /api", "variant": "emphasis" },
+    { "id": "api-mysql", "from": "api", "to": "mysql", "label": "SQL" },
+    { "id": "api-engines", "from": "api", "to": "engines", "label": "spawn CLI", "fromSide": "top", "toSide": "left" },
+    { "id": "engines-hook", "from": "engines", "to": "hook", "label": "PreToolUse" },
+    { "id": "hook-api", "from": "hook", "to": "api", "label": "权限请求", "fromSide": "left", "toSide": "right" },
+    { "id": "phone-relay", "from": "phone", "to": "relay", "label": "HTTPS", "fromSide": "left", "toSide": "right" },
+    { "id": "api-relay", "from": "api", "to": "relay", "label": "long-poll", "variant": "dashed" },
+    { "id": "relay-sqlite", "from": "relay", "to": "sqlite", "label": "SQLite" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "对话",
+      "items": [
+        "首页与管理端经 Vite 把 /api 转到 Gin",
+        "提问与员工 ask 用 SSE 推流，不是 WebSocket"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "工具授权",
+      "items": [
+        "引擎 PreToolUse 调 avatar-hook",
+        "hook POST /api/permissions/request，由前端裁决"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "远程",
+      "items": [
+        "Mac 桥向 Remote Relay 心跳并 HTTP 长轮询",
+        "中继自己的状态写在 SQLite，业务库是 MySQL"
+      ]
+    }
+  ]
+}

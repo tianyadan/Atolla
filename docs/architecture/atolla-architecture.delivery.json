@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "322ca003-07d6-4851-a187-676b5c4f3a8a",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/.archify/architecture-atolla-20261019-073000/candidate.json",
+  "output": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/docs/architecture/atolla-architecture.html",
+  "specification": {
+    "sha256": "11890e634744c6beafcba4c12d642d5f7d81e9872ee81e0b19755f7a527afa20",
+    "bytes": 5101
+  },
+  "artifact": {
+    "sha256": "d81c83efe025d5449c042ba68aceacd975134cedc04a934b23fd1265a498cba7",
+    "bytes": 824500
+  }
+}

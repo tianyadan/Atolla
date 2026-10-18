@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/.archify/architecture-atolla-20261019-073000/candidate.json",
+    "sha256": "51c992558c2658b8c5f3447c366a8c4ae95613fc7fcf531bcc66d00986dcbc87",
+    "bytes": 6435
+  },
+  "artifact": {
+    "path": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/docs/architecture/atolla-architecture.html",
+    "sha256": "f0e62853a9543978df17ad215b66190c640d48e0b13a2eb6d563d374ed3e1d4d",
+    "bytes": 824710
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/.archify/architecture-atolla-20261019-073000/review-2/atolla-architecture.finalize.json",
+    "summaryReceipt": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/.archify/architecture-atolla-20261019-073000/review-2/atolla-architecture.finalize-summary.json",
+    "browserCheckReceipt": "/Users/tianhaowen/Desktop/code_work_space/colleague-avatar/.archify/architecture-atolla-20261019-073000/review-2/atolla-architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-18T23:30:30.887Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2047,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 3,
+      "routesOverSuggestedBends": 2
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "api-mysql",
+            "from": "api",
+            "to": "mysql",
+            "label": "SQL",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "right": {
+            "id": "hook-api",
+            "from": "hook",
+            "to": "api",
+            "label": "权限请求",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            612,
+            288
+          ],
+          "sharedNode": "api"
+        },
+        {
+          "left": {
+            "id": "api-engines",
+            "from": "api",
+            "to": "engines",
+            "label": "spawn CLI",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "right": {
+            "id": "engines-hook",
+            "from": "engines",
+            "to": "hook",
+            "label": "PreToolUse",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "point": [
+            128,
+            144
+          ],
+          "sharedNode": "engines"
+        },
+        {
+          "left": {
+            "id": "engines-hook",
+            "from": "engines",
+            "to": "hook",
+            "label": "PreToolUse",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "right": {
+            "id": "hook-api",
+            "from": "hook",
+            "to": "api",
+            "label": "权限请求",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            128,
+            288
+          ],
+          "sharedNode": "hook"
+        }
+      ],
+      "detours": [
+        {
+          "relationship": {
+            "id": "api-engines",
+            "from": "api",
+            "to": "engines",
+            "label": "spawn CLI",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "bends": 3,
+          "stretch": 1.073
+        },
+        {
+          "relationship": {
+            "id": "hook-api",
+            "from": "hook",
+            "to": "api",
+            "label": "权限请求",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "bends": 4,
+          "stretch": 1.124
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "api → mysql and hook → api cross next to api: move node mysql or hook so the two reach api from different sides (for example one level with it, one directly above or below it).",
+      "api → engines and engines → hook cross next to engines: move node api or hook so the two reach engines from different sides (for example one level with it, one directly above or below it).",
+      "engines → hook and hook → api cross next to hook: move node engines or api so the two reach hook from different sides (for example one level with it, one directly above or below it).",
+      "api → engines needs 3 bends: move node api or engines so they share a row or column with matching centers, or sit diagonally with a clear corner.",
+      "hook → api needs 4 bends: move node hook or api so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}
