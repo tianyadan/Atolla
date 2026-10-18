@@ -361,6 +361,7 @@ type ConvWithPreview struct {
 }
 
 // TrimIPConversations 保留该 IP 最新的 limit 个会话,更旧的删除(messages 靠外键级联)。
+// 数字员工、访客和项目协作仍在引用的会话不删，避免员工 conversation_id 变成空指针。
 func (s *Store) TrimIPConversations(ctx context.Context, ip string, limit int) error {
 	if limit <= 0 {
 		limit = 20
@@ -368,6 +369,15 @@ func (s *Store) TrimIPConversations(ctx context.Context, ip string, limit int) e
 	_, err := s.db.ExecContext(ctx,
 		`DELETE c FROM conversations c
 		 WHERE c.user_ip = ?
+		   AND (c.agent_id IS NULL OR c.agent_id = 0)
+		   AND c.id NOT IN (
+		     SELECT conversation_id FROM managed_agents
+		     WHERE conversation_id IS NOT NULL AND conversation_id > 0
+		   )
+		   AND c.id NOT IN (
+		     SELECT conversation_id FROM workflow_agent_sessions
+		     WHERE conversation_id IS NOT NULL AND conversation_id > 0
+		   )
 		   AND c.id NOT IN (
 		     SELECT id FROM (
 		       SELECT id FROM conversations
@@ -377,6 +387,16 @@ func (s *Store) TrimIPConversations(ctx context.Context, ip string, limit int) e
 		     ) keep
 		   )`, ip, ip, limit)
 	return err
+}
+
+// ConversationAlive 会话行是否还在。员工指针可能指向已被裁剪删掉的 id。
+func (s *Store) ConversationAlive(ctx context.Context, id int64) (bool, error) {
+	if id <= 0 {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations WHERE id=?`, id).Scan(&n)
+	return n > 0, err
 }
 
 // ConversationsAllIP 返回**全部 IP** 的会话列表(覆盖所有 user_ip),按

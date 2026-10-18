@@ -273,7 +273,13 @@ func (s *Service) EnsureManagedConversation(ctx context.Context, agentID int64) 
 		return 0, err
 	}
 	if a.ConversationID > 0 {
-		return a.ConversationID, nil
+		alive, err := s.Store.ConversationAlive(ctx, a.ConversationID)
+		if err != nil {
+			return 0, err
+		}
+		if alive {
+			return a.ConversationID, nil
+		}
 	}
 	convID, err := s.Store.CreateAgentConversation(ctx, agentID)
 	if err != nil {

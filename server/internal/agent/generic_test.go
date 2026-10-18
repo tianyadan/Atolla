@@ -52,6 +52,38 @@ func TestIsCursorWorkspaceTrustRequired(t *testing.T) {
 	}
 }
 
+func TestCursorAnswerKeepsResultWhenCLIJSONParseFails(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"先说一半"}]},"session_id":"s1"}`,
+		`{"type":"result","subtype":"success","result":"任务已经做完","session_id":"s1","usage":{"inputTokens":3,"outputTokens":1}}`,
+		`SyntaxError: Expected double-quoted property name in JSON at position 1378 (line 1 column 1379)`,
+	}, "\n")
+	text, meta, ok := cursorAnswer(raw)
+	if !ok {
+		t.Fatal("expected recovered answer")
+	}
+	if text != "任务已经做完" {
+		t.Fatalf("text=%q", text)
+	}
+	if meta.SessionID != "s1" || meta.InputTokens != 3 || meta.OutputTokens != 1 {
+		t.Fatalf("meta=%+v", meta)
+	}
+}
+
+func TestCursorAnswerIgnoresPlainSyntaxError(t *testing.T) {
+	_, _, ok := cursorAnswer("SyntaxError: Expected double-quoted property name in JSON at position 1378 (line 1 column 1379)")
+	if ok {
+		t.Fatal("noise alone is not an answer")
+	}
+}
+
+func TestCursorCLIArgsStreamJSON(t *testing.T) {
+	args := CursorCLIArgs("hi", "", "stream-json", false)
+	if !strings.Contains(strings.Join(args, " "), "--output-format stream-json") {
+		t.Fatalf("args=%v", args)
+	}
+}
+
 func TestParseCursorPrintOutputPlain(t *testing.T) {
 	text, meta := ParseCursorPrintOutput("just plain")
 	if text != "just plain" || meta.SessionID != "" {

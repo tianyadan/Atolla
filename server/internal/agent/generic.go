@@ -40,6 +40,9 @@ func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
 		args = append(args, "--trust")
 	}
 	switch mode {
+	case "stream-json":
+		// 流式 JSON：中途已有 assistant/result 行，收尾解析失败时仍能取回正文。
+		args = append(args, "-p", "--output-format", "stream-json")
 	case "json":
 		args = append(args, "-p", "--output-format", "json")
 	case "text":
@@ -77,41 +80,42 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 	}
 
 	start := time.Now()
-	// 优先 JSON：便于解析 session_id（Cursor Agent）
-	out, err := runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "json", trust))
-	if err != nil {
-		// 工作区信任必须先交给用户确认，不能用其它参数组合把同一拒绝重复三遍。
-		if IsCursorWorkspaceTrustRequired(err.Error()) {
-			return "", int(time.Since(start).Milliseconds()), err
+	// 先 stream-json：任务完成后 CLI 常在写出 result 后又因 JSON.parse 失败退出。
+	// 只要 stdout 里已有回复，就不再把这段 SyntaxError 当成整轮失败，也不重跑任务。
+	var lastErr error
+	var out string
+	for _, mode := range []string{"stream-json", "json", "text", "bare"} {
+		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust))
+		if lastErr != nil && IsCursorWorkspaceTrustRequired(lastErr.Error()) {
+			return "", int(time.Since(start).Milliseconds()), lastErr
 		}
-		// 回退：纯文本 -p / 无 -p
-		out2, err2 := runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "text", trust))
-		if err2 != nil {
-			if IsCursorWorkspaceTrustRequired(err2.Error()) {
-				return "", int(time.Since(start).Milliseconds()), err2
+		if text, meta, ok := cursorAnswer(out); ok {
+			text, ms := deliverCursor(text, meta, onChunk, onMeta, start)
+			return text, ms, nil
+		}
+		if lastErr == nil {
+			text, meta := ParseCursorPrintOutput(out)
+			text = stripCursorJSONParseNoise(text)
+			if strings.TrimSpace(text) == "" {
+				text = strings.TrimSpace(out)
 			}
-			out3, err3 := runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "bare", trust))
-			if err3 != nil {
-				return "", int(time.Since(start).Milliseconds()), fmt.Errorf("%v; fallback: %v; %v", err, err2, err3)
-			}
-			out = out3
-		} else {
-			out = out2
+			text, ms := deliverCursor(text, meta, onChunk, onMeta, start)
+			return text, ms, nil
 		}
 	}
+	return "", int(time.Since(start).Milliseconds()), lastErr
+}
 
-	text, meta := ParseCursorPrintOutput(out)
+// deliverCursor 把解析后的正文交给调用方，并回传 session/usage。
+func deliverCursor(text string, meta RunMeta, onChunk func(string), onMeta MetaFn, start time.Time) (string, int) {
 	if onMeta != nil && (meta.SessionID != "" || meta.InputTokens > 0 || meta.OutputTokens > 0) {
 		onMeta(meta)
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
-		text = strings.TrimSpace(out)
-	}
 	if onChunk != nil && text != "" {
 		onChunk(text)
 	}
-	return text, int(time.Since(start).Milliseconds()), nil
+	return text, int(time.Since(start).Milliseconds())
 }
 
 // ParseCursorPrintOutput 解析 agent -p --output-format json 的结果行；非 JSON 则全文当正文。
@@ -170,6 +174,122 @@ func ParseCursorPrintOutput(raw string) (text string, meta RunMeta) {
 	return text, meta
 }
 
+// cursorAnswer 从 Cursor stdout 取出已完成的回复。
+// 进程在写出 result 之后因 JSON.parse 失败退出时，stdout 里仍有这段正文。
+func cursorAnswer(raw string) (string, RunMeta, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", RunMeta{}, false
+	}
+	var meta RunMeta
+	var assistant strings.Builder
+	result := ""
+	sawResult := false
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var m map[string]interface{}
+		if json.Unmarshal([]byte(line), &m) != nil {
+			continue
+		}
+		if sid := ExtractSessionID(m); sid != "" {
+			meta.SessionID = sid
+		}
+		fillCursorUsage(&meta, m)
+		switch strAny(m["type"]) {
+		case "assistant":
+			if t := cursorAssistantText(m); t != "" {
+				if assistant.Len() > 0 {
+					assistant.WriteByte('\n')
+				}
+				assistant.WriteString(t)
+			}
+		case "result", "":
+			if r, ok := m["result"].(string); ok {
+				result = r
+				sawResult = true
+			}
+		}
+	}
+	if sawResult && strings.TrimSpace(result) != "" {
+		return stripCursorJSONParseNoise(result), meta, true
+	}
+	if assistant.Len() > 0 {
+		return stripCursorJSONParseNoise(assistant.String()), meta, true
+	}
+	if sawResult {
+		return "", meta, true
+	}
+	return "", meta, false
+}
+
+// cursorAssistantText 取 stream-json assistant 事件里的文本块。
+func cursorAssistantText(m map[string]interface{}) string {
+	msg, _ := m["message"].(map[string]interface{})
+	if msg == nil {
+		return ""
+	}
+	parts, _ := msg["content"].([]interface{})
+	var b strings.Builder
+	for _, it := range parts {
+		part, _ := it.(map[string]interface{})
+		if part == nil || strAny(part["type"]) != "text" {
+			continue
+		}
+		if t, _ := part["text"].(string); t != "" {
+			b.WriteString(t)
+		}
+	}
+	return b.String()
+}
+
+// fillCursorUsage 从 result.usage 填本轮 token。
+func fillCursorUsage(meta *RunMeta, m map[string]interface{}) {
+	u, _ := m["usage"].(map[string]interface{})
+	if u == nil || meta == nil {
+		return
+	}
+	if n := jsonInt64(u["inputTokens"]); n != 0 {
+		meta.InputTokens = n
+	} else if n := jsonInt64(u["input_tokens"]); n != 0 {
+		meta.InputTokens = n
+	}
+	if n := jsonInt64(u["outputTokens"]); n != 0 {
+		meta.OutputTokens = n
+	} else if n := jsonInt64(u["output_tokens"]); n != 0 {
+		meta.OutputTokens = n
+	}
+	if n := jsonInt64(u["cacheReadTokens"]); n != 0 {
+		meta.CacheRead = n
+	} else if n := jsonInt64(u["cache_read_input_tokens"]); n != 0 {
+		meta.CacheRead = n
+	}
+	if n := jsonInt64(u["cacheWriteTokens"]); n != 0 {
+		meta.CacheWrite = n
+	}
+	meta.UsedTokens = meta.InputTokens + meta.CacheRead
+	meta.Estimated = true
+}
+
+// stripCursorJSONParseNoise 去掉 CLI 收尾时打出的 JSON.parse SyntaxError 行。
+func stripCursorJSONParseNoise(s string) string {
+	lines := strings.Split(s, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if strings.Contains(trim, "Expected double-quoted property name in JSON") {
+			continue
+		}
+		if strings.HasPrefix(trim, "SyntaxError:") && strings.Contains(trim, "JSON") {
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
 func runOnce(ctx context.Context, bin, dir string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	AttachKillable(cmd)
@@ -183,9 +303,13 @@ func runOnce(ctx context.Context, bin, dir string, args []string) (string, error
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
+		}
+		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("%s: %s", bin, msg)
+		// 非 0 退出仍带回 stdout：Cursor 可能已写出 result，随后才在收尾 JSON.parse 失败。
+		return stdout.String(), fmt.Errorf("%s: %s", bin, msg)
 	}
 	s := stdout.String()
 	if strings.TrimSpace(s) == "" {

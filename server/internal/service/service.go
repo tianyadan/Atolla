@@ -169,7 +169,8 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 		NetworkPatterns:  netPatterns,
 	}
 	pd := s.Gateway.Evaluate(ctx, action, opt)
-	summary := summarize(tool, input)
+	// 用归一化后的动作摘要：Cursor 的 Shell 已映射为 Bash，并带上完整 command。
+	summary := summarize(action.ToolName, action.Args)
 	owner, _ := s.Store.ConversationOwner(ctx, convID)
 	by := pd.DecidedBy
 	if pd.Decision == permission.DecisionAllow {
@@ -453,10 +454,15 @@ func (s *Service) explain(ctx context.Context, tool, summary string, roots []str
 }
 
 // summarize 生成给用户看的工具摘要(截断 + 去敏感)。
+// Shell 与 Bash 同等处理：展示 command，缺省再看 cmd，不退回工具名。
 func summarize(tool string, input map[string]interface{}) string {
 	switch tool {
-	case "Bash":
-		return clip(str(input, "command"))
+	case "Bash", "Shell", "bash", "shell":
+		cmd := str(input, "command")
+		if strings.TrimSpace(cmd) == "" {
+			cmd = str(input, "cmd")
+		}
+		return clip(cmd)
 	case "Read", "Grep", "Glob", "LS":
 		if p := str(input, "file_path"); p != "" {
 			return clip(p)

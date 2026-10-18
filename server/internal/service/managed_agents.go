@@ -226,15 +226,10 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 
 	convID := fixedConvID
 	if convID == 0 {
-		convID = a.ConversationID
-		if convID == 0 {
-			var err error
-			convID, err = s.Store.CreateAgentConversation(runCtx, agentID)
-			if err != nil {
-				return nil, err
-			}
-			_ = s.Store.SetManagedAgentConversation(runCtx, agentID, convID)
-			a.ConversationID = convID
+		var err error
+		convID, err = s.ensureLiveAgentConversation(runCtx, a)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -279,17 +274,18 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 			MetaJSON: AttachmentsMetaJSON(atts),
 		}
 		userMsgID, uerr := s.Store.InsertMessage(runCtx, userMsg)
+		if uerr != nil {
+			log.Printf("ask: insert user message failed: %v", uerr)
+			_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "error", uerr.Error(), 0, convID)
+			return nil, uerr
+		}
 		if opts.visitorAudit != nil {
 			opts.visitorAudit.started = time.Now()
-			if uerr != nil {
-				log.Printf("visitor ask: insert user message failed: %v", uerr)
+			logID, aerr := s.Store.BeginVisitorAskLog(runCtx, opts.visitorAudit.VisitorID, convID, agentID, userMsgID, opts.visitorAudit.IP, opts.visitorAudit.UA)
+			if aerr != nil {
+				log.Printf("visitor ask: begin audit failed: %v", aerr)
 			} else {
-				logID, aerr := s.Store.BeginVisitorAskLog(runCtx, opts.visitorAudit.VisitorID, convID, agentID, userMsgID, opts.visitorAudit.IP, opts.visitorAudit.UA)
-				if aerr != nil {
-					log.Printf("visitor ask: begin audit failed: %v", aerr)
-				} else {
-					opts.visitorAudit.logID = logID
-				}
+				opts.visitorAudit.logID = logID
 			}
 		}
 	}
@@ -329,6 +325,29 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
 	return msg, err
+}
+
+// ensureLiveAgentConversation 返回仍存在的主会话。指针指向已删除会话时新建并重新绑定。
+func (s *Service) ensureLiveAgentConversation(ctx context.Context, a *store.ManagedAgent) (int64, error) {
+	if a.ConversationID > 0 {
+		alive, err := s.Store.ConversationAlive(ctx, a.ConversationID)
+		if err != nil {
+			return 0, err
+		}
+		if alive {
+			return a.ConversationID, nil
+		}
+		log.Printf("agent %d conversation %d is missing, opening a new chat", a.ID, a.ConversationID)
+	}
+	convID, err := s.Store.CreateAgentConversation(ctx, a.ID)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.Store.SetManagedAgentConversation(ctx, a.ID, convID); err != nil {
+		return 0, err
+	}
+	a.ConversationID = convID
+	return convID, nil
 }
 
 func statusConvID(bind bool, convID int64) int64 {

@@ -23,6 +23,14 @@ Go backend + React admin UI + MySQL. Agents work in authorized workspaces with t
 | DB | MySQL 8 (Docker, host port `3307`) |
 | Engines | Local CLIs: `claude`, `codex`, Cursor `agent` |
 
+## Architecture
+
+对话和员工提问用 SSE 推流。Mac 到 Remote Relay 是 HTTP 长轮询。代码里没有 WebSocket。
+
+![Atolla 系统架构](docs/architecture/atolla-architecture.png)
+
+交互图：[docs/architecture/atolla-architecture.html](docs/architecture/atolla-architecture.html)
+
 ## Layout
 
 ```
