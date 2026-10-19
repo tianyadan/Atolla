@@ -196,6 +196,30 @@ describe('instance register / heartbeat / revoke', () => {
     expect(ok.status).toBe(200)
   })
 
+  it('rotates an expired instance password when the prior password still matches', async () => {
+    await register()
+    db.prepare(
+      `UPDATE instances SET password_expires_at = ? WHERE instance_id = ?`,
+    ).run(Date.now() - 1000, INSTANCE_ID)
+
+    const expired = await heartbeat(INSTANCE_ID, PASSWORD)
+    expect(expired.status).toBe(401)
+
+    const rotated = await register({ password: 'Xy9zW8' }, { priorPassword: PASSWORD })
+    expect(rotated.status).toBe(200)
+    const ok = await heartbeat(INSTANCE_ID, 'Xy9zW8')
+    expect(ok.status).toBe(200)
+  })
+
+  it('does not throttle password rotation that presents the current password', async () => {
+    await register()
+    for (let i = 0; i < 6; i++) {
+      const next = `Aa11B${i}`
+      const r = await register({ password: next }, { priorPassword: i === 0 ? PASSWORD : `Aa11B${i - 1}` })
+      expect(r.status).toBe(200)
+    }
+  })
+
   it('rejects register takeover without prior instance password', async () => {
     await register()
     const hijack = await request(app)

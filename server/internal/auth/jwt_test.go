@@ -1,8 +1,12 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +25,40 @@ func TestIssueAndParseToken(t *testing.T) {
 	}
 	if user != "tianhaowen" {
 		t.Fatalf("username = %q, want tianhaowen", user)
+	}
+}
+
+// TestIssueTokenPayloadIsValidJSON 防止 JWT 载荷字段名前混入 NUL，导致后续管理接口全部鉴权失败。
+func TestIssueTokenPayloadIsValidJSON(t *testing.T) {
+	tok, err := IssueToken("test-secret", "tianhaowen", time.Hour)
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("JWT segments = %d, want 3", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if bytes.IndexByte(payload, 0) >= 0 {
+		t.Fatalf("JWT payload contains NUL: %q", payload)
+	}
+	if !json.Valid(payload) {
+		t.Fatalf("JWT payload is invalid JSON: %q", payload)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("decode claims: %v", err)
+	}
+	if claims["username"] != "tianhaowen" || claims["sub"] != "tianhaowen" {
+		t.Fatalf("unexpected identity claims: %#v", claims)
+	}
+	iat, iatOK := claims["iat"].(float64)
+	exp, expOK := claims["exp"].(float64)
+	if !iatOK || !expOK || exp <= iat {
+		t.Fatalf("unexpected time claims: iat=%#v exp=%#v", claims["iat"], claims["exp"])
 	}
 }
 

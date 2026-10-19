@@ -157,6 +157,9 @@ export function ChatHistoryPage() {
   /** 本机已点裁决的 request_id，短时忽略镜像回灌，避免弹窗反复出现 */
   const decidedIdsRef = useRef<Set<string>>(new Set())
   const awaitSinceRef = useRef(0)
+  /** 发送前已经在列表里的助手消息，避免把上一轮回复当成这一轮的完成。 */
+  const replySeenRef = useRef<Set<string>>(new Set())
+  const awaitingRef = useRef(false)
 
   const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
 
@@ -237,15 +240,15 @@ export function ChatHistoryPage() {
     }
   }, [])
 
-  /** Clear awaiting when a fresh assistant reply lands */
+  /** 同步给刷新回调：等待回复期间，空闲镜像不能把状态盖回「闲」。 */
+  awaitingRef.current = awaitingReply
+
+  /** 只认发送之后新出现的助手消息。 */
   useEffect(() => {
     if (!awaitingReply) return
-    const since = awaitSinceRef.current
+    const seen = replySeenRef.current
     const hasReply = messages.some(
-      (m) =>
-        m.role === 'assistant' &&
-        !m.pending &&
-        (m.created_at ?? 0) >= since - 8_000,
+      (m) => m.role === 'assistant' && !m.pending && !seen.has(m.message_id),
     )
     if (hasReply) setAwaitingReply(false)
   }, [messages, awaitingReply])
@@ -260,7 +263,14 @@ export function ChatHistoryPage() {
         fetchTasks(instanceId, agentId),
       ])
       const found = agents.find((a) => a.agent_id === agentId) ?? null
-      setAgent(found)
+      setAgent(() => {
+        if (!found) return found
+        // 镜像还是上一轮的 idle 时，本机已发出的消息仍应显示忙碌。
+        if (awaitingRef.current && !agentBusy(found.status)) {
+          return { ...found, status: 'running' }
+        }
+        return found
+      })
       setTasks(taskList)
       if (!olderSeededRef.current) {
         olderSeededRef.current = true
@@ -422,7 +432,7 @@ export function ChatHistoryPage() {
   const taskPlanOn = agentTaskPlanEnabled(agent?.payload)
   const autoReviewOn = agentAutoReview(agent?.payload)
   const approveAllOn = agentAutoApproveAll(agent?.payload)
-  const busy = agentBusy(agent?.status)
+  const busy = agentBusy(agent?.status) || awaitingReply
   const pendingPerm = permQueue[0] ?? null
   const pendingMore = Math.max(0, permQueue.length - 1)
 
@@ -507,7 +517,12 @@ export function ChatHistoryPage() {
     setError(null)
     stickToBottomRef.current = true
     awaitSinceRef.current = Date.now()
+    replySeenRef.current = new Set(
+      messages.filter((m) => m.role === 'assistant' && !m.pending).map((m) => m.message_id),
+    )
+    awaitingRef.current = true
     setAwaitingReply(true)
+    setAgent((prev) => (prev ? { ...prev, status: 'running' } : prev))
     const optimisticId = `local-${Date.now()}`
     try {
       const atts = await ensureUploaded(pendingImages)
@@ -534,6 +549,7 @@ export function ChatHistoryPage() {
         window.setTimeout(() => void syncThenRefresh(), ms),
       )
     } catch (err) {
+      awaitingRef.current = false
       setAwaitingReply(false)
       if (!handleApiError(err)) {
         setError(err instanceof Error ? err.message : '发送失败')

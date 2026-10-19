@@ -89,7 +89,8 @@ func (s *Service) UpdateRemoteRelayConfig(ctx context.Context, patch RemoteRelay
 	if err != nil {
 		return remotebridge.PublicConfig{}, err
 	}
-	s.RemoteBridge.Reload(s.remoteBridgeContext())
+	// 保存连接配置只重载出站循环，不再次注册，避免把中继每分钟 5 次的限额打满。
+	s.RemoteBridge.ReloadWithoutRegister(s.remoteBridgeContext())
 	return s.RemoteBridge.Config.Public(), nil
 }
 
@@ -116,19 +117,33 @@ func (s *Service) RotateRemoteRelayPassword(ctx context.Context) (string, error)
 		prior = cfg.Password
 	}
 	plain := remotebridge.GenerateInstancePassword()
+	// 先把新密码写入文件，再请求中继。注册成功和写盘之间如果进程退出，重启后仍能用这份待定密码对上服务器。
+	if err := s.RemoteBridge.Config.StagePendingPassword(plain); err != nil {
+		return "", err
+	}
 	client := &remotebridge.RelayClient{
 		BaseURL:    cfg.BaseURL,
 		InstanceID: cfg.InstanceID,
 		Password:   plain,
 	}
-	if err := client.Register(ctx, display, remotebridge.RegisteredActions(), prior); err != nil {
+	if err := client.RegisterRetrying(ctx, display, remotebridge.RegisteredActions(), prior); err != nil {
+		if remotebridge.RegisterDidNotCommit(err) {
+			_ = s.RemoteBridge.Config.ClearPendingPassword()
+		}
+		if remotebridge.IsTooManyRequests(err) {
+			return "", fmt.Errorf("中继注册过于频繁，请约 1 分钟后再点一次")
+		}
+		if remotebridge.IsUnauthorized(err) {
+			return "", fmt.Errorf("中继拒绝了本机保存的实例密码（已过期或与服务器不一致）。请先把最新 remote-relay 更新到中继服务器，再点一次轮换")
+		}
 		return "", fmt.Errorf("relay register: %w", err)
 	}
 	if err := s.RemoteBridge.Config.SetPassword(plain); err != nil {
 		return "", err
 	}
-	// 首次生成密码后若已勾选启用，Reload 会真正拉起出站循环
-	s.RemoteBridge.Reload(s.remoteBridgeContext())
+	// 密码已经注册成功，重载循环时不要再打一次注册接口。
+	s.RemoteBridge.ReloadWithoutRegister(s.remoteBridgeContext())
+	s.RemoteBridge.MarkReachable()
 	return plain, nil
 }
 

@@ -24,18 +24,18 @@ const (
 
 // TalentPreset 官方预制人才模板。
 type TalentPreset struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Title       string           `json:"title"`
-	Summary     string           `json:"summary"`
-	Highlights  []string         `json:"highlights"`
-	RulesPrompt string           `json:"rules_prompt"`
-	SkillTags   []TalentSkillTag `json:"skill_tags"`
-	AvatarURL   string           `json:"avatar_url"`
-	DefaultEngine string         `json:"default_engine"`
-	AllowWrite  bool             `json:"allow_write"`
-	AllowNetwork bool            `json:"allow_network"`
-	AllowRm     bool             `json:"allow_rm"`
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Title         string           `json:"title"`
+	Summary       string           `json:"summary"`
+	Highlights    []string         `json:"highlights"`
+	RulesPrompt   string           `json:"rules_prompt"`
+	SkillTags     []TalentSkillTag `json:"skill_tags"`
+	AvatarURL     string           `json:"avatar_url"`
+	DefaultEngine string           `json:"default_engine"`
+	AllowWrite    bool             `json:"allow_write"`
+	AllowNetwork  bool             `json:"allow_network"`
+	AllowRm       bool             `json:"allow_rm"`
 }
 
 // TalentCard 列表/详情返回：模板 + 当前商店解析出的技能。
@@ -50,9 +50,9 @@ func TalentPresets() []TalentPreset {
 	return []TalentPreset{
 		{
 			ID: "product_manager", Name: "林晓晴", Title: "产品经理",
-			Summary: "梳理需求、写 PRD、对齐优先级，擅长把模糊想法变成可落地的迭代计划。",
-			Highlights: []string{"需求拆解与优先级", "PRD / 用户故事", "竞品与调研", "跨角色沟通对齐"},
-			AvatarURL: "/talent-avatars/product_manager.jpg",
+			Summary:       "梳理需求、写 PRD、对齐优先级，擅长把模糊想法变成可落地的迭代计划。",
+			Highlights:    []string{"需求拆解与优先级", "PRD / 用户故事", "竞品与调研", "跨角色沟通对齐"},
+			AvatarURL:     "/talent-avatars/product_manager.jpg",
 			DefaultEngine: "claude", AllowWrite: true, AllowNetwork: true,
 			SkillTags: []TalentSkillTag{TalentTagSearch, TalentTagBrowser},
 			RulesPrompt: `你是资深互联网产品经理「林晓晴」。
@@ -68,9 +68,9 @@ func TalentPresets() []TalentPreset {
 		},
 		{
 			ID: "frontend_engineer", Name: "沈清禾", Title: "前端工程师",
-			Summary: "React/工程化与体验细节并重，能独立完成页面与前端工程问题排查。",
-			Highlights: []string{"React / 工程化", "组件与交互", "浏览器排查", "构建与性能"},
-			AvatarURL: "/talent-avatars/frontend_engineer.jpg",
+			Summary:       "React/工程化与体验细节并重，能独立完成页面与前端工程问题排查。",
+			Highlights:    []string{"React / 工程化", "组件与交互", "浏览器排查", "构建与性能"},
+			AvatarURL:     "/talent-avatars/frontend_engineer.jpg",
 			DefaultEngine: "claude", AllowWrite: true, AllowNetwork: true,
 			SkillTags: []TalentSkillTag{TalentTagCoding, TalentTagShell, TalentTagBrowser, TalentTagSearch},
 			RulesPrompt: `你是资深前端工程师「沈清禾」。
@@ -85,9 +85,9 @@ func TalentPresets() []TalentPreset {
 		},
 		{
 			ID: "java_backend", Name: "陈思语", Title: "Java 后端程序员",
-			Summary: "熟悉 Spring 生态与常见中间件，擅长接口、数据模型与稳定性排查。",
-			Highlights: []string{"Spring / 微服务", "接口与领域建模", "SQL 与数据访问", "稳定性排查"},
-			AvatarURL: "/talent-avatars/java_backend.jpg",
+			Summary:       "熟悉 Spring 生态与常见中间件，擅长接口、数据模型与稳定性排查。",
+			Highlights:    []string{"Spring / 微服务", "接口与领域建模", "SQL 与数据访问", "稳定性排查"},
+			AvatarURL:     "/talent-avatars/java_backend.jpg",
 			DefaultEngine: "claude", AllowWrite: true, AllowNetwork: true,
 			SkillTags: []TalentSkillTag{TalentTagCoding, TalentTagShell, TalentTagDatabase, TalentTagSearch},
 			RulesPrompt: `你是资深 Java 后端工程师「陈思语」。
@@ -102,9 +102,9 @@ func TalentPresets() []TalentPreset {
 		},
 		{
 			ID: "go_backend", Name: "陆景行", Title: "Go 后端程序员",
-			Summary: "偏并发、性能与简洁架构，适合服务端 API、工具链与基础设施相关开发。",
-			Highlights: []string{"Go 服务与并发", "API / CLI", "性能与可维护", "数据访问"},
-			AvatarURL: "/talent-avatars/go_backend.jpg",
+			Summary:       "偏并发、性能与简洁架构，适合服务端 API、工具链与基础设施相关开发。",
+			Highlights:    []string{"Go 服务与并发", "API / CLI", "性能与可维护", "数据访问"},
+			AvatarURL:     "/talent-avatars/go_backend.jpg",
 			DefaultEngine: "claude", AllowWrite: true, AllowNetwork: true,
 			SkillTags: []TalentSkillTag{TalentTagCoding, TalentTagShell, TalentTagDatabase, TalentTagSearch},
 			RulesPrompt: `你是资深 Go 后端工程师「陆景行」。
@@ -119,9 +119,9 @@ func TalentPresets() []TalentPreset {
 		},
 		{
 			ID: "fullstack", Name: "苏晚舟", Title: "全栈开发工程师",
-			Summary: "前后端都能扛，适合端到端小功能交付与联调排障。",
-			Highlights: []string{"端到端交付", "前后端联调", "数据与页面闭环", "快速验证"},
-			AvatarURL: "/talent-avatars/fullstack.jpg",
+			Summary:       "前后端都能扛，适合端到端小功能交付与联调排障。",
+			Highlights:    []string{"端到端交付", "前后端联调", "数据与页面闭环", "快速验证"},
+			AvatarURL:     "/talent-avatars/fullstack.jpg",
 			DefaultEngine: "claude", AllowWrite: true, AllowNetwork: true,
 			SkillTags: []TalentSkillTag{TalentTagCoding, TalentTagShell, TalentTagDatabase, TalentTagBrowser, TalentTagSearch},
 			RulesPrompt: `你是全栈开发工程师「苏晚舟」。
@@ -136,9 +136,9 @@ func TalentPresets() []TalentPreset {
 		},
 		{
 			ID: "ops_engineer", Name: "韩予澈", Title: "运维工程师",
-			Summary: "擅长服务器巡检、发布与故障排查；危险操作受平台硬性拦截与审批约束。",
-			Highlights: []string{"SSH 服务器运维", "巡检与排障", "发布与回滚协助", "可观测与文档"},
-			AvatarURL: "/talent-avatars/ops_engineer.jpg",
+			Summary:       "擅长服务器巡检、发布与故障排查；危险操作受平台硬性拦截与审批约束。",
+			Highlights:    []string{"SSH 服务器运维", "巡检与排障", "发布与回滚协助", "可观测与文档"},
+			AvatarURL:     "/talent-avatars/ops_engineer.jpg",
 			DefaultEngine: "claude", AllowWrite: true, AllowNetwork: true,
 			SkillTags: []TalentSkillTag{TalentTagShell, TalentTagServer, TalentTagDatabase, TalentTagSearch},
 			RulesPrompt: `你是资深运维工程师「韩予澈」。
@@ -275,7 +275,7 @@ func (s *Service) HireTalent(ctx context.Context, in HireTalentInput) (*store.Ma
 	id, err := s.Store.CreateManagedAgent(ctx, store.ManagedAgentInput{
 		Name: name, Engine: engine, ContextWindowTokens: in.ContextWindowTokens,
 		RulesPrompt: card.RulesPrompt,
-		AllowWrite: &aw, AllowNetwork: &an, AllowRm: &ar,
+		AllowWrite:  &aw, AllowNetwork: &an, AllowRm: &ar,
 		WorkspacePath: &ws,
 	})
 	if err != nil {
@@ -293,6 +293,7 @@ func (s *Service) HireTalent(ctx context.Context, in HireTalentInput) (*store.Ma
 	if s.Sched != nil {
 		s.Sched.Reload(ctx)
 	}
+	s.PushAgentsMirrorNow()
 	a, err := s.Store.GetManagedAgent(ctx, id)
 	if err != nil {
 		return nil, err

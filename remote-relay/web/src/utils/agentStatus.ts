@@ -57,11 +57,13 @@ export function groupAgentsByFolder(
   for (const a of agents) {
     const folderId = Number(a.payload?.folder_id ?? 0) || 0
     const folderName = String(a.payload?.folder_name || '').trim()
-    const key = folderId > 0 ? `f:${folderId}` : 'root'
-    const title = folderId > 0 ? folderName || `工作组 ${folderId}` : '未入组'
+    // 工作组已删除时只有 id、没有名字，归回未入组，避免多出一堆「工作组 N」。
+    const grouped = folderId > 0 && folderName.length > 0
+    const key = grouped ? `f:${folderId}` : 'root'
+    const title = grouped ? folderName : '未入组'
     let g = map.get(key)
     if (!g) {
-      g = { key, title, sort: folderId > 0 ? folderId : 0, agents: [] }
+      g = { key, title, sort: grouped ? folderId : 0, agents: [] }
       map.set(key, g)
     }
     g.agents.push(a)
