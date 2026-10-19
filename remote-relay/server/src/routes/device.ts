@@ -1,9 +1,11 @@
+import bcrypt from 'bcryptjs'
 import express, { type Request, type Response, type Router } from 'express'
 import { z } from 'zod'
 import type { RelayDatabase } from '../db.js'
 import type { LoginRateLimiter } from '../auth/rateLimit.js'
 import {
   type InstanceAuthedRequest,
+  getInstanceRow,
   instanceClientIp,
   parseInstanceCredentials,
   recordHeartbeat,
@@ -128,24 +130,34 @@ export function createDeviceRouter(
     const ip = instanceClientIp(req)
     const registerKey = `register:${ip}`
     const now = Date.now()
-    if (registerRateLimiter.isThrottled(registerKey, now)) {
-      res.status(429).json({ error: 'Too many requests' })
-      return
-    }
-    registerRateLimiter.recordAttempt(registerKey, now)
-
     const parsed = registerBodySchema.safeParse(req.body)
     if (!parsed.success) {
       res.status(400).json({ error: 'Invalid register payload' })
       return
     }
+    const prior = parseInstanceCredentials(req)
+    const existing = getInstanceRow(db, parsed.data.instance_id)
+    // 旧密码正确时是本机在轮换，不占用「失败次数」限额。
+    const priorMatches = Boolean(
+      existing?.password_hash &&
+        prior &&
+        prior.instanceId === parsed.data.instance_id &&
+        bcrypt.compareSync(prior.password, existing.password_hash),
+    )
+    if (!priorMatches && registerRateLimiter.isThrottled(registerKey, now)) {
+      res.status(429).json({ error: 'Too many requests' })
+      return
+    }
     const bootstrapHeader = req.headers['x-relay-bootstrap-token']
     const result = registerInstance(db, parsed.data, {
       ip,
-      priorCredentials: parseInstanceCredentials(req),
+      priorCredentials: prior,
       bootstrapToken: typeof bootstrapHeader === 'string' ? bootstrapHeader : undefined,
     })
     if (!result.ok) {
+      if (result.status === 401 || result.status === 403) {
+        registerRateLimiter.recordAttempt(registerKey, now)
+      }
       res.status(result.status).json({ error: result.error })
       return
     }

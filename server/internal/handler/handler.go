@@ -210,6 +210,10 @@ func (h *Handler) Register(r *gin.Engine) {
 		perm.POST("/compact-sync", h.PermissionCompactSync)
 	}
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	// 路由自检：不走业务逻辑，只用来确认 POST 方法树还在。
+	r.POST("/internal/route-canary", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	// Gin 1.12 的路由索引会指到临时内存，必须在开始接请求前复制走。
+	stabilizeRouteTree(r)
 }
 
 // CreateConversation 新建会话。body: {mode: single|chat}

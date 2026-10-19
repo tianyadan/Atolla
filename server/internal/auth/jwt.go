@@ -9,22 +9,15 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// adminClaims 管理员 JWT 载荷。
-type adminClaims struct {
-	Username string `json:"username"`
-	jwt.RegisteredClaims
-}
-
 // IssueToken 签发管理员 JWT。
 func IssueToken(secret, username string, ttl time.Duration) (string, error) {
 	now := time.Now()
-	claims := adminClaims{
-		Username: username,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   username,
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
-		},
+	// 使用 MapClaims 避开本次故障中已出现 NUL 字节的自定义 Claims 结构体序列化路径。
+	claims := jwt.MapClaims{
+		"username": username,
+		"sub":      username,
+		"iat":      now.Unix(),
+		"exp":      now.Add(ttl).Unix(),
 	}
 	t := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return t.SignedString([]byte(secret))
@@ -32,7 +25,7 @@ func IssueToken(secret, username string, ttl time.Duration) (string, error) {
 
 // ParseToken 校验并解析管理员 JWT,返回用户名。
 func ParseToken(secret, tokenStr string) (string, error) {
-	t, err := jwt.ParseWithClaims(tokenStr, &adminClaims{}, func(t *jwt.Token) (interface{}, error) {
+	t, err := jwt.ParseWithClaims(tokenStr, jwt.MapClaims{}, func(t *jwt.Token) (interface{}, error) {
 		if t.Method != jwt.SigningMethodHS256 {
 			return nil, jwt.ErrTokenSignatureInvalid
 		}
@@ -41,14 +34,18 @@ func ParseToken(secret, tokenStr string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	claims, ok := t.Claims.(*adminClaims)
+	claims, ok := t.Claims.(jwt.MapClaims)
 	if !ok || !t.Valid {
 		return "", jwt.ErrTokenInvalidClaims
 	}
-	if claims.Username == "" {
-		claims.Username = claims.Subject
+	username, _ := claims["username"].(string)
+	if username == "" {
+		username, _ = claims["sub"].(string)
 	}
-	return claims.Username, nil
+	if username == "" {
+		return "", jwt.ErrTokenInvalidClaims
+	}
+	return username, nil
 }
 
 // RequireAdminJWT Gin 中间件:校验 Bearer JWT,成功后写入 admin_user。

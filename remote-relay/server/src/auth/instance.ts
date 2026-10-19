@@ -133,14 +133,12 @@ export function registerInstance(
     }
   } else if (existing.password_hash) {
     const prior = ctx.priorCredentials
+    // 过期口令仍可用旧密码轮换，否则 7 天后「轮换并重新注册」会被 401 卡死。
     if (
       !prior ||
       prior.instanceId !== input.instance_id ||
       !bcrypt.compareSync(prior.password, existing.password_hash)
     ) {
-      return { ok: false, status: 401, error: 'Unauthorized' }
-    }
-    if (existing.password_expires_at != null && existing.password_expires_at <= now) {
       return { ok: false, status: 401, error: 'Unauthorized' }
     }
   }

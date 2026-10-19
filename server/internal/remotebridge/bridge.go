@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,8 +107,13 @@ func (b *Bridge) stopLoop() {
 	b.runWg.Wait()
 }
 
-// Start launches the bridge loop when config is ready.
+// Start 在配置就绪时启动出站循环，并立刻向中继注册一次。
 func (b *Bridge) Start(parent context.Context) {
+	b.start(parent, true)
+}
+
+// start 启动出站循环。register 为 false 时不调用注册接口，避免把中继的每分钟次数打满。
+func (b *Bridge) start(parent context.Context, register bool) {
 	if b.Config == nil || b.Store == nil {
 		return
 	}
@@ -119,16 +125,17 @@ func (b *Bridge) Start(parent context.Context) {
 	b.mu.Lock()
 	b.generation++
 	gen := b.generation
+	keepRegistered := !register && b.status.Registered
 	b.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(parent)
 	b.cancel = cancel
-	b.setRunning(true, false, gen)
+	b.setRunning(true, keepRegistered, gen)
 
 	b.runWg.Add(1)
 	go func() {
 		defer b.runWg.Done()
-		b.run(ctx, gen)
+		b.run(ctx, gen, register)
 	}()
 }
 
@@ -145,28 +152,48 @@ func (b *Bridge) TriggerReregister() {
 	}
 }
 
-// Reload applies latest config: restart if enabled, stop otherwise.
+// Reload 按最新配置重启出站循环，并重新注册。
 func (b *Bridge) Reload(parent context.Context) {
 	if b.Config.Ready() {
-		b.Start(parent)
+		b.start(parent, true)
 	} else {
 		b.Stop()
 	}
 }
 
-func (b *Bridge) run(ctx context.Context, gen uint64) {
+// ReloadWithoutRegister 重启出站循环，但不向中继再注册一次。
+func (b *Bridge) ReloadWithoutRegister(parent context.Context) {
+	if b.Config.Ready() {
+		b.start(parent, false)
+		return
+	}
+	b.Stop()
+}
+
+// MarkReachable 清掉上次注册错误，并标记当前这轮循环已注册。
+func (b *Bridge) MarkReachable() {
+	b.setOK()
+	b.mu.Lock()
+	gen := b.generation
+	b.mu.Unlock()
+	b.setRegistered(true, gen)
+}
+
+func (b *Bridge) run(ctx context.Context, gen uint64, register bool) {
 	defer b.setRunning(false, false, gen)
 
 	cfg := b.Config.Get()
 	client := b.newClient(cfg)
 	actions := RegisteredActions()
 
-	if err := client.Register(ctx, cfg.DisplayName, actions, ""); err != nil {
-		b.setErr(err.Error())
-		log.Printf("remotebridge: register failed: %v", err)
-	} else {
-		b.setOK()
-		b.setRunning(true, true, gen)
+	if register {
+		if err := client.Register(ctx, cfg.DisplayName, actions, ""); err != nil {
+			b.setErr(err.Error())
+			log.Printf("remotebridge: register failed: %v", err)
+		} else {
+			b.setOK()
+			b.setRunning(true, true, gen)
+		}
 	}
 
 	heartbeatTicker := time.NewTicker(heartbeatInterval)
@@ -201,6 +228,17 @@ func (b *Bridge) run(ctx context.Context, gen uint64) {
 			client = b.newClient(cfg)
 			hb, err := client.Heartbeat(ctx, actions)
 			if err != nil {
+				if adopted, hb2, ok := b.adoptStagedPassword(ctx, cfg, actions, err); ok {
+					cfg = adopted
+					client = b.newClient(cfg)
+					hb = hb2
+					err = nil
+				}
+			} else if strings.TrimSpace(cfg.PendingPassword) != "" {
+				// 当前密码仍被接受，说明待定密码没有写到中继上。
+				_ = b.Config.ClearPendingPassword()
+			}
+			if err != nil {
 				b.setErr(err.Error())
 			} else {
 				// Heartbeat auth success means the instance is registered on the relay.
@@ -222,6 +260,28 @@ func (b *Bridge) run(ctx context.Context, gen uint64) {
 			}
 		}
 	}
+}
+
+// adoptStagedPassword 在当前密码被拒时，用注册前已落盘的待定密码再心跳一次。成功就把待定密码升成正式密码。
+func (b *Bridge) adoptStagedPassword(ctx context.Context, cfg Config, actions []string, authErr error) (Config, *HeartbeatResult, bool) {
+	if !IsUnauthorized(authErr) {
+		return cfg, nil, false
+	}
+	pending := strings.TrimSpace(cfg.PendingPassword)
+	if !ValidInstancePassword(pending) || pending == strings.TrimSpace(cfg.Password) {
+		return cfg, nil, false
+	}
+	alt := cfg
+	alt.Password = pending
+	hb, err := b.newClient(alt).Heartbeat(ctx, actions)
+	if err != nil {
+		return cfg, nil, false
+	}
+	if err := b.Config.SetPassword(pending); err != nil {
+		log.Printf("remotebridge: staged password accepted but not saved: %v", err)
+		return alt, hb, true
+	}
+	return b.Config.Get(), hb, true
 }
 
 func (b *Bridge) newClient(cfg Config) *RelayClient {

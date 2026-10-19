@@ -106,6 +106,8 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	if h.svc.Sched != nil {
 		h.svc.Sched.Reload(c.Request.Context())
 	}
+	// 新员工默认未入组；立刻推镜像，避免手机还停在上一份名单。
+	h.svc.PushAgentsMirrorNow()
 	c.JSON(http.StatusOK, a)
 }
 

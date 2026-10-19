@@ -63,6 +63,48 @@ func (c *RelayClient) Register(ctx context.Context, displayName string, actions 
 	return c.postJSON(ctx, c.deviceURL("/register"), hdr, body)
 }
 
+// IsTooManyRequests 判断中继是否因为注册过于频繁返回了 429。
+func IsTooManyRequests(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "429")
+}
+
+// IsUnauthorized 判断中继是否拒绝了实例密码。
+func IsUnauthorized(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "401")
+}
+
+// RegisterDidNotCommit 判断这次注册的 HTTP 响应是否明确表示中继没有改密码。
+// 网络中断或 5xx 可能发生在中继已经写入之后，此时不能丢掉本机提前保存的新密码。
+func RegisterDidNotCommit(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "400") ||
+		strings.Contains(msg, "401") ||
+		strings.Contains(msg, "403") ||
+		strings.Contains(msg, "429")
+}
+
+// RegisterRetrying 在中继限流时等待并重试，直到窗口过去或 ctx 结束。
+func (c *RelayClient) RegisterRetrying(ctx context.Context, displayName string, actions []string, priorPassword string) error {
+	var last error
+	for attempt := 0; attempt < 5; attempt++ {
+		last = c.Register(ctx, displayName, actions, priorPassword)
+		if last == nil || !IsTooManyRequests(last) {
+			return last
+		}
+		timer := time.NewTimer(15 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return last
+		case <-timer.C:
+		}
+	}
+	return last
+}
+
 // HeartbeatResult is the relay heartbeat response (presence fields optional).
 type HeartbeatResult struct {
 	OK                   bool   `json:"ok"`

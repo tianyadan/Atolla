@@ -40,12 +40,21 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		if askErr != nil {
 			log.Printf("remotebridge agent.ask agent=%d: %v", agentID, askErr)
 		}
-		// Push reply + status to relay so mobile polls see it without re-entering chat.
+		// 回合结束再推一次：此时状态已回到空闲/错误，手机能收起「忙」。
 		if s.RemoteBridge != nil {
 			s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
 		}
 	}()
 	return nil
+}
+
+// PushAgentsMirrorNow 立刻把数字员工列表和状态推到移动端。
+// 周期快照是 20 秒一次，且和心跳挤在同一条循环里；不立刻推的话，手机在整个任务期间都只能看到上一次的「空闲」。
+func (s *Service) PushAgentsMirrorNow() {
+	if s == nil || s.RemoteBridge == nil {
+		return
+	}
+	go s.RemoteBridge.PushAgentsSnapshotNow()
 }
 
 // SaveChatImageFromBytes implements remotebridge.AgentRuntime for mobile upload RPC.
@@ -235,6 +244,8 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 
 	if !opts.holdStatus {
 		_ = s.Store.SetManagedAgentStatus(runCtx, agentID, "running", "", 0, statusConvID(opts.bindMainConv, convID))
+		// 状态已是 running，马上推镜像。等回合结束再推时，状态已经变回 idle，手机全程显示空闲。
+		s.PushAgentsMirrorNow()
 	}
 	if a.AutoReview {
 		s.Perms.SetAuto(convID, true)

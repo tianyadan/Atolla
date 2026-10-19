@@ -20,6 +20,8 @@ type Config struct {
 	InstanceID  string `json:"instance_id"`
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password,omitempty"`
+	// PendingPassword 是已经准备提交给中继、但尚未确认写回的新密码。先落盘再注册，进程在注册成功后退出时还能把它找回来。
+	PendingPassword string `json:"pending_password,omitempty"`
 }
 
 // PublicConfig is returned by admin GET (no password plaintext).
@@ -158,6 +160,7 @@ func (cs *ConfigStore) Update(patch Config) (Config, error) {
 			return cs.cfg, fmt.Errorf("invalid instance password format")
 		}
 		cs.cfg.Password = s
+		cs.cfg.PendingPassword = ""
 	}
 	if strings.TrimSpace(cs.cfg.InstanceID) == "" {
 		cs.cfg.InstanceID = defaultInstanceID()
@@ -179,6 +182,29 @@ func (cs *ConfigStore) SetPassword(plain string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.cfg.Password = plain
+	cs.cfg.PendingPassword = ""
+	return cs.saveLocked()
+}
+
+// StagePendingPassword 在向中继提交新密码之前把明文写进配置文件，当前密码保持不变。
+func (cs *ConfigStore) StagePendingPassword(plain string) error {
+	if !ValidInstancePassword(plain) {
+		return fmt.Errorf("invalid instance password format")
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.cfg.PendingPassword = plain
+	return cs.saveLocked()
+}
+
+// ClearPendingPassword 丢掉尚未被中继接受的待定密码。
+func (cs *ConfigStore) ClearPendingPassword() error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if strings.TrimSpace(cs.cfg.PendingPassword) == "" {
+		return nil
+	}
+	cs.cfg.PendingPassword = ""
 	return cs.saveLocked()
 }
 

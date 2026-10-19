@@ -70,7 +70,7 @@ export function AgentsPage() {
 
   useEffect(() => {
     void load()
-    const id = window.setInterval(() => void load(), 15_000)
+    const id = window.setInterval(() => void load(), 4_000)
     return () => window.clearInterval(id)
   }, [load])
 

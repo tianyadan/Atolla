@@ -34,6 +34,13 @@ const ENGINES = [
   { id: 'agent', label: 'Cursor', color: '#6366f1' },
 ]
 
+/** 未入组：没有工作组，或工作组已被删除（否则人和组对不上，列表两边都看不到）。 */
+function isUngroupedAgent(agent, folders) {
+  const id = Number(agent?.folder_id) || 0
+  if (id <= 0) return true
+  return !(folders || []).some((f) => Number(f.id) === id)
+}
+
 /** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默） */
 const THINKING_PHRASES = [
   'thinking',
@@ -213,6 +220,7 @@ export default function ManagedAgentsPanel({
   const [newContextWindow, setNewContextWindow] = useState(1000000)
   const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
   const [newRules, setNewRules] = useState('')
+  const [createErr, setCreateErr] = useState('')
   const [newPolicy, setNewPolicy] = useState(() => emptyPolicy())
   const [policyDraft, setPolicyDraft] = useState(() => emptyPolicy())
   const [workspaces, setWorkspaces] = useState([])
@@ -234,6 +242,8 @@ export default function ManagedAgentsPanel({
   const [, setTick] = useState(0)
   const [, setSessVer] = useState(0)
   const boxRef = useRef(null)
+  /** 列表请求序号：慢返回的旧轮询不能盖掉刚创建出来的员工。 */
+  const agentsLoadGen = useRef(0)
   const stickBottomRef = useRef(true)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
@@ -287,16 +297,19 @@ export default function ManagedAgentsPanel({
     const headers = authHeaders()
     // 首页未登录也会挂着本面板轮询。没令牌时接口必然 401，不能当成登录过期。
     if (!hasBearerToken(headers)) return
+    const gen = ++agentsLoadGen.current
     const [res, folderRes] = await Promise.all([
       fetch(`${API}/admin/agents`, { headers }),
       fetch(`${API}/admin/agent-folders`, { headers }),
     ])
+    if (gen !== agentsLoadGen.current) return
     if (shouldForceLogout(res.status, headers) || shouldForceLogout(folderRes.status, headers)) {
       onUnauthorized?.()
       return
     }
     if (!res.ok) return
     const d = await res.json()
+    if (gen !== agentsLoadGen.current) return
     const items = d.items || []
     setAgents(items)
     if (folderRes.ok) {
@@ -551,6 +564,7 @@ export default function ManagedAgentsPanel({
     e?.preventDefault?.()
     if (busy) return
     setBusy(true)
+    setCreateErr('')
     try {
       const res = await fetch(`${API}/admin/agents`, {
         method: 'POST',
@@ -570,11 +584,23 @@ export default function ManagedAgentsPanel({
         }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
-      const d = await res.json()
-      if (!res.ok) { patchAgentSession(selectedId, { error: d.error || '创建失败' }); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setCreateErr(d.error || '创建失败')
+        return
+      }
+      // 先插进未入组，避免等列表接口时页面像没点上。
+      if (d?.id) {
+        const created = { ...d, folder_id: Number(d.folder_id) || 0 }
+        setAgents((prev) => [created, ...prev.filter((a) => a.id !== created.id)])
+        setSelectedId(created.id)
+        setAgentSearch('')
+      }
       setCreateOpen(false)
       setNewPolicy(emptyPolicy())
-      await loadAgents(d.id)
+      await loadAgents(d?.id)
+    } catch (err) {
+      setCreateErr(err?.message || '创建失败')
     } finally { setBusy(false) }
   }
 
@@ -1507,7 +1533,7 @@ export default function ManagedAgentsPanel({
                 <span className="ma-folder-title-text">未入组</span>
                 <span className="ma-folder-title-right">
                   {(() => {
-                    const kids = filteredAgents.filter((a) => !a.folder_id)
+                    const kids = filteredAgents.filter((a) => isUngroupedAgent(a, folders))
                     const { direct, wf } = countFolderBusy(kids)
                     return (
                       <>
@@ -1521,7 +1547,7 @@ export default function ManagedAgentsPanel({
               </div>
             </div>
             <div className="ma-folder-agents">
-              {filteredAgents.filter((a) => !a.folder_id).map(renderAgentItem)}
+              {filteredAgents.filter((a) => isUngroupedAgent(a, folders)).map(renderAgentItem)}
             </div>
           </div>
 
@@ -1981,6 +2007,7 @@ export default function ManagedAgentsPanel({
               workspaces={workspaces}
               disabled={busy}
             />
+            {createErr ? <pre className="error">{createErr}</pre> : null}
             <div className="modal-actions">
               <button type="button" disabled={busy} onClick={() => setCreateOpen(false)}>取消</button>
               <button type="submit" disabled={busy}>{busy ? '招聘中…' : '确认招聘'}</button>

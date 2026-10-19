@@ -80,6 +80,13 @@ func TestBridgeReloadKeepsRunning(t *testing.T) {
 		t.Fatalf("expected at least 2 register calls after reload, got %d", registerCount.Load())
 	}
 
+	beforeSkip := registerCount.Load()
+	b.ReloadWithoutRegister(parent)
+	time.Sleep(200 * time.Millisecond)
+	if got := registerCount.Load(); got != beforeSkip {
+		t.Fatalf("reload without register called register: before %d after %d", beforeSkip, got)
+	}
+
 	b.Stop()
 }
 
