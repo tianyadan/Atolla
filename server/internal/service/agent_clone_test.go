@@ -75,9 +75,16 @@ func TestNewCloneFromSource(t *testing.T) {
 		WorkspacePath: "/tmp/ws", ScheduleEnabled: se, ScheduleCron: "* * * * *",
 		ScheduleLabel: "每分", ConversationID: 88, Status: "running",
 	}
-	c := NewCloneFromSource(src, "新人", "https://img/a.png")
+	c := NewCloneFromSource(src, "新人", "https://img/a.png", "")
 	if c.Name != "新人" || c.AvatarURL != "https://img/a.png" {
 		t.Fatalf("name/avatar %+v", c)
+	}
+	if c.JellyColor != "" {
+		t.Fatal("empty jelly should defer auto-assign")
+	}
+	c2 := NewCloneFromSource(src, "新人2", "", "blue")
+	if c2.JellyColor != "blue" {
+		t.Fatalf("jelly %+v", c2)
 	}
 	if c.FolderID != 3 || c.WorkspacePath != "/tmp/ws" {
 		t.Fatal("folder/workspace")

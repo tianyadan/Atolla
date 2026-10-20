@@ -64,6 +64,7 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 			"status":       a.Status,
 			"payload": map[string]any{
 				"avatar_url":         a.AvatarURL,
+				"jelly_color":        a.JellyColor,
 				"folder_id":          a.FolderID,
 				"folder_name":        fn,
 				"task_plan_enabled":  a.TaskPlanEnabled,

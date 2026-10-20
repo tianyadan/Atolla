@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   id              BIGINT         NOT NULL AUTO_INCREMENT,
   name            VARCHAR(128)   NOT NULL,
   avatar_url      VARCHAR(512)   NULL,
+  jelly_color     VARCHAR(16)    NOT NULL DEFAULT '', -- orange|yellow|blue|green|purple|red
   folder_id       BIGINT         NULL,
   engine          VARCHAR(32)    NOT NULL,           -- claude | codex | agent
   context_window_tokens BIGINT NOT NULL DEFAULT 1000000, -- display denominator only
