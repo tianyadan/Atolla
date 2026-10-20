@@ -57,19 +57,20 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 // AdminAgentsCreate 一键招聘数字员工。
 func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	var body struct {
-		Name                string `json:"name"`
-		Engine              string `json:"engine"`
-		ContextWindowTokens *int64 `json:"context_window_tokens"`
-		BinPath             string `json:"bin_path"`
-		RulesPrompt         string `json:"rules_prompt"`
-		AllowWrite          *bool  `json:"allow_write"`
-		AllowNetwork        *bool  `json:"allow_network"`
-		AllowRm             *bool  `json:"allow_rm"`
-		AllowBrowser        *bool  `json:"allow_browser"`
-		WorkspacePath       string `json:"workspace_path"`
-		ScheduleEnabled     bool   `json:"schedule_enabled"`
-		ScheduleCron        string `json:"schedule_cron"`
-		ScheduleLabel       string `json:"schedule_label"`
+		Name                string  `json:"name"`
+		Engine              string  `json:"engine"`
+		ContextWindowTokens *int64  `json:"context_window_tokens"`
+		BinPath             string  `json:"bin_path"`
+		RulesPrompt         string  `json:"rules_prompt"`
+		AllowWrite          *bool   `json:"allow_write"`
+		AllowNetwork        *bool   `json:"allow_network"`
+		AllowRm             *bool   `json:"allow_rm"`
+		AllowBrowser        *bool   `json:"allow_browser"`
+		WorkspacePath       string  `json:"workspace_path"`
+		ScheduleEnabled     bool    `json:"schedule_enabled"`
+		ScheduleCron        string  `json:"schedule_cron"`
+		ScheduleLabel       string  `json:"schedule_label"`
+		JellyColor          *string `json:"jelly_color"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -88,6 +89,14 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid context_window_tokens"})
 		return
 	}
+	if body.JellyColor != nil {
+		if store.NormalizeJellyColor(*body.JellyColor) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": store.ErrInvalidJellyColor.Error()})
+			return
+		}
+		norm := store.NormalizeJellyColor(*body.JellyColor)
+		body.JellyColor = &norm
+	}
 	ws := strings.TrimSpace(body.WorkspacePath)
 	se := body.ScheduleEnabled
 	cron := strings.TrimSpace(body.ScheduleCron)
@@ -96,9 +105,14 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 		Name: name, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
 		AllowWrite: body.AllowWrite, AllowNetwork: body.AllowNetwork, AllowRm: body.AllowRm, AllowBrowser: body.AllowBrowser,
 		WorkspacePath: &ws, ScheduleEnabled: &se, ScheduleCron: &cron, ScheduleLabel: &label,
+		JellyColor: body.JellyColor,
 	}
 	id, err := h.svc.Store.CreateManagedAgent(c.Request.Context(), in)
 	if err != nil {
+		if err == store.ErrInvalidJellyColor {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -119,8 +133,9 @@ func (h *Handler) AdminAgentsCopy(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Name      string `json:"name"`
-		AvatarURL string `json:"avatar_url"`
+		Name       string  `json:"name"`
+		AvatarURL  string  `json:"avatar_url"`
+		JellyColor *string `json:"jelly_color"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -131,10 +146,22 @@ func (h *Handler) AdminAgentsCopy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
 		return
 	}
-	a, err := h.svc.CopyManagedAgent(c.Request.Context(), id, name, strings.TrimSpace(body.AvatarURL))
+	if body.JellyColor != nil {
+		if store.NormalizeJellyColor(*body.JellyColor) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": store.ErrInvalidJellyColor.Error()})
+			return
+		}
+		norm := store.NormalizeJellyColor(*body.JellyColor)
+		body.JellyColor = &norm
+	}
+	a, err := h.svc.CopyManagedAgent(c.Request.Context(), id, name, strings.TrimSpace(body.AvatarURL), body.JellyColor)
 	if err != nil {
 		if service.IsInitializingConflict(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if err == store.ErrInvalidJellyColor {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		if strings.Contains(err.Error(), "not found") {
@@ -291,10 +318,27 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	in.ScheduleEnabled = parseBoolPtr("schedule_enabled")
 	in.ScheduleCron = parseStrPtr("schedule_cron")
 	in.ScheduleLabel = parseStrPtr("schedule_label")
+	if v, ok := body["jelly_color"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": store.ErrInvalidJellyColor.Error()})
+			return
+		}
+		norm := store.NormalizeJellyColor(s)
+		if norm == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": store.ErrInvalidJellyColor.Error()})
+			return
+		}
+		in.JellyColor = &norm
+	}
 
 	if err := h.svc.Store.UpdateManagedAgent(c.Request.Context(), id, in); err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		if err == store.ErrInvalidJellyColor {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

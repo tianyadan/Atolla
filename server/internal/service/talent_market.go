@@ -245,6 +245,7 @@ type HireTalentInput struct {
 	Name                string // 可选覆盖显示名
 	Engine              string // 用户自选，默认 claude
 	ContextWindowTokens *int64
+	JellyColor          *string // 可选；nil 则按新员工 id 自动分配
 }
 
 // HireTalent 创建未分组数字人并安装解析到的技能；提示词/技能入职后仍可在设置中改。
@@ -266,6 +267,14 @@ func (s *Service) HireTalent(ctx context.Context, in HireTalentInput) (*store.Ma
 	if in.ContextWindowTokens != nil && !store.ValidContextWindow(*in.ContextWindowTokens) {
 		return nil, fmt.Errorf("invalid context_window_tokens")
 	}
+	var jelly *string
+	if in.JellyColor != nil {
+		norm := store.NormalizeJellyColor(*in.JellyColor)
+		if norm == "" {
+			return nil, store.ErrInvalidJellyColor
+		}
+		jelly = &norm
+	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = card.Name
@@ -277,6 +286,7 @@ func (s *Service) HireTalent(ctx context.Context, in HireTalentInput) (*store.Ma
 		RulesPrompt: card.RulesPrompt,
 		AllowWrite:  &aw, AllowNetwork: &an, AllowRm: &ar,
 		WorkspacePath: &ws,
+		JellyColor:    jelly,
 	})
 	if err != nil {
 		return nil, err

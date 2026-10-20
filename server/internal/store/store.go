@@ -305,6 +305,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureAdminAccountSchema(ctx); err != nil {
 		return err
 	}
+	// 22) v0.5.10 像素小水母颜色 jelly_color
+	if err := s.EnsureJellyColorSchema(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
