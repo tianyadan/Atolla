@@ -14,6 +14,7 @@ type ReceptionistPublic struct {
 	ID         int64  `json:"id,omitempty"`
 	Name       string `json:"name,omitempty"`
 	AvatarURL  string `json:"avatar_url,omitempty"`
+	JellyColor string `json:"jelly_color,omitempty"`
 	FolderName string `json:"folder_name,omitempty"`
 	Engine     string `json:"engine,omitempty"`
 }
@@ -43,6 +44,7 @@ func (s *Service) GetReceptionistPublic(ctx context.Context) (ReceptionistPublic
 		ID:         a.ID,
 		Name:       a.Name,
 		AvatarURL:  a.AvatarURL,
+		JellyColor: a.JellyColor,
 		FolderName: folder,
 		Engine:     a.Engine,
 	}, nil

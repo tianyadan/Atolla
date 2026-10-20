@@ -13,7 +13,8 @@ type ManagedAgent struct {
 	ID                  int64                 `json:"id"`
 	Name                string                `json:"name"`
 	AvatarURL           string                `json:"avatar_url"`
-	FolderID            int64                 `json:"folder_id"` // 0=根目录
+	JellyColor          string                `json:"jelly_color"` // 像素小水母颜色
+	FolderID            int64                 `json:"folder_id"`   // 0=根目录
 	Engine              string                `json:"engine"`
 	ContextWindowTokens int64                 `json:"context_window_tokens"` // claude | codex | agent
 	BinPath             string                `json:"bin_path"`
@@ -58,6 +59,7 @@ type ManagedAgentInput struct {
 	ScheduleEnabled     *bool
 	ScheduleCron        *string
 	ScheduleLabel       *string
+	JellyColor          *string // 创建：nil=按 id 自动分配；更新：nil=不改
 }
 
 // ValidContextWindow 只接受后台提供的三档窗口（Token 数）。
@@ -172,7 +174,7 @@ func scanManagedAgent(scanner interface {
 	var runAt sql.NullTime
 	var auto, aaa, tp, aw, an, ar, ab, se, recv int
 	err := scanner.Scan(
-		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
+		&a.ID, &a.Name, &a.AvatarURL, &a.JellyColor, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
 		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
@@ -188,6 +190,12 @@ func scanManagedAgent(scanner interface {
 	a.AllowBrowser = ab != 0
 	a.ScheduleEnabled = se != 0
 	a.IsReceptionist = recv != 0
+	// 兼容旧行或异常空值：读出时补齐稳定默认色。
+	if a.JellyColor == "" || !ValidJellyColor(a.JellyColor) {
+		a.JellyColor = AssignJellyColor(a.ID)
+	} else {
+		a.JellyColor = NormalizeJellyColor(a.JellyColor)
+	}
 	if runAt.Valid {
 		t := runAt.Time
 		a.RunStartedAt = &t
@@ -195,7 +203,7 @@ func scanManagedAgent(scanner interface {
 	return a, nil
 }
 
-const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(folder_id,0), engine, context_window_tokens, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
+const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(jelly_color,''), IFNULL(folder_id,0), engine, context_window_tokens, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
 		IFNULL(auto_approve_all,0), IFNULL(task_plan_enabled,1),
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
@@ -292,17 +300,36 @@ func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (i
 	if in.ContextWindowTokens != nil {
 		window = *in.ContextWindowTokens
 	}
+	// 创建时先写入占位色，拿到 id 后再按规则解析/回填，保证自动分配稳定。
+	explicit := ""
+	if in.JellyColor != nil {
+		explicit = *in.JellyColor
+		if NormalizeJellyColor(explicit) == "" {
+			return 0, ErrInvalidJellyColor
+		}
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
-		 (name, engine, context_window_tokens, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
+		 (name, jelly_color, engine, context_window_tokens, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
 		  workspace_path, schedule_enabled, schedule_cron, schedule_label)
-		 VALUES (?,?,?,?,?, 'idle',?,?,?,?,?,?,?,?)`,
-		in.Name, engine, window, binPath, in.RulesPrompt,
+		 VALUES (?,?,?,?,?,?, 'idle',?,?,?,?,?,?,?,?)`,
+		in.Name, JellyColors[0], engine, window, binPath, in.RulesPrompt,
 		bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	color, err := ResolveJellyColor(id, explicit)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET jelly_color=? WHERE id=?`, color, id); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // InsertClonedManagedAgent 插入复制员工（不定时任务；status 由调用方给定）。
@@ -324,20 +351,36 @@ func (s *Store) InsertClonedManagedAgent(ctx context.Context, a ManagedAgent) (i
 	if a.ClonedFromID > 0 {
 		cloned = a.ClonedFromID
 	}
+	// 复制员工：显式色优先，否则插入后再按新 id 自动分配（不继承源色，便于同组分散）。
+	explicit := strings.TrimSpace(a.JellyColor)
+	if explicit != "" && NormalizeJellyColor(explicit) == "" {
+		return 0, ErrInvalidJellyColor
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
-		 (name, avatar_url, folder_id, engine, context_window_tokens, bin_path, rules_prompt, auto_review, task_plan_enabled,
+		 (name, avatar_url, jelly_color, folder_id, engine, context_window_tokens, bin_path, rules_prompt, auto_review, task_plan_enabled,
 		  allow_write, allow_network, allow_rm, allow_browser, workspace_path,
 		  schedule_enabled, schedule_cron, schedule_label, status, conversation_id, cloned_from_id)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.Name, nullIfEmpty(a.AvatarURL), folder, engine, a.ContextWindowTokens, binPath, a.RulesPrompt,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.Name, nullIfEmpty(a.AvatarURL), JellyColors[0], folder, engine, a.ContextWindowTokens, binPath, a.RulesPrompt,
 		bool01(a.AutoReview), bool01(a.TaskPlanEnabled),
 		bool01(a.AllowWrite), bool01(a.AllowNetwork), bool01(a.AllowRm), bool01(a.AllowBrowser),
 		a.WorkspacePath, 0, "", "", st, nil, cloned)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	color, err := ResolveJellyColor(id, explicit)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET jelly_color=? WHERE id=?`, color, id); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func nullIfEmpty(s string) any {
@@ -401,13 +444,37 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	if in.ScheduleLabel != nil {
 		label = strings.TrimSpace(*in.ScheduleLabel)
 	}
+	jelly := a.JellyColor
+	if in.JellyColor != nil {
+		jelly = NormalizeJellyColor(*in.JellyColor)
+		if jelly == "" {
+			return ErrInvalidJellyColor
+		}
+	}
 
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE managed_agents SET name=?, context_window_tokens=?, bin_path=?, rules_prompt=?,
+		`UPDATE managed_agents SET name=?, jelly_color=?, context_window_tokens=?, bin_path=?, rules_prompt=?,
 		 allow_write=?, allow_network=?, allow_rm=?, allow_browser=?, workspace_path=?,
 		 schedule_enabled=?, schedule_cron=?, schedule_label=? WHERE id=?`,
-		n, window, b, r, bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label, id)
+		n, jelly, window, b, r, bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label, id)
 	return err
+}
+
+// SetManagedAgentJellyColor 单独更新像素小水母颜色。
+func (s *Store) SetManagedAgentJellyColor(ctx context.Context, id int64, color string) error {
+	color = NormalizeJellyColor(color)
+	if color == "" {
+		return ErrInvalidJellyColor
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET jelly_color=? WHERE id=?`, color, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // SetManagedAgentTaskPlan 持久化任务规划开关（默认开）。
