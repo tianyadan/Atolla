@@ -1,8 +1,8 @@
-# 水母工作组实时事件流（SSE）
+# 工作组实时状态流（SSE）
 
 `GET /api/teams/:teamId/stream`
 
-供水母 UI（`web/src/jelly/`）驱动触手动画。`teamId` 对应现有 **工作组** `agent_folders.id`；`0` 表示未入组员工（`folder_id` 为空）。
+为管理端提供工作组内数字员工的实时状态事件，可用于驱动员工头像（像素水母）的忙碌 / 出错 / 等待审批等表现。`teamId` 对应现有 **工作组** `agent_folders.id`；`0` 表示未入组员工（`folder_id` 为空）。
 
 鉴权与其它管理端 API 相同：`Authorization: Bearer <JWT>`（挂在同一 JWT 路由组）。
 
@@ -26,15 +26,17 @@
 | `approval.pending` | `approvalId`, `agentId`, `title`, `actions`（≤2） | `permission.Hub` 广播 `request` |
 | `approval.resolved` | `approvalId`, `agentId?`, `action` | `permission.Hub` 广播 `resolved` |
 
-### `state` 映射（对齐前端 `mapAgents.js`）
+### `state` 映射
 
-后端 `managed_agents.status` → 水母：
+后端 `managed_agents.status` → 对外状态字：
 
-- `running` / `busy` / `compressing` / `initializing` → `working`
-- `waiting` 或存在待审批 → `waiting`
-- `error` → `error`
-- 其它 / 空闲 → `idle`  
+- `running` / `busy` / `compressing` / `initializing` → `working`（忙碌）
+- `waiting` 或存在待审批 → `waiting`（等待审批）
+- `error` → `error`（出错）
+- 其它 / 空闲 → `idle`
 - 占用 `WORKFLOW` / `CLONE_INIT` 亦视为 `working`
+
+前端可用 `state` 驱动像素水母头像：忙碌发光/脉冲、空闲变暗、等待或出错时提示涟漪等。
 
 ### `agents[]`（snapshot）
 
@@ -108,11 +110,9 @@ curl -N -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8080/api/teams/1/stream"
 ```
 
-## 与前端对接说明
+## 对接注意
 
-前端 `useTeamStream` / `teamStreamAdapter` 已按上述字段解析。注意：
-
-1. `progress` 后端为 **0–100 整数**（前端亦兼容 0–1）。
+1. `progress` 后端为 **0–100 整数**（亦可按需换算为 0–1）。
 2. `agentId` / `approvalId` / `from` / `to` 以 **字符串** 推送。
 3. `task.handoff` 仅在 **项目协作（workflow）** 节点间、直接上游为 agent 且 `agent_id` 不同时推送；普通 Ask 无交接概念，不会推送。
-4. 未入组请用 `teamId=0`（与水母页「未分组」一致）。
+4. 未入组请用 `teamId=0`。
