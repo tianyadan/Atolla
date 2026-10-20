@@ -398,8 +398,9 @@ export default function ManagedAgentsPanel({
       fetch(`${API}/admin/agents/${id}/tasks`, { headers: authHeaders() }),
     ])
     if (msgRes.status === 401 || taskRes.status === 401) { onUnauthorized?.(); return }
-    const msgData = await msgRes.json()
-    const taskData = await taskRes.json()
+    const msgData = await msgRes.json().catch(() => ({}))
+    const taskData = await taskRes.json().catch(() => ({}))
+    if (!msgRes.ok) return
     setTasks(taskData.items || [])
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
     if (force || !getAgentSession(id).loading) {
@@ -1168,13 +1169,18 @@ export default function ManagedAgentsPanel({
         // 流式期间刷新任务进度
         if (parsed.events.some((e) => e.type === 'task_progress' || e.type === 'invoke_status')) {
           fetch(`${API}/admin/agents/${agentId}/tasks`, { headers: authHeaders() })
-            .then((r) => r.json())
-            .then((d) => { if (selectedId === agentId) setTasks(d.items || []) })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => { if (d && selectedId === agentId) setTasks(d.items || []) })
             .catch(() => {})
         }
       }
-      await loadAgents(agentId)
-      await loadDetail(agentId, { force: true })
+      try {
+        await loadAgents(agentId)
+        await loadDetail(agentId, { force: true })
+      } catch (postErr) {
+        // 回合已结束；刷新列表失败不掩盖委托/汇总错误
+        console.warn('ask post-refresh failed', postErr)
+      }
     } catch (err) {
       if (err?.name === 'AbortError') {
         const isInterrupt = !!getAgentSession(agentId).pendingInterrupt

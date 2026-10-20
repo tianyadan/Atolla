@@ -76,9 +76,10 @@ func (s *Service) releaseAgentRun(agentID int64, slot *managedRun) {
 func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink, atts []ChatAttachment) (string, int, error) {
 	// Ensure local CLI sandbox allowlists track DB before engine starts.
 	_ = s.SyncNetworkAllowlistToHome(ctx)
-	bin := a.BinPath
+	engineName := store.RepairEngineName(a.Engine)
+	bin := store.ResolveEngineBin(a.Engine, a.BinPath)
 	if bin == "" {
-		bin = store.DefaultBin(a.Engine)
+		return "", 0, fmt.Errorf("engine binary not configured for %q", engineName)
 	}
 	dir := s.Cfg.WorkspaceRoot
 	if ws := strings.TrimSpace(a.WorkspacePath); ws != "" {
@@ -88,7 +89,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	engineQ := question
 	var claudeImages []agent.ImagePart
 	if len(atts) > 0 {
-		switch strings.ToLower(a.Engine) {
+		switch strings.ToLower(engineName) {
 		case "claude":
 			claudeImages = s.AttachmentsToAgentImages(atts)
 		default:
@@ -122,7 +123,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	persistSession := !noHook && metaConv > 0
 	onMeta := func(m agent.RunMeta) {
 		// 规范化为本轮估算（不累计）；窗口缺省时用统一配置
-		m = agent.NormalizeRunMetaContext(a.Engine, m, a.ContextWindowTokens)
+		m = agent.NormalizeRunMetaContext(engineName, m, a.ContextWindowTokens)
 		m.ContextWindow = a.ContextWindowTokens
 		if persistSession {
 			s.RememberEngineMeta(context.WithoutCancel(ctx), a.ID, metaConv, m)
@@ -153,7 +154,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			history = FormatResumeHistory(turns, question)
 		}
 	}
-	switch strings.ToLower(a.Engine) {
+	switch strings.ToLower(engineName) {
 	case "claude":
 		r := agent.NewRunner(bin)
 		hook := agent.HookSpec{}

@@ -30,6 +30,7 @@ function iconBody(name) {
         </>
       )
     case 'stats':
+    case 'audit-agents':
       return (
         <>
           <path d="M3 3v18h18" />

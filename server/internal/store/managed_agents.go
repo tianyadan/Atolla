@@ -10,67 +10,69 @@ import (
 
 // ManagedAgent 管理台注册的数字员工（API/表名仍为 agent）。
 type ManagedAgent struct {
-	ID              int64      `json:"id"`
-	Name            string     `json:"name"`
-	AvatarURL       string     `json:"avatar_url"`
-	FolderID        int64      `json:"folder_id"` // 0=根目录
-	Engine          string     `json:"engine"`
-	ContextWindowTokens int64 `json:"context_window_tokens"`    // claude | codex | agent
-	BinPath         string     `json:"bin_path"`
-	RulesPrompt     string     `json:"rules_prompt"`
-	AutoReview      bool       `json:"auto_review"`
-	AutoApproveAll  bool       `json:"auto_approve_all"` // 命令全部审批通过（无需人工）
-	TaskPlanEnabled bool       `json:"task_plan_enabled"` // 默认 true：Ask 前 AI 拆分步骤
-	AllowWrite      bool       `json:"allow_write"`
-	AllowNetwork    bool       `json:"allow_network"`
-	AllowRm         bool       `json:"allow_rm"`
-	AllowBrowser    bool       `json:"allow_browser"`
-	WorkspacePath   string     `json:"workspace_path"`
-	ScheduleEnabled bool       `json:"schedule_enabled"`
-	ScheduleCron    string     `json:"schedule_cron"`
-	ScheduleLabel   string     `json:"schedule_label"`
-	Status          string     `json:"status"`
-	IsReceptionist  bool       `json:"is_receptionist"`
-	ConversationID  int64      `json:"conversation_id"`
-	ClonedFromID    int64      `json:"cloned_from_id"`
-	FolderName      string     `json:"folder_name,omitempty"` // 列表展示用，非列
-	SkillCount      int        `json:"skill_count"`           // 已安装技能数（列表富化）
-	SkillIcons      []AgentSkillIconBrief `json:"skill_icons,omitempty"` // 悬停展示用
-	LastError       string     `json:"last_error"`
-	LastRunMs       int        `json:"last_run_ms"`
-	RunStartedAt    *time.Time `json:"run_started_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                  int64                 `json:"id"`
+	Name                string                `json:"name"`
+	AvatarURL           string                `json:"avatar_url"`
+	FolderID            int64                 `json:"folder_id"` // 0=根目录
+	Engine              string                `json:"engine"`
+	ContextWindowTokens int64                 `json:"context_window_tokens"` // claude | codex | agent
+	BinPath             string                `json:"bin_path"`
+	RulesPrompt         string                `json:"rules_prompt"`
+	AutoReview          bool                  `json:"auto_review"`
+	AutoApproveAll      bool                  `json:"auto_approve_all"`  // 命令全部审批通过（无需人工）
+	TaskPlanEnabled     bool                  `json:"task_plan_enabled"` // 默认 true：Ask 前 AI 拆分步骤
+	AllowWrite          bool                  `json:"allow_write"`
+	AllowNetwork        bool                  `json:"allow_network"`
+	AllowRm             bool                  `json:"allow_rm"`
+	AllowBrowser        bool                  `json:"allow_browser"`
+	WorkspacePath       string                `json:"workspace_path"`
+	ScheduleEnabled     bool                  `json:"schedule_enabled"`
+	ScheduleCron        string                `json:"schedule_cron"`
+	ScheduleLabel       string                `json:"schedule_label"`
+	Status              string                `json:"status"`
+	IsReceptionist      bool                  `json:"is_receptionist"`
+	ConversationID      int64                 `json:"conversation_id"`
+	ClonedFromID        int64                 `json:"cloned_from_id"`
+	FolderName          string                `json:"folder_name,omitempty"` // 列表展示用，非列
+	SkillCount          int                   `json:"skill_count"`           // 已安装技能数（列表富化）
+	SkillIcons          []AgentSkillIconBrief `json:"skill_icons,omitempty"` // 悬停展示用
+	LastError           string                `json:"last_error"`
+	LastRunMs           int                   `json:"last_run_ms"`
+	RunStartedAt        *time.Time            `json:"run_started_at,omitempty"`
+	CreatedAt           time.Time             `json:"created_at"`
+	UpdatedAt           time.Time             `json:"updated_at"`
 }
 
 // ManagedAgentInput 招聘/更新数字员工入参。
 type ManagedAgentInput struct {
-	Name            string
-	Engine          string
+	Name                string
+	Engine              string
 	ContextWindowTokens *int64
-	BinPath         string
-	RulesPrompt     string
-	AllowWrite      *bool
-	AllowNetwork    *bool
-	AllowRm         *bool
-	AllowBrowser    *bool
-	WorkspacePath   *string
-	ScheduleEnabled *bool
-	ScheduleCron    *string
-	ScheduleLabel   *string
+	BinPath             string
+	RulesPrompt         string
+	AllowWrite          *bool
+	AllowNetwork        *bool
+	AllowRm             *bool
+	AllowBrowser        *bool
+	WorkspacePath       *string
+	ScheduleEnabled     *bool
+	ScheduleCron        *string
+	ScheduleLabel       *string
 }
 
 // ValidContextWindow 只接受后台提供的三档窗口（Token 数）。
 func ValidContextWindow(v int64) bool { return v == 262144 || v == 524288 || v == 1000000 }
 
 func DefaultContextWindow(engine string) int64 {
-	if strings.EqualFold(engine, "claude") { return 1000000 }
+	if strings.EqualFold(engine, "claude") {
+		return 1000000
+	}
 	return 262144
 }
 
 // ValidEngine 校验引擎类型。
 func ValidEngine(e string) bool {
-	switch strings.ToLower(strings.TrimSpace(e)) {
+	switch RepairEngineName(e) {
 	case "claude", "codex", "agent":
 		return true
 	default:
@@ -80,7 +82,7 @@ func ValidEngine(e string) bool {
 
 // DefaultBin 返回引擎默认二进制名。
 func DefaultBin(engine string) string {
-	switch strings.ToLower(engine) {
+	switch RepairEngineName(engine) {
 	case "claude":
 		return "claude"
 	case "codex":
@@ -90,6 +92,69 @@ func DefaultBin(engine string) string {
 	default:
 		return ""
 	}
+}
+
+// SanitizeExecToken 去掉 NUL/控制字符并拷贝，避免脏内存把 "agent" 变成 "\x00gent"。
+func SanitizeExecToken(s string) string {
+	if s == "" {
+		return ""
+	}
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == 0 || c < 0x20 {
+			continue
+		}
+		b = append(b, c)
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// RepairEngineName 纠正引擎名首字节损坏（如 "\x00gent"→"agent"）。
+func RepairEngineName(engine string) string {
+	eng := strings.ToLower(SanitizeExecToken(engine))
+	if eng == "" {
+		return ""
+	}
+	for _, known := range []string{"claude", "codex", "agent"} {
+		if eng == known {
+			return known
+		}
+		// 首字节丢失后的后缀仍可认回。
+		if len(eng) >= 3 && strings.HasSuffix(known, eng) {
+			return known
+		}
+	}
+	return eng
+}
+
+// ResolveEngineBin 解析可执行引擎路径。裸命令名若被损坏（如 gent），回退到 DefaultBin。
+func ResolveEngineBin(engine, binPath string) string {
+	eng := RepairEngineName(engine)
+	bin := SanitizeExecToken(binPath)
+	def := DefaultBin(eng)
+	if bin == "" {
+		if def != "" {
+			return def
+		}
+		// 引擎字段也坏了时，尝试从 bin 残片认回。
+		if repaired := RepairEngineName(binPath); repaired == "claude" || repaired == "codex" || repaired == "agent" {
+			return repaired
+		}
+		return ""
+	}
+	// 自定义路径（含目录分隔）保留清理后的值。
+	if strings.ContainsAny(bin, `/\`) {
+		return bin
+	}
+	// 已知引擎：裸命令名一律用默认二进制，避免 "\x00gent"→"gent" 直接拿去 exec。
+	if def != "" {
+		return def
+	}
+	if repaired := RepairEngineName(bin); repaired == "claude" || repaired == "codex" || repaired == "agent" {
+		return repaired
+	}
+	return bin
 }
 
 func bool01(b bool) int {
@@ -224,7 +289,9 @@ func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (i
 		label = strings.TrimSpace(*in.ScheduleLabel)
 	}
 	window := DefaultContextWindow(engine)
-	if in.ContextWindowTokens != nil { window = *in.ContextWindowTokens }
+	if in.ContextWindowTokens != nil {
+		window = *in.ContextWindowTokens
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
 		 (name, engine, context_window_tokens, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
@@ -294,7 +361,9 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	aw, an, ar, ab := a.AllowWrite, a.AllowNetwork, a.AllowRm, a.AllowBrowser
 	ws, se, cron, label := a.WorkspacePath, a.ScheduleEnabled, a.ScheduleCron, a.ScheduleLabel
 	window := a.ContextWindowTokens
-	if in.ContextWindowTokens != nil { window = *in.ContextWindowTokens }
+	if in.ContextWindowTokens != nil {
+		window = *in.ContextWindowTokens
+	}
 
 	if strings.TrimSpace(in.Name) != "" {
 		n = strings.TrimSpace(in.Name)
