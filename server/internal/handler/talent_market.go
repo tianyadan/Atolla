@@ -35,10 +35,11 @@ func (h *Handler) AdminTalentMarketGet(c *gin.Context) {
 // AdminTalentMarketHire POST /api/admin/talent-market/hire
 func (h *Handler) AdminTalentMarketHire(c *gin.Context) {
 	var body struct {
-		TalentID            string `json:"talent_id"`
-		Name                string `json:"name"`
-		Engine              string `json:"engine"`
-		ContextWindowTokens *int64 `json:"context_window_tokens"`
+		TalentID            string  `json:"talent_id"`
+		Name                string  `json:"name"`
+		Engine              string  `json:"engine"`
+		ContextWindowTokens *int64  `json:"context_window_tokens"`
+		JellyColor          *string `json:"jelly_color"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.TalentID) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "talent_id required"})
@@ -49,6 +50,7 @@ func (h *Handler) AdminTalentMarketHire(c *gin.Context) {
 		Name:                strings.TrimSpace(body.Name),
 		Engine:              strings.TrimSpace(body.Engine),
 		ContextWindowTokens: body.ContextWindowTokens,
+		JellyColor:          body.JellyColor,
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {

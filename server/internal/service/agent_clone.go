@@ -114,7 +114,8 @@ func BuildCloneInitPrompt(newName, srcName, summary string) string {
 }
 
 // NewCloneFromSource 从源员工生成插入草稿（不定时任务、不带会话）。
-func NewCloneFromSource(src store.ManagedAgent, name, avatar string) store.ManagedAgent {
+// jellyColor 非空则写入草稿；空则由 InsertClonedManagedAgent 按新 id 自动分配（不继承源色）。
+func NewCloneFromSource(src store.ManagedAgent, name, avatar, jellyColor string) store.ManagedAgent {
 	av := strings.TrimSpace(avatar)
 	if av == "" {
 		av = strings.TrimSpace(src.AvatarURL)
@@ -122,6 +123,7 @@ func NewCloneFromSource(src store.ManagedAgent, name, avatar string) store.Manag
 	return store.ManagedAgent{
 		Name:            strings.TrimSpace(name),
 		AvatarURL:       av,
+		JellyColor:      strings.TrimSpace(jellyColor),
 		FolderID:        src.FolderID,
 		Engine:          src.Engine,
 		BinPath:         src.BinPath,
@@ -146,10 +148,18 @@ func shouldEmitTaskPlanAsk(a *store.ManagedAgent, skip bool) bool {
 }
 
 // CopyManagedAgent 复制配置、新建独立会话，并异步隐藏初始化。
-func (s *Service) CopyManagedAgent(ctx context.Context, srcID int64, name, avatarURL string) (*store.ManagedAgent, error) {
+// jellyColor 为 nil 时按新员工 id 自动分配；非 nil 须为合法色。
+func (s *Service) CopyManagedAgent(ctx context.Context, srcID int64, name, avatarURL string, jellyColor *string) (*store.ManagedAgent, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("name required")
+	}
+	explicit := ""
+	if jellyColor != nil {
+		explicit = store.NormalizeJellyColor(*jellyColor)
+		if explicit == "" {
+			return nil, store.ErrInvalidJellyColor
+		}
 	}
 	src, err := s.Store.GetManagedAgent(ctx, srcID)
 	if err != nil || src == nil {
@@ -161,7 +171,7 @@ func (s *Service) CopyManagedAgent(ctx context.Context, srcID int64, name, avata
 	if src.Status == AgentStatusInitializing {
 		return nil, ErrAgentInitializing
 	}
-	draft := NewCloneFromSource(*src, name, avatarURL)
+	draft := NewCloneFromSource(*src, name, avatarURL, explicit)
 	id, err := s.Store.InsertClonedManagedAgent(ctx, draft)
 	if err != nil {
 		return nil, err
