@@ -1,6 +1,7 @@
 package remotebridge
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/shirou/gopsutil/v4/sensors"
@@ -45,14 +46,12 @@ func TestPickHostTempC_None(t *testing.T) {
 	}
 }
 
-func TestCollectHostMetrics_TempPresentOnDarwin(t *testing.T) {
+func TestCollectHostMetrics_TempSkippedOnDarwin(t *testing.T) {
 	m := CollectHostMetrics()
-	if m.TempC == nil {
-		t.Log("temp_c unavailable on this host (acceptable)")
-		return
+	if runtime.GOOS == "darwin" && m.TempC != nil {
+		t.Fatal("darwin must skip sensors temperature to avoid CGO heap corruption")
 	}
-	if *m.TempC < 5 || *m.TempC > 120 {
+	if m.TempC != nil && (*m.TempC < 5 || *m.TempC > 120) {
 		t.Fatalf("temp out of range: %v", *m.TempC)
 	}
-	t.Logf("temp_c=%.1f", *m.TempC)
 }

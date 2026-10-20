@@ -11,6 +11,7 @@ import ProductManual from './ProductManual.jsx'
 import PublicHome from './PublicHome.jsx'
 import DigitalHumanCards from './DigitalHumanCards.jsx'
 import VisitorAskAudit from './VisitorAskAudit.jsx'
+import AgentAudit from './AgentAudit.jsx'
 import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
 import RemoteRelayPanel from './RemoteRelayPanel.jsx'
 import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
@@ -35,7 +36,7 @@ const ADMIN_MENUS = [
     ],
   },
   { id: 'audit', label: '对话审计' },
-  { id: 'stats', label: '统计' },
+  { id: 'audit-agents', label: '审计' },
   { id: 'plans', label: '项目协作' },
   { id: 'memos', label: '备忘录' },
   { id: 'analytics', label: '数据分析' },
@@ -764,7 +765,6 @@ export default function App() {
   function switchAdminMenu(id) {
     setAdminMenu(id)
     if (id === 'agents' || id === 'agents-manage' || id === 'legacy-memories') setDigitalOpen(true)
-    if (id === 'stats') loadStats()
     if (id === 'changelog') setClPage(1)
   }
 
@@ -778,29 +778,6 @@ export default function App() {
     }
     return ''
   }
-
-  async function loadStats() {
-    if (!authToken) return
-    const res = await fetch(`${API}/stats/days`, { headers: authHeaders() })
-    if (res.status === 401) {
-      clearAuth('登录已过期')
-      return
-    }
-    const data = await res.json()
-    setStats(data.items || [])
-    setOpenStatDay({})
-  }
-  async function loadStatDay(date) {
-    const res = await fetch(`${API}/stats/days/${encodeURIComponent(date)}`, { headers: authHeaders() })
-    if (res.status === 401) {
-      clearAuth('登录已过期')
-      return
-    }
-    const data = await res.json()
-    setOpenStatDay((prev) => ({ ...prev, [date]: data.items || [] }))
-  }
-  const [stats, setStats] = useState([])
-  const [openStatDay, setOpenStatDay] = useState({}) // date -> IP rows
 
   async function copyText(t) {
     try { await navigator.clipboard.writeText(t) } catch { /* ignore */ }
@@ -823,12 +800,6 @@ export default function App() {
   // 打断:运行中输入新问题
   const pendingInterruptRef = useRef('')
   const [interrupting, setInterrupting] = useState(false)
-
-  // 进入管理台历史菜单时加载列表
-  useEffect(() => {
-    if (view === 'admin' && adminMenu === 'stats' && authToken) loadStats()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, adminMenu, authToken])
 
   if (authChecking) {
     return <div className="app"><p className="empty">校验登录中…</p></div>
@@ -939,39 +910,12 @@ export default function App() {
                 active={adminMenu === 'audit'}
               />
             )}
-            {adminMenu === 'stats' && (
-              <section className="list">
-                <p className="empty-hint">按日期分组(最新在前)· 点击展开查看各 IP 成功/失败次数</p>
-                {stats.length === 0 && <p className="empty">暂无统计数据</p>}
-                {stats.map((s) => (
-                  <div key={s.date} className="ip-group">
-                    <button type="button" className="ip-folder" onClick={() => {
-                      const open = openStatDay[s.date]
-                      if (open) {
-                        setOpenStatDay((prev) => { const n = { ...prev }; delete n[s.date]; return n })
-                      } else {
-                        loadStatDay(s.date)
-                      }
-                    }}>
-                      <span className="ip-folder-caret">{openStatDay[s.date] ? '▾' : '▸'}</span>
-                      <span className="ip-folder-name">{String(s.date).slice(0, 10)}</span>
-                      <span className="ip-folder-count">成功 {s.ok_count} · 失败 {s.fail_count} · 共 {s.total}</span>
-                    </button>
-                    {openStatDay[s.date] && (
-                      <div className="ip-items">
-                        <table>
-                          <thead><tr><th>IP</th><th>成功</th><th>失败</th><th>合计</th></tr></thead>
-                          <tbody>
-                            {openStatDay[s.date].map((row, i) => (
-                              <tr key={i}><td>{row.user_ip}</td><td>{row.ok_count}</td><td>{row.fail_count}</td><td>{row.total}</td></tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </section>
+            {adminMenu === 'audit-agents' && (
+              <AgentAudit
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'audit-agents'}
+              />
             )}
             {/* 切菜单只隐藏,避免中断后台 SSE */}
             <div style={{ display: adminMenu === 'agents' ? 'block' : 'none' }}>
@@ -1071,7 +1015,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'stats', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>

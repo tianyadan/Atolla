@@ -44,12 +44,27 @@ func CollectHostMetrics() HostMetrics {
 	if usage, err := disk.Usage("/"); err == nil {
 		m.DiskPct = clampPct(usage.UsedPercent)
 	}
-	if stats, err := sensors.SensorsTemperatures(); err == nil {
-		if t, ok := pickHostTempC(stats); ok {
+	// macOS 上 sensors 走 IOKit CGO，曾出现堆损坏（"agent"→"\x00gent"）甚至进程崩溃；温度改为可选探测。
+	if runtime.GOOS != "darwin" {
+		if t, ok := readHostTempC(); ok {
 			m.TempC = &t
 		}
 	}
 	return m
+}
+
+// readHostTempC 读取主机温度；失败或 panic 时安静跳过。
+func readHostTempC() (t float64, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	stats, err := sensors.SensorsTemperatures()
+	if err != nil {
+		return 0, false
+	}
+	return pickHostTempC(stats)
 }
 
 // pickHostTempC selects a representative °C: prefer CPU/package-like sensors, else max valid.

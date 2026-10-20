@@ -36,7 +36,7 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 	}
 	go func() {
 		bg := context.Background()
-		_, askErr := s.AskManagedWith(bg, agentID, q, chatAtts, nil)
+		_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil)
 		if askErr != nil {
 			log.Printf("remotebridge agent.ask agent=%d: %v", agentID, askErr)
 		}
@@ -82,8 +82,13 @@ func (s *Service) AskManaged(ctx context.Context, agentID int64, question string
 	return s.AskManagedWith(ctx, agentID, question, nil, onEvent)
 }
 
-// AskManagedWith 同 AskManaged，可附带聊天图片。
+// AskManagedWith 同 AskManaged，可附带聊天图片（来源记为后台）。
 func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question string, atts []ChatAttachment, onEvent AskEventSink) (*store.Message, error) {
+	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent)
+}
+
+// askManagedUserFacing 后台或手机发起的主会话 Ask，写入数字员工审计。
+func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, question string, atts []ChatAttachment, source string, onEvent AskEventSink) (*store.Message, error) {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -110,6 +115,7 @@ func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question st
 	msg, askErr := s.askManagedCore(ctx, a, 0, question, askCoreOpts{
 		bindMainConv: true,
 		attachments:  NormalizeChatAttachments(atts),
+		agentAudit:   &agentAskAudit{Source: source},
 	}, onEvent)
 	if askErr == nil && msg != nil {
 		s.notifyTaskDone(agentID, question, fmt.Sprintf("%d-%d", agentID, msg.ID))
@@ -147,6 +153,8 @@ type askCoreOpts struct {
 	attachments  []ChatAttachment
 	// visitorAudit 非空时：用户消息落库后建 processing 审计，结束后写 token/耗时/状态。
 	visitorAudit *visitorAskAudit
+	// agentAudit 非空时：数字员工主会话 Ask 写入审计看板（后台/手机）。
+	agentAudit *agentAskAudit
 }
 
 // visitorAskAudit 前台一轮 Ask 的审计上下文。
@@ -154,6 +162,17 @@ type visitorAskAudit struct {
 	VisitorID  int64
 	IP         string
 	UA         string
+	logID      int64
+	started    time.Time
+	input      int64
+	output     int64
+	cacheRead  int64
+	cacheWrite int64
+}
+
+// agentAskAudit 数字员工一轮 Ask 的审计上下文。
+type agentAskAudit struct {
+	Source     string
 	logID      int64
 	started    time.Time
 	input      int64
@@ -183,16 +202,31 @@ func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question
 }
 
 func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fixedConvID int64, question string, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
-	// 先包装 onEvent，再定义 onChunk，确保 usage 能写入审计。
-	if opts.visitorAudit != nil {
+	// 先包装 onEvent，再定义 onChunk，确保 usage / 工具事件能写入审计。
+	if opts.visitorAudit != nil || opts.agentAudit != nil {
 		inner := onEvent
 		onEvent = func(ev map[string]any) {
 			if ev != nil {
 				if t, _ := ev["type"].(string); t == "usage" {
-					opts.visitorAudit.input = toInt64Any(ev["input_tokens"])
-					opts.visitorAudit.output = toInt64Any(ev["output_tokens"])
-					opts.visitorAudit.cacheRead = toInt64Any(ev["cache_read_tokens"])
-					opts.visitorAudit.cacheWrite = toInt64Any(ev["cache_write_tokens"])
+					in := toInt64Any(ev["input_tokens"])
+					out := toInt64Any(ev["output_tokens"])
+					cr := toInt64Any(ev["cache_read_tokens"])
+					cw := toInt64Any(ev["cache_write_tokens"])
+					if opts.visitorAudit != nil {
+						opts.visitorAudit.input = in
+						opts.visitorAudit.output = out
+						opts.visitorAudit.cacheRead = cr
+						opts.visitorAudit.cacheWrite = cw
+					}
+					if opts.agentAudit != nil {
+						opts.agentAudit.input = in
+						opts.agentAudit.output = out
+						opts.agentAudit.cacheRead = cr
+						opts.agentAudit.cacheWrite = cw
+					}
+				}
+				if opts.agentAudit != nil && opts.agentAudit.logID > 0 {
+					s.recordAgentAskToolEvent(opts.agentAudit, a.ID, ev)
 				}
 			}
 			if inner != nil {
@@ -299,6 +333,15 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 				opts.visitorAudit.logID = logID
 			}
 		}
+		if opts.agentAudit != nil {
+			opts.agentAudit.started = time.Now()
+			logID, aerr := s.Store.BeginAgentAskLog(runCtx, agentID, convID, userMsgID, opts.agentAudit.Source)
+			if aerr != nil {
+				log.Printf("agent ask: begin audit failed: %v", aerr)
+			} else {
+				opts.agentAudit.logID = logID
+			}
+		}
 	}
 
 	var steps []string
@@ -335,6 +378,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
+	s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, runErr)
 	return msg, err
 }
 
@@ -412,6 +456,10 @@ func (s *Service) askManagedWithInvokes(
 		}
 		tp.advance(ctx, sumStep, steps[sumStep])
 	}
+	// 委托并行跑完后从库重载调用方，避免长生命周期结构体上的引擎路径被脏内存改成 "\x00gent"。
+	if fresh, err := s.Store.GetManagedAgent(ctx, caller.ID); err == nil && fresh != nil {
+		caller = fresh
+	}
 	sys := s.BuildAgentSystemPromptWithSkills(ctx, caller) + "\n你是协作编排方：根据各同事的隔离结果分别汇总，并标明归属。"
 	sys = s.consumeSystemReinject(ctx, convID, sys)
 	sumQ := buildSummaryQuestion(taskBody, results)
@@ -422,6 +470,7 @@ func (s *Service) askManagedWithInvokes(
 	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
 	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)
+	s.finalizeAgentAskAudit(ctx, opts.agentAudit, msg, runErr)
 	s.writeInvokeDividersAsync(caller, taskBody, results)
 	return msg, err
 }
@@ -503,6 +552,81 @@ func (s *Service) finalizeVisitorAskAudit(ctx context.Context, audit *visitorAsk
 	if err := s.Store.FinishVisitorAskLog(context.WithoutCancel(ctx), audit.logID, asstID,
 		audit.input, audit.output, cached, total, duration, status, errMsg); err != nil {
 		log.Printf("visitor ask: finish audit %d failed: %v", audit.logID, err)
+	}
+}
+
+// recordAgentAskToolEvent 从 SSE 活动/命令事件落工具审计（拿不到耗时时记 0）。
+func (s *Service) recordAgentAskToolEvent(audit *agentAskAudit, agentID int64, ev map[string]any) {
+	if audit == nil || audit.logID <= 0 || ev == nil {
+		return
+	}
+	typ, _ := ev["type"].(string)
+	var tool string
+	result := store.AgentAskToolOK
+	switch typ {
+	case "activity":
+		tool, _ = ev["tool"].(string)
+		if tool == "" {
+			tool, _ = ev["tool_name"].(string)
+		}
+	case "command":
+		tool, _ = ev["tool_name"].(string)
+		if tool == "" {
+			tool, _ = ev["tool"].(string)
+		}
+		if d, _ := ev["denied"].(bool); d {
+			result = store.AgentAskToolDenied
+		}
+	default:
+		return
+	}
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		return
+	}
+	if err := s.Store.InsertAgentAskToolCall(context.Background(), audit.logID, agentID, tool, result, 0); err != nil {
+		log.Printf("agent ask: tool audit failed: %v", err)
+	}
+}
+
+// mapAgentAskStatus 把取消/超时/失败映射到审计终态。
+func mapAgentAskStatus(ctxErr, runErr error, msg *store.Message) (status, errType, errMsg string) {
+	if ctxErr != nil {
+		return store.AgentAskStatusCancelled, "cancelled", ctxErr.Error()
+	}
+	if runErr != nil {
+		errMsg = runErr.Error()
+		low := strings.ToLower(errMsg)
+		if strings.Contains(low, "timeout") || strings.Contains(low, "deadline") || strings.Contains(errMsg, "超时") {
+			return store.AgentAskStatusTimeout, "timeout", errMsg
+		}
+		if strings.Contains(low, "interrupt") || strings.Contains(errMsg, "中断") {
+			return store.AgentAskStatusInterrupted, "interrupted", errMsg
+		}
+		return store.AgentAskStatusFailed, "error", errMsg
+	}
+	if msg != nil && msg.Status == "error" {
+		errMsg = strings.TrimSpace(strings.TrimPrefix(msg.Content, "❌ "))
+		return store.AgentAskStatusFailed, "error", errMsg
+	}
+	return store.AgentAskStatusCompleted, "", ""
+}
+
+// finalizeAgentAskAudit 结束数字员工审计；失败只打日志。
+func (s *Service) finalizeAgentAskAudit(ctx context.Context, audit *agentAskAudit, msg *store.Message, runErr error) {
+	if audit == nil || audit.logID <= 0 {
+		return
+	}
+	status, errType, errMsg := mapAgentAskStatus(ctx.Err(), runErr, msg)
+	duration := int(time.Since(audit.started).Milliseconds())
+	if duration <= 0 {
+		duration = 1
+	}
+	cached := audit.cacheRead + audit.cacheWrite
+	total := audit.input + audit.output + cached
+	if err := s.Store.FinishAgentAskLog(context.WithoutCancel(ctx), audit.logID,
+		audit.input, audit.output, total, duration, status, errType, errMsg); err != nil {
+		log.Printf("agent ask: finish audit %d failed: %v", audit.logID, err)
 	}
 }
 
