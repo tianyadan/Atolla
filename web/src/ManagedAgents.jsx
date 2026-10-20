@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
 import { ListCollapseIcon } from './adminMenuIcons.jsx'
 import AgentMarkdown, { selectionInside } from './agentMarkdown.jsx'
-import { agentAvatarUrl, compressImageFile } from './agentAvatar.js'
+import JellyAvatar from './JellyAvatar.jsx'
+import JellyColorPicker from './JellyColorPicker.jsx'
+import {
+  assignJellyColor,
+  jellyColorPayload,
+  jellyStateFromAgent,
+  resolveJellyColor,
+} from './jellyColor.js'
 import {
   allPendingPerms,
   anyAgentLoading,
@@ -220,6 +227,9 @@ export default function ManagedAgentsPanel({
   const [newContextWindow, setNewContextWindow] = useState(1000000)
   const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
   const [newRules, setNewRules] = useState('')
+  const [newJellyColor, setNewJellyColor] = useState(() => assignJellyColor('new'))
+  const [jellyColorDraft, setJellyColorDraft] = useState('blue')
+  const [copyJellyColor, setCopyJellyColor] = useState('blue')
   const [createErr, setCreateErr] = useState('')
   const [newPolicy, setNewPolicy] = useState(() => emptyPolicy())
   const [policyDraft, setPolicyDraft] = useState(() => emptyPolicy())
@@ -472,6 +482,14 @@ export default function ManagedAgentsPanel({
     if (!focusAgentId) return
     setSelectedId(focusAgentId)
     if (openSettings) {
+      const a = agents.find((x) => x.id === focusAgentId)
+      if (a) {
+        setRenameDraft(a.name || '')
+        setRulesDraft(a.rules_prompt || '')
+        setPolicyDraft(policyFromAgent(a))
+        setContextWindowDraft(a.context_window_tokens || 1000000)
+        setJellyColorDraft(resolveJellyColor(a))
+      }
       setSettingsTab('basic')
       setSettingsOpen(true)
     }
@@ -582,6 +600,7 @@ export default function ManagedAgentsPanel({
           schedule_enabled: !!newPolicy.schedule_enabled,
           schedule_cron: newPolicy.schedule_enabled ? (newPolicy.schedule_cron || '') : '',
           schedule_label: newPolicy.schedule_enabled ? (newPolicy.schedule_label || '') : '',
+          ...jellyColorPayload(newJellyColor),
         }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
@@ -592,13 +611,18 @@ export default function ManagedAgentsPanel({
       }
       // 先插进未入组，避免等列表接口时页面像没点上。
       if (d?.id) {
-        const created = { ...d, folder_id: Number(d.folder_id) || 0 }
+        const created = {
+          ...d,
+          folder_id: Number(d.folder_id) || 0,
+          jelly_color: d.jelly_color || newJellyColor,
+        }
         setAgents((prev) => [created, ...prev.filter((a) => a.id !== created.id)])
         setSelectedId(created.id)
         setAgentSearch('')
       }
       setCreateOpen(false)
       setNewPolicy(emptyPolicy())
+      setNewJellyColor(assignJellyColor(String(Date.now())))
       await loadAgents(d?.id)
     } catch (err) {
       setCreateErr(err?.message || '创建失败')
@@ -615,7 +639,10 @@ export default function ManagedAgentsPanel({
       const res = await fetch(`${API}/admin/agents/${selected.id}/copy`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({
+          name,
+          ...jellyColorPayload(copyJellyColor),
+        }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json()
@@ -640,42 +667,6 @@ export default function ManagedAgentsPanel({
     } finally { setBusy(false) }
   }
 
-  async function uploadAvatar(file) {
-    if (!selected || !file || busy) return
-    setBusy(true)
-    try {
-      const blob = await compressImageFile(file, 512)
-      const fd = new FormData()
-      fd.append('file', blob, 'avatar.jpg')
-      const res = await fetch(`${API}/admin/agents/${selected.id}/avatar`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '上传失败' }); return }
-      await loadAgents(selected.id)
-    } catch (err) {
-      patchAgentSession(selected.id, { error: String(err.message || err) })
-    } finally { setBusy(false) }
-  }
-
-  async function clearAvatar() {
-    if (!selected || busy) return
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agents/${selected.id}/avatar`, {
-        method: 'DELETE',
-        headers: authHeaders(),
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '清除失败' }); return }
-      await loadAgents(selected.id)
-    } finally { setBusy(false) }
-  }
-
   async function saveRules() {
     if (!selected || busy) return
     setBusy(true)
@@ -694,9 +685,18 @@ export default function ManagedAgentsPanel({
           schedule_enabled: !!policyDraft.schedule_enabled,
           schedule_cron: policyDraft.schedule_enabled ? (policyDraft.schedule_cron || '') : '',
           schedule_label: policyDraft.schedule_enabled ? (policyDraft.schedule_label || '') : '',
+          ...jellyColorPayload(jellyColorDraft),
         }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        patchAgentSession(selected.id, { error: d.error || '保存失败' })
+        return
+      }
+      setAgents((prev) => prev.map((a) => (
+        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft } : a
+      )))
       setSettingsOpen(false)
       await loadAgents(selected.id)
     } finally { setBusy(false) }
@@ -1449,7 +1449,12 @@ export default function ManagedAgentsPanel({
         }}
       >
         <div className="ma-item-head">
-          <img className="ma-avatar ma-avatar-sm" src={agentAvatarUrl(a)} alt="" />
+          <JellyAvatar
+            className="ma-avatar ma-avatar-sm"
+            color={resolveJellyColor(a)}
+            size={28}
+            state={jellyStateFromAgent(a, { loading: getAgentSession(a.id).loading })}
+          />
           <strong className="ma-item-name">
             {a.name}
             {a.mobile_viewing ? <MobileViewerIcon /> : null}
@@ -1628,7 +1633,14 @@ export default function ManagedAgentsPanel({
             <div className="ma-detail">
               <header className="ma-detail-head">
                 <div className="ma-detail-title">
-                  <img className="ma-avatar ma-avatar-md" src={agentAvatarUrl(selected)} alt="" />
+                  <JellyAvatar
+                    className="ma-avatar ma-avatar-md"
+                    color={resolveJellyColor(selected)}
+                    size={36}
+                    state={jellyStateFromAgent(selected, {
+                      loading: getAgentSession(selected.id).loading,
+                    })}
+                  />
                   <h3 className="ma-detail-name">
                     {selected.name}
                     {selected.mobile_viewing ? <MobileViewerIcon /> : null}
@@ -1665,6 +1677,7 @@ export default function ManagedAgentsPanel({
                     setRulesDraft(selected.rules_prompt || '')
                     setPolicyDraft(policyFromAgent(selected))
                     setContextWindowDraft(selected.context_window_tokens || 1000000)
+                    setJellyColorDraft(resolveJellyColor(selected))
                     setSettingsTab('basic')
                     setSettingsOpen(true)
                   }}>设置</button>
@@ -1675,6 +1688,7 @@ export default function ManagedAgentsPanel({
                       disabled={busy || loading}
                       onClick={() => {
                         setCopyName(`${selected.name || '未命名员工'} 副本`)
+                        setCopyJellyColor(resolveJellyColor(selected))
                         setCopyOpen(true)
                       }}
                     >
@@ -1731,6 +1745,18 @@ export default function ManagedAgentsPanel({
                   <div key={m.id || i} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
                     <div className="msg-label">
                       <span>
+                        {(m.role === 'assistant' || m.role === 'invoke_quote') && (
+                          <JellyAvatar
+                            className="ma-msg-jelly"
+                            color={resolveJellyColor(selected)}
+                            size={16}
+                            state={
+                              m.role === 'assistant' && !(m.content || '').trim() && loading && i === chatLog.length - 1
+                                ? 'typing'
+                                : jellyStateFromAgent(selected, { loading })
+                            }
+                          />
+                        )}
                         {m.role === 'user' ? '你'
                           : m.role === 'auto' ? '自动审核'
                             : m.role === 'system' ? '系统'
@@ -1807,6 +1833,7 @@ export default function ManagedAgentsPanel({
                     activity={sess.liveActivity}
                     runSec={liveRunSec(selected)}
                     taskTokens={sess.taskTokens || 0}
+                    jellyColor={resolveJellyColor(selected)}
                   />
                 )}
               </div>
@@ -1983,6 +2010,7 @@ export default function ManagedAgentsPanel({
         onCustomHire={() => {
           setTalentMarketOpen(false)
           setNewPolicy(emptyPolicy())
+          setNewJellyColor(assignJellyColor(String(Date.now())))
           setCreateOpen(true)
         }}
       />
@@ -1991,6 +2019,7 @@ export default function ManagedAgentsPanel({
         <div className="modal-mask" onClick={() => !busy && setCreateOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={createAgent}>
             <h2>自定义招聘</h2>
+            <JellyColorPicker value={newJellyColor} onChange={setNewJellyColor} disabled={busy} />
             <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
               引擎
@@ -2027,9 +2056,10 @@ export default function ManagedAgentsPanel({
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={copyAgent}>
             <h2>复制数字员工</h2>
             <div className="ma-avatar-edit">
-              <img className="ma-avatar ma-avatar-md" src={agentAvatarUrl(selected)} alt="" />
-              <p className="muted" style={{ margin: 0 }}>将沿用当前头像；复制后可在设置中更换。</p>
+              <JellyAvatar color={copyJellyColor} size={36} state="idle" />
+              <p className="muted" style={{ margin: 0 }}>默认同源色，可改；不选则后端按新 id 分配。</p>
             </div>
+            <JellyColorPicker value={copyJellyColor} onChange={setCopyJellyColor} disabled={busy} />
             <label>
               新名称
               <input value={copyName} onChange={(e) => setCopyName(e.target.value)} disabled={busy} autoFocus />
@@ -2131,25 +2161,9 @@ export default function ManagedAgentsPanel({
             {settingsTab === 'basic' ? (
               <form onSubmit={(e) => { e.preventDefault(); saveRules() }}>
                 <div className="ma-avatar-edit">
-                  <img className="ma-avatar ma-avatar-lg" src={agentAvatarUrl(selected)} alt="" />
+                  <JellyAvatar color={jellyColorDraft} size={72} state="idle" />
                   <div className="ma-avatar-actions">
-                    <label className="ghost ma-file-btn">
-                      {busy ? '上传中…' : '上传头像'}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        hidden
-                        disabled={busy}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          e.target.value = ''
-                          if (f) uploadAvatar(f)
-                        }}
-                      />
-                    </label>
-                    {!!String(selected.avatar_url || '').trim() && (
-                      <button type="button" className="ghost" disabled={busy} onClick={clearAvatar}>恢复默认</button>
-                    )}
+                    <JellyColorPicker value={jellyColorDraft} onChange={setJellyColorDraft} disabled={busy} label="水母颜色" />
                   </div>
                 </div>
                 <label>
@@ -2212,10 +2226,11 @@ export default function ManagedAgentsPanel({
                   <ul className="lm-mount-list">
                     {legacyMounts.map((m) => (
                       <li key={m.id} className="lm-mount-item">
-                        <img
+                        <JellyAvatar
                           className="lm-mount-avatar"
-                          src={agentAvatarUrl({ avatar_url: m.source_avatar_url })}
-                          alt=""
+                          color={resolveJellyColor({ id: m.source_agent_id || m.legacy_memory_id || m.id })}
+                          size={28}
+                          state="idle"
                         />
                         <div>
                           <strong>{m.source_agent_name}</strong>
@@ -2525,8 +2540,8 @@ function CopyTextButton({ text, className = 'ma-copy-btn' }) {
   )
 }
 
-/** 运行态：银灰 thinking + token + 工具活动条 */
-function RunStatus({ interrupting, activity, runSec, taskTokens }) {
+/** 运行态：跳动水母 + thinking 文案 + token + 工具活动条 */
+function RunStatus({ interrupting, activity, runSec, taskTokens, jellyColor = 'blue' }) {
   const [phraseIdx, setPhraseIdx] = useState(0)
   useEffect(() => {
     const t = setInterval(() => {
@@ -2534,12 +2549,12 @@ function RunStatus({ interrupting, activity, runSec, taskTokens }) {
     }, 2400)
     return () => clearInterval(t)
   }, [])
-  const phrase = interrupting ? 'interrupting…' : THINKING_PHRASES[phraseIdx]
+  const phrase = interrupting ? 'interrupting' : THINKING_PHRASES[phraseIdx]
   return (
     <div className="ma-run-status">
       <div className="ma-thinking" aria-live="polite">
+        <JellyAvatar className="ma-thinking-jelly" color={jellyColor} size={18} state="typing" />
         <span className="ma-thinking-text">{phrase}</span>
-        <span className="ma-thinking-dots" aria-hidden="true">…</span>
         {runSec > 0 && <span className="ma-thinking-sec">{fmtSec(runSec)}</span>}
         {taskTokens > 0 && <span className="ma-thinking-tokens">{fmtToken(taskTokens)} tokens</span>}
       </div>

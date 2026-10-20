@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { agentAvatarUrl } from './agentAvatar.js'
+import JellyAvatar from './JellyAvatar.jsx'
+import { resolveJellyColor } from './jellyColor.js'
 
 const API = '/api'
 
@@ -175,7 +176,7 @@ export default function LegacyMemoryShelf({ authHeaders, onUnauthorized, active 
           >
             <span className="lm-book-spine" />
             <span className="lm-book-cover">
-              <img src={agentAvatarUrl({ avatar_url: m.avatar_url })} alt="" />
+              <JellyAvatar color={resolveJellyColor({ id: m.source_agent_id || m.id })} size={40} state="idle" />
               <strong>{m.agent_name}</strong>
               <em>{m.job_title || '数字员工'}</em>
               <span className={`lm-book-badge st-${m.status}`}>{STATUS_ZH[m.status] || m.status}</span>
@@ -188,7 +189,12 @@ export default function LegacyMemoryShelf({ authHeaders, onUnauthorized, active 
         <div className="modal-mask" onClick={() => !busy && setDetail(null)}>
           <div className="modal-card lm-reader" onClick={(e) => e.stopPropagation()}>
             <div className="lm-reader-head">
-              <img className="lm-reader-avatar" src={agentAvatarUrl({ avatar_url: detail.avatar_url })} alt="" />
+              <JellyAvatar
+                className="lm-reader-avatar"
+                color={resolveJellyColor({ id: detail.source_agent_id || detail.id })}
+                size={48}
+                state="idle"
+              />
               <div>
                 <h2>{detail.agent_name}</h2>
                 <p className="muted">{detail.job_title} · {STATUS_ZH[detail.status] || detail.status}</p>
