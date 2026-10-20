@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { UI_MODE_CLASSIC, UI_MODE_JELLY } from './uiMode.js'
 
 /**
- * 水母顶栏：团队名（可切换）、一键招聘、⋯、经典/水母切换。
+ * 水母顶栏：团队名、一键招聘、⋯（含「新版界面」开关）。
  */
 export default function JellyTopBar({
   teams = [],
@@ -10,7 +10,7 @@ export default function JellyTopBar({
   onTeamChange,
   onHire,
   onMenu,
-  uiMode,
+  uiMode = UI_MODE_JELLY,
   onUiModeChange,
   extra,
 }) {
@@ -18,6 +18,7 @@ export default function JellyTopBar({
   const [moreOpen, setMoreOpen] = useState(false)
   const boxRef = useRef(null)
   const current = teams.find((t) => String(t.id) === String(teamId)) || teams[0]
+  const jellyOn = uiMode === UI_MODE_JELLY
 
   useEffect(() => {
     function onDoc(e) {
@@ -58,26 +59,20 @@ export default function JellyTopBar({
       </div>
       <div className="jelly-acts">
         {extra}
-        <div className="jelly-mode-toggle" role="group" aria-label="界面切换">
-          <button
-            type="button"
-            className={uiMode === UI_MODE_CLASSIC ? 'on' : ''}
-            onClick={() => onUiModeChange?.(UI_MODE_CLASSIC)}
-          >
-            经典界面
-          </button>
-          <button
-            type="button"
-            className={uiMode === UI_MODE_JELLY ? 'on' : ''}
-            onClick={() => onUiModeChange?.(UI_MODE_JELLY)}
-          >
-            水母界面
-          </button>
-        </div>
         <button type="button" className="jelly-btn" onClick={() => onHire?.()}>一键招聘</button>
         <button type="button" className="jelly-btn ghost" onClick={() => setMoreOpen((v) => !v)} aria-label="更多">⋯</button>
         {moreOpen && (
           <div className="jelly-more-menu">
+            <button
+              type="button"
+              className={jellyOn ? 'on' : ''}
+              onClick={() => {
+                onUiModeChange?.(jellyOn ? UI_MODE_CLASSIC : UI_MODE_JELLY)
+                setMoreOpen(false)
+              }}
+            >
+              {jellyOn ? '✓ 新版界面' : '新版界面'}
+            </button>
             <button type="button" onClick={() => { onMenu?.('agents-manage'); setMoreOpen(false) }}>数字人管理</button>
             <button type="button" onClick={() => { onMenu?.('audit'); setMoreOpen(false) }}>对话审计</button>
             <button type="button" onClick={() => { onMenu?.('changelog'); setMoreOpen(false) }}>版本</button>

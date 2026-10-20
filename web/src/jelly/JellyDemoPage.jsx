@@ -29,7 +29,7 @@ const DEMO_APPROVALS = [
 ]
 
 /**
- * 无后端预览水母界面（#jelly-demo），方便视觉验收与截图。
+ * 无后端预览水母界面（开发/截图用，不挂进 App 主路径）。
  */
 export default function JellyDemoPage({ onExit }) {
   const [agents, setAgents] = useState(DEMO_AGENTS)
@@ -38,7 +38,6 @@ export default function JellyDemoPage({ onExit }) {
     () => (typeof location !== 'undefined' && location.hash.includes('drawer') ? DEMO_AGENTS.find((a) => a.id === 'qa') : null),
   )
   const [ask, setAsk] = useState('')
-  const [uiMode, setUiMode] = useState(UI_MODE_JELLY)
   const teams = useMemo(() => [{ id: '1', name: 'sales-analytics 开发团队' }], [])
   const agentsById = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents])
 
@@ -51,56 +50,16 @@ export default function JellyDemoPage({ onExit }) {
     )))
   }
 
-  if (uiMode === UI_MODE_CLASSIC) {
-    return (
-      <div className="app app-admin" style={{ minHeight: '100vh', background: '#0b1220', color: '#e2e8f0' }}>
-        <header className="topbar admin-topbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid #1e293b' }}>
-          <h1 style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 18, margin: 0 }}>
-            <img className="brand-logo" src="/brand-jellyfish-white.png" alt="" width="28" height="28" />
-            <span className="brand-name">Atolla</span>
-            <span className="admin-ver" style={{ opacity: 0.6, fontSize: 12 }}>经典界面</span>
-          </h1>
-          <div className="topbar-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div className="ui-mode-toggle" role="group" aria-label="界面切换">
-              <button type="button" className="on" onClick={() => setUiMode(UI_MODE_CLASSIC)}>经典界面</button>
-              <button type="button" onClick={() => setUiMode(UI_MODE_JELLY)}>水母界面</button>
-            </div>
-          </div>
-        </header>
-        <div className="admin-layout" style={{ display: 'flex', minHeight: 'calc(100vh - 56px)' }}>
-          <aside className="admin-side" style={{ width: 200, borderRight: '1px solid #1e293b', padding: 12 }}>
-            <div style={{ opacity: 0.7, fontSize: 13, marginBottom: 8 }}>数字人</div>
-            <div style={{ padding: '8px 10px', background: 'rgba(56,189,248,.15)', borderRadius: 8 }}>对话</div>
-            <div style={{ padding: '8px 10px', opacity: 0.55 }}>数字人管理</div>
-            <div style={{ padding: '8px 10px', opacity: 0.55, marginTop: 12 }}>审计</div>
-            <div style={{ padding: '8px 10px', opacity: 0.55 }}>网络白名单</div>
-            <div style={{ padding: '8px 10px', opacity: 0.55 }}>设置</div>
-          </aside>
-          <main className="admin-main" style={{ flex: 1, padding: 24 }}>
-            <h2 style={{ marginTop: 0 }}>工作组 · 经典列表</h2>
-            <p style={{ color: '#94a3b8' }}>现有数字人对话 / 工作组列表保持原样，未改动。通过右上角切换到水母界面。</p>
-            <div style={{ display: 'grid', gap: 10, maxWidth: 480 }}>
-              {agents.map((a) => (
-                <div key={a.id} style={{ padding: '12px 14px', background: '#111827', borderRadius: 10, border: '1px solid #1f2937' }}>
-                  <strong>{a.n}</strong>
-                  <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4 }}>{a.t}</div>
-                </div>
-              ))}
-            </div>
-          </main>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="jelly-app">
       <JellyRail activeId="agents" onNavigate={() => {}} />
       <JellyTopBar
         teams={teams}
         teamId="1"
-        uiMode={uiMode}
-        onUiModeChange={setUiMode}
+        uiMode={UI_MODE_JELLY}
+        onUiModeChange={(mode) => {
+          if (mode === UI_MODE_CLASSIC) onExit?.()
+        }}
         onHire={() => {}}
         onMenu={() => {}}
       />

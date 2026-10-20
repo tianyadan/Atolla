@@ -10,13 +10,14 @@ const API = '/api'
 const TEAM_KEY = 'atolla_jelly_team_id'
 
 /**
- * 水母模式管理台壳：窄轨 + 顶栏 + 工作区（水母）/ 治理页内容。
- * 经典界面组件原样塞进主区，不改其样式。
+ * 水母工作组壳：窄轨 + 顶栏 + Canvas。
+ * 治理页不走此壳（由 App 经典布局渲染，保证两端一致）。
+ * children 用于保活经典数字人面板（隐藏挂载）。
  */
 export default function JellyAdminShell({
   authHeaders,
   onUnauthorized,
-  adminMenu,
+  adminMenu = 'agents',
   onNavigate,
   uiMode,
   onUiModeChange,
@@ -24,8 +25,6 @@ export default function JellyAdminShell({
   onExpandAgent,
   onLogout,
   badges = {},
-  /** 展开完整对话页时强制显示经典面板 */
-  forcePanel = false,
   children,
 }) {
   const [folders, setFolders] = useState([])
@@ -75,7 +74,6 @@ export default function JellyAdminShell({
     }
     const currentOk = teamId && teams.some((t) => t.id === String(teamId)) && countIn(teamId) > 0
     if (currentOk) return
-    // 当前组为空时，自动切到有人的工作组
     const withPeople = teams.find((t) => countIn(t.id) > 0)
     const next = withPeople?.id || (teamId && teams.some((t) => t.id === String(teamId)) ? String(teamId) : teams[0].id)
     if (String(next) !== String(teamId)) setTeamId(next)
@@ -95,8 +93,6 @@ export default function JellyAdminShell({
     onNavigate?.(id)
   }
 
-  const showJelly = adminMenu === 'agents' && !forcePanel
-
   return (
     <div className="jelly-app">
       <JellyRail activeId={adminMenu} onNavigate={onNavigate} badges={badges} />
@@ -109,24 +105,18 @@ export default function JellyAdminShell({
         uiMode={uiMode || UI_MODE_JELLY}
         onUiModeChange={onUiModeChange}
       />
-      <div className={`jelly-main ${showJelly ? 'is-jelly' : 'is-panel'}`}>
-        {showJelly && (
-          <JellyWorkspace
-            authHeaders={authHeaders}
-            onUnauthorized={onUnauthorized}
-            active
-            onExpandAgent={onExpandAgent}
-            teamId={teamId}
-            folders={folders}
-            agents={agents}
-          />
-        )}
-        {/* 经典面板始终挂载（隐藏），避免切水母时拆掉数字人 SSE */}
-        <div
-          className="jelly-panel-host"
-          style={showJelly ? { display: 'none' } : undefined}
-          aria-hidden={showJelly}
-        >
+      <div className="jelly-main is-jelly">
+        <JellyWorkspace
+          authHeaders={authHeaders}
+          onUnauthorized={onUnauthorized}
+          active
+          onExpandAgent={onExpandAgent}
+          teamId={teamId}
+          folders={folders}
+          agents={agents}
+        />
+        {/* 隐藏挂载经典面板，避免切壳时中断 SSE */}
+        <div className="jelly-panel-host" style={{ display: 'none' }} aria-hidden>
           {children}
         </div>
       </div>

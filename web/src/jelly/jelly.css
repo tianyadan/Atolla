@@ -334,25 +334,48 @@
   cursor: default;
 }
 
-.jelly-mode-toggle {
-  display: inline-flex;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-right: 4px;
+.jelly-more-menu button.on {
+  background: rgba(120, 200, 255, 0.14);
+  color: #9fd8ff;
 }
-.jelly-mode-toggle button {
-  background: transparent;
-  border: 0;
-  color: rgba(220, 228, 240, 0.55);
+
+/* 水母崩溃回退 */
+.jelly-error-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  background: #0b1220;
+  color: #e2e8f0;
+  text-align: center;
+}
+.jelly-error-fallback h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.jelly-error-fallback p {
+  margin: 0;
+  max-width: 420px;
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.jelly-error-msg {
+  max-width: 520px;
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  color: #fca5a5;
   font-size: 12px;
-  padding: 6px 12px;
-  cursor: pointer;
-  font: inherit;
-}
-.jelly-mode-toggle button.on {
-  background: rgba(120, 200, 255, 0.18);
-  color: #e9eef8;
+  text-align: left;
 }
 
 .jelly-main {
@@ -562,28 +585,6 @@
   pointer-events: none;
 }
 
-/* 经典顶栏里的切换按钮 */
-.ui-mode-toggle {
-  display: inline-flex;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-right: 8px;
-}
-.ui-mode-toggle button {
-  background: transparent;
-  border: 0;
-  color: #94a3b8;
-  font-size: 12px;
-  padding: 6px 12px;
-  cursor: pointer;
-  font: inherit;
-}
-.ui-mode-toggle button.on {
-  background: rgba(56, 189, 248, 0.2);
-  color: #e2e8f0;
-}
-
 @media (max-width: 720px) {
   .jelly-drawer {
     width: 100%;
@@ -596,9 +597,5 @@
     right: 12px;
     top: auto;
     bottom: 100px;
-  }
-  .jelly-mode-toggle button {
-    padding: 6px 8px;
-    font-size: 11px;
   }
 }

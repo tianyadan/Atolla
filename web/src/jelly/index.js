@@ -1,5 +1,7 @@
 export { default as JellyAdminShell } from './JellyAdminShell.jsx'
 export { default as JellyWorkspace } from './JellyWorkspace.jsx'
+export { default as JellyErrorBoundary } from './JellyErrorBoundary.jsx'
+export { default as ClassicNewUiNavButton } from './ClassicNewUiNavButton.jsx'
 export { readUiMode, writeUiMode, UI_MODE_CLASSIC, UI_MODE_JELLY, UI_MODE_KEY } from './uiMode.js'
 export { applyTeamEvent, parseTeamSSE, emptyTeamState } from './teamStreamAdapter.js'
 export { mapAgentState, mapCurrentTask, toTentacleAgents, permToApproval } from './mapAgents.js'

@@ -1431,6 +1431,23 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
 
 /* —— 管理台：数字人子菜单 + 卡片 —— */
 
+/* 经典侧栏底部「新版界面」开关（紧挨版本） */
+.admin-side-new-ui {
+  margin-top: 8px;
+  border-top: 1px solid var(--border, #1e293b);
+  padding-top: 8px !important;
+}
+.admin-side-new-ui-state {
+  font-size: 11px;
+  color: var(--muted, #94a3b8);
+  margin-left: auto;
+  padding-right: 4px;
+}
+.admin-side-new-ui.active .admin-side-new-ui-state {
+  color: #38bdf8;
+}
+.admin-layout.collapsed .admin-side-new-ui-state { display: none; }
+
 .admin-side-group { display: flex; flex-direction: column; gap: 1px; }
 .admin-side-sub { display: flex; flex-direction: column; gap: 1px; padding: 0 0 4px 22px; }
 .admin-side-sub button {
