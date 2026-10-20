@@ -101,7 +101,7 @@ func (s *Service) markClonesInterruptedBySource(ctx context.Context, srcID int64
 	}
 	for _, a := range items {
 		if a.ClonedFromID == srcID && a.Status == AgentStatusInitializing {
-			_ = s.Store.SetManagedAgentStatus(ctx, a.ID, "error", "源被协作接管，总结中断", 0, a.ConversationID)
+			_ = s.setManagedAgentStatus(ctx, a.ID, "error", "源被协作接管，总结中断", 0, a.ConversationID)
 			s.cancelCloneJob(a.ID)
 		}
 	}
@@ -557,6 +557,20 @@ func (e *WorkflowEngine) runAgent(ctx context.Context, runID, defID int64, defNa
 
 	roleHint := g.DataString(n, "role_hint")
 	upstream := CollectDirectUpstream(g, n.ID, outputs)
+	// 工作流直接上游 agent 节点 → 水母 task.handoff
+	for _, u := range upstream {
+		if u.SourceType != "agent" {
+			continue
+		}
+		srcNode, ok := g.Node(u.SourceNodeID)
+		if !ok {
+			continue
+		}
+		fromID := g.DataInt64(srcNode, "agent_id")
+		if fromID > 0 && fromID != agentID {
+			e.svc.publishTaskHandoff(ctx, fromID, agentID, fmt.Sprintf("wf-%d-%s", runID, n.ID))
+		}
+	}
 	q := buildWorkflowAgentPrompt(defName, roleHint, prompt, upstream)
 	msg, askErr := e.svc.AskManagedIsolated(ctx, agentID, convID, q, onEvent)
 	flushCancel()

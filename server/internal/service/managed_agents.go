@@ -277,7 +277,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	}
 
 	if !opts.holdStatus {
-		_ = s.Store.SetManagedAgentStatus(runCtx, agentID, "running", "", 0, statusConvID(opts.bindMainConv, convID))
+		_ = s.setManagedAgentStatus(runCtx, agentID, "running", "", 0, statusConvID(opts.bindMainConv, convID))
 		// 状态已是 running，马上推镜像。等回合结束再推时，状态已经变回 idle，手机全程显示空闲。
 		s.PushAgentsMirrorNow()
 	}
@@ -321,7 +321,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		userMsgID, uerr := s.Store.InsertMessage(runCtx, userMsg)
 		if uerr != nil {
 			log.Printf("ask: insert user message failed: %v", uerr)
-			_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "error", uerr.Error(), 0, convID)
+			_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "error", uerr.Error(), 0, convID)
 			return nil, uerr
 		}
 		if opts.visitorAudit != nil {
@@ -517,7 +517,7 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 		}
 	}
 	if !opts.holdStatus {
-		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))
+		_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))
 	}
 	return msg, nil
 }
@@ -679,7 +679,7 @@ func (s *Service) StopManaged(agentID int64) bool {
 	if a != nil {
 		convID = a.ConversationID
 	}
-	_ = s.Store.SetManagedAgentStatus(context.Background(), agentID, "idle", "stopped by user", 0, convID)
+	_ = s.setManagedAgentStatus(context.Background(), agentID, "idle", "stopped by user", 0, convID)
 	s.ReleaseOccupancy(context.Background(), agentID)
 	return true
 }

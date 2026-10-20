@@ -18,6 +18,7 @@ import (
 	"atolla/server/internal/permission"
 	"atolla/server/internal/remotebridge"
 	"atolla/server/internal/store"
+	"atolla/server/internal/teamstream"
 	"atolla/server/internal/testsrv"
 )
 
@@ -50,6 +51,8 @@ type Service struct {
 	WF           *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
+	// TeamHub 水母工作组 SSE 事件总线（进程内）。
+	TeamHub *teamstream.Hub
 	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
 	remoteBridgeParent   context.Context
 	remoteBridgeCancel   context.CancelFunc
@@ -94,11 +97,13 @@ func New(cfg config.Config, st *store.Store) *Service {
 		cloneJobMap:           &sync.Map{},
 		compactPending:        &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
+		TeamHub:               teamstream.NewHub(512),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
 	svc.Sched = NewScheduler(svc)
 	svc.Memory = NewMemoryService(st)
 	svc.WF = newWorkflowEngine(svc)
+	svc.startTeamStreamBridge()
 	svc.Sched.Reload(context.Background())
 	// 重启后未完成工作流进入 waiting_recovery，再尝试自动自检续跑（3 分钟窗口）
 	if n, err := st.MarkIncompleteRunsWaitingRecovery(context.Background()); err != nil {
