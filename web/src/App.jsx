@@ -18,12 +18,43 @@ import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
 import NotifySettings from './NotifySettings.jsx'
 import EngineOnboarding from './EngineOnboarding.jsx'
 import EngineSettings from './EngineSettings.jsx'
+import {
+  JellyAdminShell,
+  readUiMode,
+  writeUiMode,
+  UI_MODE_CLASSIC,
+  UI_MODE_JELLY,
+} from './jelly/index.js'
+import JellyDemoPage from './jelly/JellyDemoPage.jsx'
+import './jelly/jelly.css'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
 const ONBOARD_KEY = 'atolla_onboard_v1'
 const CHANGELOG_PAGE_SIZE = 5
 marked.setOptions({ breaks: true, gfm: true })
+
+/** 经典 / 水母一键切换 */
+function UiModeToggle({ mode, onChange }) {
+  return (
+    <div className="ui-mode-toggle" role="group" aria-label="界面切换">
+      <button
+        type="button"
+        className={mode === UI_MODE_CLASSIC ? 'on' : ''}
+        onClick={() => onChange(UI_MODE_CLASSIC)}
+      >
+        经典界面
+      </button>
+      <button
+        type="button"
+        className={mode === UI_MODE_JELLY ? 'on' : ''}
+        onClick={() => onChange(UI_MODE_JELLY)}
+      >
+        水母界面
+      </button>
+    </div>
+  )
+}
 
 const ADMIN_MENUS = [
   {
@@ -73,7 +104,16 @@ export default function App() {
   const [runningCount, setRunningCount] = useState(0)
   const [workflowBusyCount, setWorkflowBusyCount] = useState(0)
   const [pendingPermCount, setPendingPermCount] = useState(0)
+  const [uiMode, setUiMode] = useState(() => readUiMode())
+  /** 水母里展开完整对话 / 招聘时临时露出经典数字人面板 */
+  const [jellyForcePanel, setJellyForcePanel] = useState(false)
   const bgTokenRef = useRef('') // 登出后后台任务继续用的 token
+
+  function changeUiMode(mode) {
+    const next = writeUiMode(mode)
+    setUiMode(next)
+    if (next === UI_MODE_JELLY) setJellyForcePanel(false)
+  }
 
   // 模式与会话(单次/长对话各自缓存,切换不串台)
   const [mode, setMode] = useState('single') // single / chat
@@ -805,8 +845,207 @@ export default function App() {
     return <div className="app"><p className="empty">校验登录中…</p></div>
   }
 
+  // 无后端视觉验收：#jelly-demo / #jelly-demo-drawer
+  if (typeof location !== 'undefined' && location.hash.startsWith('#jelly-demo')) {
+    return (
+      <JellyDemoPage
+        onExit={() => {
+          location.hash = ''
+          changeUiMode(UI_MODE_CLASSIC)
+        }}
+      />
+    )
+  }
+
+  // 管理台：主内容（经典 / 水母壳共用，避免治理页被改样式）
+  const agentsPanelActive = adminMenu === 'agents' && (uiMode !== UI_MODE_JELLY || jellyForcePanel)
+  const adminMainContent = (
+    <>
+      {adminMenu === 'audit' && (
+        <VisitorAskAudit
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={adminMenu === 'audit'}
+        />
+      )}
+      {adminMenu === 'audit-agents' && (
+        <AgentAudit
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={adminMenu === 'audit-agents'}
+        />
+      )}
+      {/* 切菜单只隐藏,避免中断后台 SSE；水母工作组页时也保活 */}
+      <div style={{ display: agentsPanelActive ? 'block' : 'none' }}>
+        {jellyForcePanel && uiMode === UI_MODE_JELLY && (
+          <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button type="button" className="ghost" onClick={() => setJellyForcePanel(false)}>← 返回水母</button>
+            <span className="muted" style={{ fontSize: 13, color: '#94a3b8' }}>完整对话页</span>
+          </div>
+        )}
+        <ManagedAgentsPanel
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={agentsPanelActive || adminMenu === 'agents'}
+          focusAgentId={focusAgentId}
+          openSettings={openAgentSettings}
+          onFocusConsumed={() => { setFocusAgentId(0); setOpenAgentSettings(false) }}
+          openHire={openHire}
+          onHireConsumed={() => setOpenHire(false)}
+          onOpenWorkflowRun={(runId) => {
+            setJumpWorkflowRunId(runId)
+            setAdminMenu('plans')
+            setJellyForcePanel(false)
+          }}
+        />
+      </div>
+      {adminMenu === 'agents-manage' && (
+        <DigitalHumanCards
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={adminMenu === 'agents-manage'}
+          onHire={() => {
+            setOpenHire(true)
+            switchAdminMenu('agents')
+            if (uiMode === UI_MODE_JELLY) setJellyForcePanel(true)
+          }}
+          onOpenSettings={(a) => {
+            setFocusAgentId(a.id)
+            setOpenAgentSettings(true)
+            switchAdminMenu('agents')
+            if (uiMode === UI_MODE_JELLY) setJellyForcePanel(true)
+          }}
+        />
+      )}
+      {adminMenu === 'legacy-memories' && (
+        <LegacyMemoryShelf
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={adminMenu === 'legacy-memories'}
+        />
+      )}
+      {adminMenu === 'remote-relay' && (
+        <RemoteRelayPanel
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={adminMenu === 'remote-relay'}
+        />
+      )}
+      {adminMenu === 'settings' && (
+        <section className="settings-page">
+          <h2 className="settings-page-title">设置</h2>
+          <NotifySettings
+            authHeaders={authHeaders}
+            onUnauthorized={() => clearAuth('登录已过期')}
+            active={adminMenu === 'settings'}
+          />
+          <EngineSettings active={adminMenu === 'settings'} />
+        </section>
+      )}
+      {adminMenu === 'network-allowlist' && (
+        <NetworkPolicyPanel
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          active={adminMenu === 'network-allowlist'}
+        />
+      )}
+      <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
+        <WorkflowPanel
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+          jumpRunId={jumpWorkflowRunId}
+          onJumpConsumed={() => setJumpWorkflowRunId(0)}
+        />
+      </div>
+      {adminMenu === 'manual' && <ProductManual />}
+      {adminMenu === 'changelog' && (() => {
+        const total = CHANGELOG.length
+        const pages = Math.max(1, Math.ceil(total / CHANGELOG_PAGE_SIZE))
+        const page = Math.min(clPage, pages)
+        const slice = CHANGELOG.slice((page - 1) * CHANGELOG_PAGE_SIZE, page * CHANGELOG_PAGE_SIZE)
+        return (
+          <section className="list changelog">
+            <p className="empty-hint">版本变更记录 · 当前 {CURRENT_VERSION} · 每页 {CHANGELOG_PAGE_SIZE} 条 · 共 {total} 个版本</p>
+            {slice.map((v) => (
+              <article key={v.version} className="version-card">
+                <div className="version-head">
+                  <span className="version-tag">{v.version}</span>
+                  <span className="version-date">{v.date}</span>
+                </div>
+                <ul>
+                  {(v.items || []).map((it, i) => <li key={i}>{it}</li>)}
+                </ul>
+              </article>
+            ))}
+            <div className="pager">
+              <button type="button" disabled={page <= 1} onClick={() => setClPage(page - 1)}>上一页</button>
+              <span>第 {page} / {pages} 页</span>
+              <button type="button" disabled={page >= pages} onClick={() => setClPage(page + 1)}>下一页</button>
+            </div>
+          </section>
+        )
+      })()}
+      {!['audit', 'audit-agents', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+        <section className="admin-placeholder">
+          <h2>{menuLabel(adminMenu)}</h2>
+          <p>即将开放</p>
+        </section>
+      )}
+      {error && <pre className="error">{error}</pre>}
+    </>
+  )
+
   // 管理台布局
   if (view === 'admin') {
+    // 水母界面：窄轨壳 + 工作组水母；治理页内容保持原组件
+    if (uiMode === UI_MODE_JELLY) {
+      return (
+        <div className="app app-admin app-jelly">
+          <JellyAdminShell
+            authHeaders={authHeaders}
+            onUnauthorized={() => clearAuth('登录已过期')}
+            adminMenu={adminMenu}
+            onNavigate={(id) => {
+              setJellyForcePanel(false)
+              switchAdminMenu(id)
+            }}
+            uiMode={uiMode}
+            onUiModeChange={changeUiMode}
+            forcePanel={jellyForcePanel}
+            badges={{
+              agents: pendingPermCount + runningCount,
+              plans: (wfBadges.pending || 0) + (wfBadges.running || 0),
+            }}
+            onHire={() => {
+              setOpenHire(true)
+              switchAdminMenu('agents')
+              setJellyForcePanel(true)
+            }}
+            onExpandAgent={(id) => {
+              setFocusAgentId(Number(id) || 0)
+              switchAdminMenu('agents')
+              setJellyForcePanel(true)
+            }}
+            onLogout={doLogout}
+          >
+            {adminMainContent}
+          </JellyAdminShell>
+          {adminMenu !== 'agents' && adminMenu !== 'agents-manage' && (
+            <ManagedAgentPermOverlay
+              authHeaders={authHeaders}
+              onUnauthorized={() => clearAuth('登录已过期')}
+            />
+          )}
+          {authToken && (
+            <WorkflowPermOverlay
+              authHeaders={authHeaders}
+              onUnauthorized={() => clearAuth('登录已过期')}
+            />
+          )}
+        </div>
+      )
+    }
+
     return (
       <div className="app app-admin">
         <header className="topbar admin-topbar">
@@ -817,6 +1056,7 @@ export default function App() {
             <span className="admin-ver">{CURRENT_VERSION}</span>
           </h1>
           <div className="topbar-actions">
+            <UiModeToggle mode={uiMode} onChange={changeUiMode} />
             <button type="button" className="ghost" onClick={() => setView('chat')}>返回对话</button>
             <button type="button" className="danger" onClick={doLogout}>退出</button>
           </div>
@@ -903,125 +1143,7 @@ export default function App() {
             })}
           </aside>
           <main className="admin-main">
-            {adminMenu === 'audit' && (
-              <VisitorAskAudit
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'audit'}
-              />
-            )}
-            {adminMenu === 'audit-agents' && (
-              <AgentAudit
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'audit-agents'}
-              />
-            )}
-            {/* 切菜单只隐藏,避免中断后台 SSE */}
-            <div style={{ display: adminMenu === 'agents' ? 'block' : 'none' }}>
-              <ManagedAgentsPanel
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'agents'}
-                focusAgentId={focusAgentId}
-                openSettings={openAgentSettings}
-                onFocusConsumed={() => { setFocusAgentId(0); setOpenAgentSettings(false) }}
-                openHire={openHire}
-                onHireConsumed={() => setOpenHire(false)}
-                onOpenWorkflowRun={(runId) => {
-                  setJumpWorkflowRunId(runId)
-                  setAdminMenu('plans')
-                }}
-              />
-            </div>
-            {adminMenu === 'agents-manage' && (
-              <DigitalHumanCards
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'agents-manage'}
-                onHire={() => { setOpenHire(true); switchAdminMenu('agents') }}
-                onOpenSettings={(a) => {
-                  setFocusAgentId(a.id)
-                  setOpenAgentSettings(true)
-                  switchAdminMenu('agents')
-                }}
-              />
-            )}
-            {adminMenu === 'legacy-memories' && (
-              <LegacyMemoryShelf
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'legacy-memories'}
-              />
-            )}
-            {adminMenu === 'remote-relay' && (
-              <RemoteRelayPanel
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'remote-relay'}
-              />
-            )}
-            {adminMenu === 'settings' && (
-              <section className="settings-page">
-                <h2 className="settings-page-title">设置</h2>
-                <NotifySettings
-                  authHeaders={authHeaders}
-                  onUnauthorized={() => clearAuth('登录已过期')}
-                  active={adminMenu === 'settings'}
-                />
-                <EngineSettings active={adminMenu === 'settings'} />
-              </section>
-            )}
-            {adminMenu === 'network-allowlist' && (
-              <NetworkPolicyPanel
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'network-allowlist'}
-              />
-            )}
-            <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
-              <WorkflowPanel
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                jumpRunId={jumpWorkflowRunId}
-                onJumpConsumed={() => setJumpWorkflowRunId(0)}
-              />
-            </div>
-            {adminMenu === 'manual' && <ProductManual />}
-            {adminMenu === 'changelog' && (() => {
-              const total = CHANGELOG.length
-              const pages = Math.max(1, Math.ceil(total / CHANGELOG_PAGE_SIZE))
-              const page = Math.min(clPage, pages)
-              const slice = CHANGELOG.slice((page - 1) * CHANGELOG_PAGE_SIZE, page * CHANGELOG_PAGE_SIZE)
-              return (
-                <section className="list changelog">
-                  <p className="empty-hint">版本变更记录 · 当前 {CURRENT_VERSION} · 每页 {CHANGELOG_PAGE_SIZE} 条 · 共 {total} 个版本</p>
-                  {slice.map((v) => (
-                    <article key={v.version} className="version-card">
-                      <div className="version-head">
-                        <span className="version-tag">{v.version}</span>
-                        <span className="version-date">{v.date}</span>
-                      </div>
-                      <ul>
-                        {(v.items || []).map((it, i) => <li key={i}>{it}</li>)}
-                      </ul>
-                    </article>
-                  ))}
-                  <div className="pager">
-                    <button type="button" disabled={page <= 1} onClick={() => setClPage(page - 1)}>上一页</button>
-                    <span>第 {page} / {pages} 页</span>
-                    <button type="button" disabled={page >= pages} onClick={() => setClPage(page + 1)}>下一页</button>
-                  </div>
-                </section>
-              )
-            })()}
-            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
-              <section className="admin-placeholder">
-                <h2>{menuLabel(adminMenu)}</h2>
-                <p>即将开放</p>
-              </section>
-            )}
-            {error && <pre className="error">{error}</pre>}
+            {adminMainContent}
           </main>
         </div>
         {adminMenu !== 'agents' && adminMenu !== 'agents-manage' && (

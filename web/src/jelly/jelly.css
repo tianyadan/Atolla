@@ -1,0 +1,604 @@
+/* 水母界面：深海画布 + 窄轨 + 抽屉（视觉对齐原型 index.html） */
+.jelly-app {
+  position: fixed;
+  inset: 0;
+  background: #03040a;
+  color: #dfe6f2;
+  font-family: "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.jelly-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.jelly-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.jelly-workspace {
+  position: absolute;
+  inset: 0;
+}
+
+.jelly-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.jelly-lbl {
+  position: absolute;
+  transform: translate(-50%, 0);
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+}
+.jelly-lbl b {
+  display: block;
+  font-weight: 500;
+  font-size: 13px;
+  color: #e9eef8;
+}
+.jelly-lbl span {
+  font-size: 11px;
+  color: rgba(200, 214, 235, 0.55);
+}
+.jelly-lbl.idle b {
+  color: rgba(220, 228, 240, 0.5);
+}
+.jelly-lbl.wait b {
+  color: #9fd8ff;
+}
+.jelly-lbl.wait span {
+  color: #7fbfff;
+}
+.jelly-lbl.hov b {
+  text-shadow: 0 0 12px rgba(160, 230, 255, 0.8);
+}
+
+.jelly-ask {
+  position: absolute;
+  transform: translateX(-50%);
+  width: 280px;
+  padding: 10px 16px;
+  border-radius: 22px;
+  z-index: 5;
+  background: rgba(255, 235, 240, 0.06);
+  border: 1px solid rgba(255, 220, 230, 0.14);
+  color: #f1e8ee;
+  font-size: 13px;
+  backdrop-filter: blur(6px);
+  outline: none;
+  transition: border-color 0.2s;
+}
+.jelly-ask:focus {
+  border-color: rgba(255, 220, 230, 0.32);
+}
+.jelly-ask::placeholder {
+  color: rgba(240, 220, 230, 0.45);
+}
+
+/* rail */
+.jelly-rail {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 56px;
+  z-index: 20;
+  background: rgba(6, 8, 16, 0.72);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  transition: width 0.22s ease;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 0;
+}
+.jelly-rail:hover {
+  width: 184px;
+}
+.jelly-logo {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding-left: 18px;
+  margin-bottom: 14px;
+  gap: 14px;
+  white-space: nowrap;
+}
+.jelly-logo i {
+  width: 20px;
+  height: 20px;
+  border-radius: 50% 50% 40% 40%;
+  background: radial-gradient(circle at 50% 40%, #c4304e, #5a1426 70%);
+  box-shadow: 0 0 12px rgba(196, 48, 78, 0.5);
+  flex: none;
+}
+.jelly-logo span {
+  letter-spacing: 0.38em;
+  font-size: 12px;
+  color: #c9d3e6;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.jelly-rail:hover .jelly-logo span {
+  opacity: 1;
+}
+.jelly-grp {
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.jelly-grp:first-of-type {
+  border-top: 0;
+}
+.jelly-gt {
+  font-size: 10px;
+  color: rgba(200, 210, 230, 0.3);
+  padding: 2px 0 4px 20px;
+  height: 14px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.jelly-rail:hover .jelly-gt {
+  opacity: 1;
+}
+.jelly-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 36px;
+  width: 100%;
+  padding-left: 19px;
+  color: rgba(210, 220, 236, 0.5);
+  font-size: 13px;
+  white-space: nowrap;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+.jelly-nav svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+}
+.jelly-nav:hover {
+  color: #e9eef8;
+}
+.jelly-nav.on {
+  color: #e9eef8;
+}
+.jelly-nav.on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 18px;
+  background: #9fd8ff;
+  border-radius: 2px;
+}
+.jelly-nav em {
+  font-style: normal;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.jelly-rail:hover .jelly-nav em {
+  opacity: 1;
+}
+.jelly-rail-badge {
+  margin-left: auto;
+  margin-right: 10px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: rgba(120, 200, 255, 0.25);
+  color: #9fd8ff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  opacity: 0;
+}
+.jelly-rail:hover .jelly-rail-badge {
+  opacity: 1;
+}
+
+/* top */
+.jelly-top {
+  position: fixed;
+  left: 56px;
+  right: 0;
+  top: 0;
+  height: 52px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 22px;
+  pointer-events: none;
+}
+.jelly-top > * {
+  pointer-events: auto;
+}
+.jelly-team-wrap {
+  position: relative;
+}
+.jelly-team {
+  background: none;
+  border: 0;
+  color: #e9eef8;
+  font-size: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.jelly-team small {
+  color: rgba(200, 214, 235, 0.45);
+  font-size: 12px;
+}
+.jelly-team:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.jelly-team-menu,
+.jelly-more-menu {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  min-width: 200px;
+  background: rgba(14, 22, 40, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 6px;
+  z-index: 30;
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.jelly-more-menu {
+  left: auto;
+  right: 0;
+}
+.jelly-team-menu button,
+.jelly-more-menu button {
+  text-align: left;
+  background: none;
+  border: 0;
+  color: #dfe6f2;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.jelly-team-menu button:hover,
+.jelly-more-menu button:hover,
+.jelly-team-menu button.on {
+  background: rgba(255, 255, 255, 0.08);
+}
+.jelly-team-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: rgba(200, 214, 235, 0.45);
+}
+.jelly-acts {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  position: relative;
+}
+.jelly-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e9eef8;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.jelly-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.jelly-btn.ghost {
+  background: none;
+  border-color: transparent;
+  color: rgba(220, 228, 240, 0.6);
+  padding: 6px 10px;
+}
+.jelly-btn.pri {
+  background: rgba(120, 200, 255, 0.18);
+  border-color: rgba(120, 200, 255, 0.35);
+}
+.jelly-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.jelly-mode-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-right: 4px;
+}
+.jelly-mode-toggle button {
+  background: transparent;
+  border: 0;
+  color: rgba(220, 228, 240, 0.55);
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.jelly-mode-toggle button.on {
+  background: rgba(120, 200, 255, 0.18);
+  color: #e9eef8;
+}
+
+.jelly-main {
+  position: absolute;
+  left: 56px;
+  right: 0;
+  top: 52px;
+  bottom: 0;
+}
+.jelly-main.is-jelly {
+  top: 0;
+  left: 0;
+}
+.jelly-panel-host {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: #0b1220;
+  color: inherit;
+}
+
+/* approvals */
+.jelly-appr {
+  position: fixed;
+  right: 22px;
+  top: 60px;
+  width: 300px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: right 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s;
+}
+.jelly-appr.shifted {
+  right: 502px;
+}
+.jelly-card {
+  background: rgba(14, 22, 40, 0.78);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  border-radius: 12px;
+  padding: 12px 14px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 0 24px rgba(90, 170, 255, 0.12);
+  animation: jelly-in 0.4s ease;
+}
+.jelly-card .w {
+  font-size: 11px;
+  color: #7fbfff;
+  margin-bottom: 4px;
+}
+.jelly-card .q {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 13px;
+  color: #e9eef8;
+  line-height: 1.5;
+  cursor: pointer;
+  font: inherit;
+}
+.jelly-card .row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+@keyframes jelly-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* drawer */
+.jelly-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  max-width: 100vw;
+  z-index: 15;
+  transform: translateX(100%);
+  transition: transform 0.38s cubic-bezier(0.2, 0.8, 0.2, 1);
+  background: rgba(8, 11, 20, 0.92);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+}
+.jelly-drawer.open {
+  transform: none;
+}
+.jelly-dh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.jelly-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #a0e6ff;
+  box-shadow: 0 0 8px #a0e6ff;
+  flex: none;
+}
+.jelly-dot.idle {
+  background: #6b7285;
+  box-shadow: none;
+}
+.jelly-dot.wait {
+  background: #6fbfff;
+  box-shadow: 0 0 10px #6fbfff;
+}
+.jelly-dh b {
+  font-weight: 500;
+  font-size: 15px;
+}
+.jelly-dh small {
+  color: rgba(200, 214, 235, 0.5);
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jelly-msgs {
+  flex: 1;
+  overflow: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.jelly-msgs .m {
+  max-width: 88%;
+}
+.jelly-msgs .m.me {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+.jelly-msgs .m.ag {
+  color: #d6deeb;
+}
+.jelly-msgs .m.ag.muted {
+  color: rgba(200, 214, 235, 0.45);
+}
+.jelly-msgs .m.err {
+  color: #f5a8b8;
+}
+.jelly-msgs .m code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #bfe3ff;
+}
+.jelly-appr-in {
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(120, 200, 255, 0.05);
+}
+.jelly-appr-in .w {
+  color: #7fbfff;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.jelly-appr-in .row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.jelly-din {
+  margin: 12px 18px 18px;
+  display: flex;
+  gap: 8px;
+}
+.jelly-din input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #e9eef8;
+  outline: none;
+  font-size: 13px;
+  font: inherit;
+}
+.jelly-hint {
+  position: fixed;
+  left: 76px;
+  bottom: 20px;
+  font-size: 11px;
+  color: rgba(200, 214, 235, 0.35);
+  z-index: 4;
+  transition: opacity 0.3s, left 0.35s;
+}
+.jelly-hint.hide {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 经典顶栏里的切换按钮 */
+.ui-mode-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-right: 8px;
+}
+.ui-mode-toggle button {
+  background: transparent;
+  border: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.ui-mode-toggle button.on {
+  background: rgba(56, 189, 248, 0.2);
+  color: #e2e8f0;
+}
+
+@media (max-width: 720px) {
+  .jelly-drawer {
+    width: 100%;
+  }
+  .jelly-appr {
+    width: calc(100% - 80px);
+    right: 12px;
+  }
+  .jelly-appr.shifted {
+    right: 12px;
+    top: auto;
+    bottom: 100px;
+  }
+  .jelly-mode-toggle button {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+}
