@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { agentAvatarUrl } from '../agentAvatar.js'
+import JellyAvatar from '../JellyAvatar.jsx'
+import { resolveJellyColor } from '../jellyColor.js'
 
 const ENGINE_CLASS = {
   claude: 'eng-claude',
@@ -21,7 +22,12 @@ function WfNodeInner({ data, type }) {
       <Handle type="target" position={Position.Left} />
       <div className="wf-node-body">
         {showAvatar && (
-          <img className="wf-node-avatar" src={agentAvatarUrl(data)} alt="" />
+          <JellyAvatar
+            className="wf-node-avatar"
+            color={resolveJellyColor({ id: data.agent_id, jelly_color: data.jelly_color })}
+            size={28}
+            state="idle"
+          />
         )}
         <div className="wf-node-text">
           <strong>{label}</strong>

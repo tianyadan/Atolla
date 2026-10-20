@@ -73,7 +73,7 @@ function WorkflowCanvasInner({
     undoRef.current = []
   }, [graph0, setNodes, setEdges])
 
-  // 打开编辑时按 agent_id 补齐 avatar_url / 名称 / 引擎
+  // 打开编辑时按 agent_id 补齐 jelly_color / 名称 / 引擎
   useEffect(() => {
     if (!agents?.length) return
     setNodes((ns) => ns.map((n) => {
@@ -88,7 +88,7 @@ function WorkflowCanvasInner({
           ...n.data,
           agent_name: a.name || n.data.agent_name,
           engine: a.engine || n.data.engine,
-          avatar_url: a.avatar_url || n.data.avatar_url || '',
+          jelly_color: a.jelly_color || n.data.jelly_color || '',
           label: a.name || n.data.label,
         },
       }
@@ -152,7 +152,7 @@ function WorkflowCanvasInner({
           data.agent_name = a.name
           data.label = a.name
           data.engine = a.engine
-          data.avatar_url = a.avatar_url || ''
+          data.jelly_color = a.jelly_color || ''
         }
       }
       return { ...n, data }

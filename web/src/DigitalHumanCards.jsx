@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { agentAvatarUrl } from './agentAvatar.js'
+import JellyAvatar from './JellyAvatar.jsx'
+import { jellyStateFromAgent, resolveJellyColor } from './jellyColor.js'
 import DismissAgentModal from './DismissAgentModal.jsx'
 
 const API = '/api'
@@ -161,7 +162,7 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
               <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} disabled={busy} />
             </label>
             <div className="dh-avatar">
-              <img src={agentAvatarUrl(a)} alt="" />
+              <JellyAvatar color={resolveJellyColor(a)} size={48} state={jellyStateFromAgent(a)} />
             </div>
             <h3 className="dh-name" title={a.name}>{a.name}</h3>
             <p className="dh-folder">{a.folder_name || (a.folder_id ? `组 #${a.folder_id}` : '未入组')}</p>

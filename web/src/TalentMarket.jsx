@@ -1,4 +1,11 @@
 import { useEffect, useState } from 'react'
+import JellyAvatar from './JellyAvatar.jsx'
+import JellyColorPicker from './JellyColorPicker.jsx'
+import {
+  assignJellyColor,
+  jellyColorPayload,
+  resolveJellyColor,
+} from './jellyColor.js'
 
 const API = '/api'
 
@@ -46,6 +53,7 @@ export default function TalentMarket({
   const [engine, setEngine] = useState('claude')
   const [name, setName] = useState('')
   const [contextWindow, setContextWindow] = useState(1000000)
+  const [jellyColor, setJellyColor] = useState('blue')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -84,6 +92,7 @@ export default function TalentMarket({
       setName(d.name || '')
       setEngine(d.default_engine || 'claude')
       setContextWindow(1000000)
+      setJellyColor(assignJellyColor(d.id || d.name || 'talent'))
     } catch (e) {
       setErr(String(e.message || e))
     } finally {
@@ -105,12 +114,13 @@ export default function TalentMarket({
           name: name.trim() || detail.name,
           engine,
           context_window_tokens: contextWindow,
+          ...jellyColorPayload(jellyColor),
         }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || '招聘失败')
-      onHired?.(d)
+      onHired?.(d?.id ? { ...d, jelly_color: d.jelly_color || jellyColor } : d)
       onClose?.()
     } catch (e) {
       setErr(String(e.message || e))
@@ -147,7 +157,14 @@ export default function TalentMarket({
                     disabled={busy}
                     onClick={() => openDetail(t.id)}
                   >
-                    <img className="tm-avatar" src={t.avatar_url} alt="" />
+                    <span className="tm-avatar-wrap">
+                      <JellyAvatar
+                        className="tm-avatar"
+                        color={resolveJellyColor({ id: t.id })}
+                        size={48}
+                        state="idle"
+                      />
+                    </span>
                     <strong className="tm-name">{t.name}</strong>
                     <span className="tm-title">{t.title}</span>
                     <p className="tm-summary">{t.summary}</p>
@@ -164,7 +181,12 @@ export default function TalentMarket({
           <>
             <div className="tm-head">
               <div className="tm-detail-identity">
-                <img className="tm-avatar tm-avatar-lg" src={detail.avatar_url} alt="" />
+                <JellyAvatar
+                  className="tm-avatar tm-avatar-lg"
+                  color={jellyColor}
+                  size={64}
+                  state="idle"
+                />
                 <div>
                   <h2>{detail.name}</h2>
                   <p className="tm-title">{detail.title}</p>
@@ -195,6 +217,7 @@ export default function TalentMarket({
               <pre className="tm-prompt">{detail.rules_prompt}</pre>
               <p className="muted tm-hint">招聘后可在员工设置中随时修改提示词与技能。</p>
             </div>
+            <JellyColorPicker value={jellyColor} onChange={setJellyColor} disabled={busy} />
             <div className="tm-form-row">
               <label>
                 显示名称

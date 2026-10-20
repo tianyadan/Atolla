@@ -585,9 +585,22 @@ th { background: #0a0a0a; color: #8a8a8a; }
   border-radius: 50%; object-fit: cover; flex-shrink: 0;
   background: #141414; border: 1px solid #2a2a2a;
 }
+/* 像素水母头像：不要圆形裁切 */
+.ma-avatar.jelly-avatar {
+  border-radius: 0;
+  object-fit: unset;
+  background: transparent;
+  border: none;
+}
 .ma-avatar-sm { width: 28px; height: 28px; }
 .ma-avatar-md { width: 36px; height: 36px; }
 .ma-avatar-lg { width: 72px; height: 72px; }
+.ma-avatar-sm.jelly-avatar,
+.ma-avatar-md.jelly-avatar,
+.ma-avatar-lg.jelly-avatar {
+  width: auto;
+  height: auto;
+}
 .ma-avatar-edit { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
 .ma-avatar-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .ma-file-btn { cursor: pointer; display: inline-flex; }
@@ -2010,4 +2023,117 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
   .engine-gate .engine-card-grid, .engine-scan-list { grid-template-columns: 1fr; display: grid; width: min(100%, 360px); }
   .engine-settings-grid { grid-template-columns: 1fr; width: 100%; }
   .ph-login-tip { right: auto; left: 0; }
+}
+
+/* —— 像素水母头像 —— */
+.jelly-avatar {
+  display: inline-block;
+  flex-shrink: 0;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  vertical-align: middle;
+  will-change: transform;
+}
+.jelly-avatar--bob {
+  animation: jelly-bob 3s ease-in-out infinite;
+}
+.jelly-avatar--jump {
+  animation: jelly-jump 0.6s ease-in-out infinite;
+}
+@keyframes jelly-bob {
+  0%, 100% { transform: translateY(var(--jelly-cell, 1px)); }
+  50% { transform: translateY(calc(var(--jelly-cell, 1px) * -1)); }
+}
+@keyframes jelly-jump {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(calc(var(--jelly-cell, 1px) * -3)); }
+  70% { transform: translateY(calc(var(--jelly-cell, 1px) * -1)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jelly-avatar--bob,
+  .jelly-avatar--jump {
+    animation: none;
+  }
+}
+
+.jelly-color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.jelly-color-picker-label {
+  font-size: 12px;
+  color: #8a8a8a;
+}
+.jelly-color-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.jelly-color-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid #2a2a2a;
+  background: #141414;
+  cursor: pointer;
+}
+.jelly-color-swatch:hover:not(:disabled) {
+  border-color: #525252;
+}
+.jelly-color-swatch.is-selected {
+  border-color: #e5e5e5;
+  box-shadow: 0 0 0 1px #e5e5e5;
+}
+.jelly-color-swatch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 对话消息旁的小水母 */
+.ma-msg-jelly {
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+.ma-thinking-jelly {
+  margin-right: 8px;
+  vertical-align: -3px;
+}
+.dh-avatar {
+  background: transparent;
+  border: none;
+  overflow: visible;
+}
+.dh-avatar .jelly-avatar {
+  display: block;
+}
+.ma-avatar-edit .jelly-avatar {
+  border-radius: 0;
+}
+.ph-avatar {
+  overflow: visible;
+  background: transparent;
+  border: none;
+}
+.ph-who .jelly-avatar {
+  display: block;
+}
+.tm-avatar-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wf-node-avatar.jelly-avatar {
+  border-radius: 0;
+  object-fit: unset;
+}
+.lm-book-cover .jelly-avatar,
+.lm-reader-avatar.jelly-avatar {
+  border-radius: 0;
 }

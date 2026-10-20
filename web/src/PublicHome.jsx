@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
-import { agentAvatarUrl } from './agentAvatar.js'
+import JellyAvatar from './JellyAvatar.jsx'
+import { resolveJellyColor } from './jellyColor.js'
 import {
   MAX_CHAT_IMAGES,
   appendPendingImages,
@@ -57,7 +58,7 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
 
   const configured = !!(receptionist && receptionist.configured)
   const ctxPct = ctxWindow > 0 ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : 0
-  const recvAvatar = agentAvatarUrl(receptionist || {})
+  const recvJellyColor = resolveJellyColor(receptionist || {})
   const ctxTip = ctxWindow > 0
     ? `${ctxEstimated ? '约 ' : ''}${ctxPct}%`
     : '上下文用量未知'
@@ -389,7 +390,7 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
         <div className="ph-brand">
           <div className="ph-avatar">
             {configured
-              ? <img src={recvAvatar} alt="" />
+              ? <JellyAvatar color={recvJellyColor} size={36} state={loading ? 'working' : 'idle'} />
               : (receptionist?.name || '前').slice(0, 1)}
           </div>
           <div>
@@ -448,14 +449,24 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
                   <div className="ph-who">
                     {m.role === 'user'
                       ? '访'
-                      : <img src={recvAvatar} alt="" />}
+                      : (
+                        <JellyAvatar
+                          color={recvJellyColor}
+                          size={16}
+                          state={
+                            m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1
+                              ? 'typing'
+                              : 'idle'
+                          }
+                        />
+                      )}
                   </div>
                   <div className={`ph-bubble ${m.error ? 'err' : ''}`}>
                     {m.role === 'user' && (m.attachments || []).length > 0 && (
                       <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
                     )}
                     {m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1 ? (
-                      <span className="ph-typing"><i /><i /><i /></span>
+                      <JellyAvatar color={recvJellyColor} size={18} state="typing" />
                     ) : m.content ? (
                       <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content || '') }} />
                     ) : null}
