@@ -169,6 +169,9 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.PATCH("/admin/agent-folders/:id", h.AdminAgentFoldersUpdate)
 			adm.DELETE("/admin/agent-folders/:id", h.AdminAgentFoldersDelete)
 
+			// 水母工作组实时事件流（agent_folders.id；0=未入组）
+			adm.GET("/teams/:teamId/stream", h.TeamStream)
+
 			adm.GET("/admin/workflows", h.AdminWorkflowsList)
 			adm.POST("/admin/workflows", h.AdminWorkflowsCreate)
 			adm.GET("/admin/workflows/permission-pending", h.AdminWorkflowPermissionPending)

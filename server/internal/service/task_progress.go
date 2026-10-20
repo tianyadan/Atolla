@@ -72,6 +72,13 @@ func (tp *TaskProgress) report(ctx context.Context, stepIdx int, status, msg str
 			"current_step": stepIdx,
 		},
 	})
+	if err == nil {
+		if status == "done" {
+			tp.svc.publishTaskDone(ctx, tp.agentID, tp.taskID)
+		} else {
+			tp.svc.publishTaskProgress(ctx, tp.agentID, tp.taskID, prog, msg)
+		}
+	}
 	return err
 }
 
@@ -120,6 +127,7 @@ func (tp *TaskProgress) fail(ctx context.Context, msg string) {
 			"failed":       true,
 		},
 	})
+	tp.svc.publishTaskProgress(ctx, tp.agentID, tp.taskID, prog, msg)
 }
 
 func truncateRunTitle(q string) string {

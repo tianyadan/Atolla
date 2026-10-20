@@ -311,7 +311,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 	var waitingOnce sync.Once
 	runCtx, slot, err := s.acquireAgentRun(ctx, m.ID, func() {
 		waitingOnce.Do(func() {
-			_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(ctx), m.ID, "waiting", "", 0, 0)
+			_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), m.ID, "waiting", "", 0, 0)
 			emitAsk(sink, map[string]any{
 				"type": "invoke_status", "callee_id": m.ID, "callee_name": m.Name, "status": "waiting",
 			})
@@ -344,7 +344,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 			a.ConversationID = cid
 		}
 	}
-	_ = s.Store.SetManagedAgentStatus(runCtx, a.ID, "running", "", 0, a.ConversationID)
+	_ = s.setManagedAgentStatus(runCtx, a.ID, "running", "", 0, a.ConversationID)
 	emitAsk(sink, map[string]any{
 		"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "running",
 	})
@@ -365,12 +365,12 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 		if out == "" {
 			out = "❌ " + res.Err
 		}
-		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "error", res.Err, ms, a.ConversationID)
+		_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "error", res.Err, ms, a.ConversationID)
 		emitAsk(sink, map[string]any{
 			"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "error", "message": res.Err,
 		})
 	} else {
-		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "idle", "", ms, a.ConversationID)
+		_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "idle", "", ms, a.ConversationID)
 		emitAsk(sink, map[string]any{
 			"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "done",
 		})
