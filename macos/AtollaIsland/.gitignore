@@ -4,6 +4,9 @@
 *.xcodeproj/
 DerivedData/
 
+# 预编译 Release 打包产物（上传 GitHub Releases，不进仓库）
+dist/
+
 # 本地日志 / 杂项
 *.log
 .DS_Store

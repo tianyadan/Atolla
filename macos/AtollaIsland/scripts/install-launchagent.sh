@@ -15,7 +15,14 @@ STABLE_DIR="${HOME}/.atolla/bin"
 STABLE_BIN="${STABLE_DIR}/AtollaIsland"
 mkdir -p "$STABLE_DIR" "${HOME}/.atolla"
 
-if [[ "${ATOLLA_ISLAND_SKIP_BUILD:-0}" == "1" && -x "$STABLE_BIN" ]]; then
+# 预编译优先：ATOLLA_ISLAND_PREBUILT_BIN=/path/to/AtollaIsland
+# 或已装过且 ATOLLA_ISLAND_SKIP_BUILD=1 时跳过编译
+if [[ -n "${ATOLLA_ISLAND_PREBUILT_BIN:-}" && -f "${ATOLLA_ISLAND_PREBUILT_BIN}" ]]; then
+  echo "==> use prebuilt $ATOLLA_ISLAND_PREBUILT_BIN"
+  xattr -cr "$ATOLLA_ISLAND_PREBUILT_BIN" 2>/dev/null || true
+  cp "$ATOLLA_ISLAND_PREBUILT_BIN" "$STABLE_BIN"
+  chmod +x "$STABLE_BIN"
+elif [[ "${ATOLLA_ISLAND_SKIP_BUILD:-0}" == "1" && -x "$STABLE_BIN" ]]; then
   echo "==> skip build, reuse $STABLE_BIN"
 else
   echo "==> build release"
@@ -25,6 +32,7 @@ else
   cp "$BIN" "$STABLE_BIN"
   chmod +x "$STABLE_BIN"
 fi
+xattr -cr "$STABLE_BIN" 2>/dev/null || true
 
 # 像素水母精灵图（与 PC web/public/jelly-sprites 同源）
 SPRITE_SRC="$ROOT/Sources/AtollaIsland/Resources/jelly-sprites"
