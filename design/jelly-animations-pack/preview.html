@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Atolla jelly animations preview</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: #0a0a0a; color: #f5f5f5; padding: 24px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+  .muted { color: #8a8a8a; margin-bottom: 20px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 20px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #8a8a8a; }
+  select, button { background: #141414; color: #f5f5f5; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px 12px; }
+  button { cursor: pointer; }
+  button:hover { border-color: #525252; }
+  .stage {
+    display: inline-flex; align-items: flex-end; justify-content: center;
+    min-width: 120px; min-height: 120px; padding: 24px;
+    background: #141414; border: 1px solid #2a2a2a; border-radius: 12px;
+  }
+  .jelly {
+    display: inline-block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background-repeat: no-repeat;
+    will-change: transform, opacity;
+  }
+  .meta { margin-top: 16px; font-size: 12px; color: #8a8a8a; max-width: 520px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; }
+  .card { background: #141414; border: 1px solid #2a2a2a; border-radius: 12px; padding: 12px; text-align: center; }
+  .card img { image-rendering: pixelated; width: 96px; height: auto; }
+</style>
+</head>
+<body>
+  <h1>像素水母动画预览（备用包）</h1>
+  <p class="muted">本地打开本文件；精灵图相对路径 <code>sprites/</code>。不写入业务仓库逻辑。</p>
+  <div class="controls">
+    <label>颜色
+      <select id="color"></select>
+    </label>
+    <label>动作
+      <select id="action"></select>
+    </label>
+    <label>尺寸
+      <select id="size">
+        <option value="16">16</option>
+        <option value="32" selected>32</option>
+        <option value="48">48</option>
+      </select>
+    </label>
+    <button type="button" id="replay">重播（非循环）</button>
+  </div>
+  <div class="stage"><span id="jelly" class="jelly" role="img" aria-label="jelly"></span></div>
+  <p class="meta" id="info"></p>
+  <div class="grid" id="gifs"></div>
+<script>
+const ACTIONS = ["idle","typing","sleep","eat","alert","error","celebrate"];
+const COLORS = ["orange","yellow","blue","green","purple","red"];
+const META = {
+  idle: { row:0, fps:8, loop:true, css:"translateY ±1cell / 3s" },
+  typing: { row:1, fps:13, loop:true, css:"translateY -3cell / 0.6s" },
+  sleep: { row:2, fps:5, loop:true, css:"translateY ±0.5cell / 4s" },
+  eat: { row:3, fps:11, loop:false, css:"none" },
+  alert: { row:4, fps:10, loop:true, css:"opacity flash 0.7s" },
+  error: { row:5, fps:9, loop:false, css:"translateY +1.5cell" },
+  celebrate: { row:6, fps:12, loop:false, css:"optional hop" },
+};
+const FRAMES = 8;
+const colorEl = document.getElementById("color");
+const actionEl = document.getElementById("action");
+const sizeEl = document.getElementById("size");
+const jelly = document.getElementById("jelly");
+const info = document.getElementById("info");
+COLORS.forEach(c => { const o=document.createElement("option"); o.value=c; o.textContent=c; colorEl.appendChild(o); });
+ACTIONS.forEach(a => { const o=document.createElement("option"); o.value=a; o.textContent=a; actionEl.appendChild(o); });
+colorEl.value = "purple";
+
+let frame = 0, timer = null, flashOn = true, flashTimer = null;
+
+function cellPx() { return Number(sizeEl.value) / 16; }
+
+function applyCssMotion(action, px) {
+  const c = cellPx();
+  jelly.style.animation = "none";
+  jelly.style.filter = "none";
+  jelly.style.opacity = "1";
+  jelly.style.transform = "translateY(0)";
+  if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+  if (action === "idle") {
+    jelly.animate([
+      { transform: `translateY(${c}px)` },
+      { transform: `translateY(${-c}px)` },
+      { transform: `translateY(${c}px)` },
+    ], { duration: 3000, iterations: Infinity, easing: "ease-in-out" });
+  } else if (action === "typing") {
+    jelly.animate([
+      { transform: "translateY(0)" },
+      { transform: `translateY(${-3*c}px)`, offset: 0.4 },
+      { transform: `translateY(${-c}px)`, offset: 0.7 },
+      { transform: "translateY(0)" },
+    ], { duration: 600, iterations: Infinity, easing: "ease-in-out" });
+  } else if (action === "sleep") {
+    jelly.animate([
+      { transform: `translateY(${0.5*c}px)` },
+      { transform: `translateY(${-0.5*c}px)` },
+      { transform: `translateY(${0.5*c}px)` },
+    ], { duration: 4000, iterations: Infinity, easing: "ease-in-out" });
+  } else if (action === "alert") {
+    flashOn = true;
+    flashTimer = setInterval(() => {
+      flashOn = !flashOn;
+      jelly.style.opacity = flashOn ? "1" : "0.35";
+    }, 700);
+  } else if (action === "error") {
+    jelly.style.transform = `translateY(${1.5*c}px)`;
+  }
+}
+
+function tick() {
+  const action = actionEl.value;
+  const px = Number(sizeEl.value);
+  const m = META[action];
+  const sheetW = FRAMES * px;
+  const sheetH = ACTIONS.length * px;
+  jelly.style.width = px + "px";
+  jelly.style.height = px + "px";
+  jelly.style.backgroundImage = `url(sprites/jelly-${colorEl.value}@${px}.png)`;
+  jelly.style.backgroundSize = `${sheetW}px ${sheetH}px`;
+  jelly.style.backgroundPosition = `${-frame * px}px ${-m.row * px}px`;
+  frame = (frame + 1) % FRAMES;
+  if (!m.loop && frame === 0) { clearInterval(timer); timer = null; }
+}
+
+function start() {
+  if (timer) clearInterval(timer);
+  jelly.getAnimations?.().forEach(a => a.cancel());
+  frame = 0;
+  const action = actionEl.value;
+  const m = META[action];
+  const px = Number(sizeEl.value);
+  applyCssMotion(action, px);
+  info.textContent = `${action} · row ${m.row} · ${m.fps}fps · loop=${m.loop} · css: ${m.css}`;
+  tick();
+  timer = setInterval(tick, 1000 / m.fps);
+}
+
+document.getElementById("replay").onclick = start;
+[colorEl, actionEl, sizeEl].forEach(el => el.addEventListener("change", start));
+
+const gifs = document.getElementById("gifs");
+ACTIONS.forEach(a => {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `<div>${a}</div><img src="previews/${a}.gif" alt="${a}" />`;
+  gifs.appendChild(card);
+});
+
+start();
+</script>
+</body>
+</html>

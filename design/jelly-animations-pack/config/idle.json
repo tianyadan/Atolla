@@ -1,0 +1,25 @@
+{
+  "id": "idle",
+  "label": "漂浮",
+  "row": 0,
+  "loop": true,
+  "fps": 8,
+  "css": {
+    "translateY": "±1cell",
+    "duration": "3s",
+    "easing": "ease-in-out"
+  },
+  "trigger": "state=idle",
+  "notes": "空闲默认态；帧内触手轻摆，位移用 CSS",
+  "sprite_row": 0,
+  "frame_count": 8,
+  "cell": 16,
+  "files": {
+    "orange": "sprites/jelly-orange@{16,32,48}.png",
+    "yellow": "sprites/jelly-yellow@{16,32,48}.png",
+    "blue": "sprites/jelly-blue@{16,32,48}.png",
+    "green": "sprites/jelly-green@{16,32,48}.png",
+    "purple": "sprites/jelly-purple@{16,32,48}.png",
+    "red": "sprites/jelly-red@{16,32,48}.png"
+  }
+}

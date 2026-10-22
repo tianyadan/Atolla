@@ -1,0 +1,23 @@
+{
+  "id": "celebrate",
+  "label": "庆祝",
+  "row": 6,
+  "loop": false,
+  "fps": 12,
+  "css": {
+    "translateY": "optional hop"
+  },
+  "trigger": "task success | hire success",
+  "notes": "转圈感靠触手甩 + 星星；播完回 idle",
+  "sprite_row": 6,
+  "frame_count": 8,
+  "cell": 16,
+  "files": {
+    "orange": "sprites/jelly-orange@{16,32,48}.png",
+    "yellow": "sprites/jelly-yellow@{16,32,48}.png",
+    "blue": "sprites/jelly-blue@{16,32,48}.png",
+    "green": "sprites/jelly-green@{16,32,48}.png",
+    "purple": "sprites/jelly-purple@{16,32,48}.png",
+    "red": "sprites/jelly-red@{16,32,48}.png"
+  }
+}
