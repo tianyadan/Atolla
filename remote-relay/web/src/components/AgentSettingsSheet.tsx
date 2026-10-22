@@ -11,7 +11,14 @@ import {
   type AgentSkill,
   type LegacyMount,
 } from '../api'
-import { agentAvatarUrl } from '../utils/agentStatus'
+import { JellyAvatar } from '../jelly/JellyAvatar'
+import { JellyColorPicker } from '../jelly/JellyColorPicker'
+import {
+  assignJellyColor,
+  normalizeJellyColor,
+  resolveJellyColor,
+  type JellyColor,
+} from '../jelly/jellyColor'
 
 type Tab = 'basic' | 'skills' | 'legacy'
 type SkillsSub = 'installed' | 'store'
@@ -46,6 +53,7 @@ export function AgentSettingsSheet({
   const [skillsSub, setSkillsSub] = useState<SkillsSub>('installed')
   const [settings, setSettings] = useState<AgentSettings | null>(null)
   const [rulesDraft, setRulesDraft] = useState('')
+  const [jellyDraft, setJellyDraft] = useState<JellyColor>('blue')
   const [skills, setSkills] = useState<AgentSkill[]>([])
   const [store, setStore] = useState<AgentSkill[]>([])
   const [mounts, setMounts] = useState<LegacyMount[]>([])
@@ -67,6 +75,7 @@ export function AgentSettingsSheet({
     setDetail(null)
     setSettings(null)
     setRulesDraft('')
+    setJellyDraft(assignJellyColor(agentId))
   }, [open, agentId])
 
   /** Load basic settings */
@@ -78,6 +87,13 @@ export function AgentSettingsSheet({
       const s = await fetchAgentSettings(instanceId, agentId)
       setSettings(s)
       setRulesDraft(s.rules_prompt ?? '')
+      setJellyDraft(
+        resolveJellyColor({
+          jelly_color: s.jelly_color,
+          agent_id: s.agent_id || agentId,
+          id: s.agent_id || agentId,
+        }),
+      )
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载设置失败')
     } finally {
@@ -147,16 +163,24 @@ export function AgentSettingsSheet({
     return m
   }, [installedList])
 
-  /** Save rules_prompt */
+  /** Save rules_prompt + jelly_color */
   async function saveRules() {
     if (busy) return
     setBusy(true)
     setErr(null)
     setOkMsg(null)
     try {
-      const s = await updateAgentSettings(instanceId, agentId, rulesDraft)
+      const color = normalizeJellyColor(jellyDraft) || jellyDraft
+      const s = await updateAgentSettings(instanceId, agentId, rulesDraft, color)
       setSettings(s)
       setRulesDraft(s.rules_prompt ?? '')
+      setJellyDraft(
+        resolveJellyColor({
+          jelly_color: s.jelly_color || color,
+          agent_id: s.agent_id || agentId,
+          id: s.agent_id || agentId,
+        }),
+      )
       setOkMsg('已保存')
     } catch (e) {
       setErr(e instanceof Error ? e.message : '保存失败')
@@ -257,6 +281,18 @@ export function AgentSettingsSheet({
                 引擎 <strong>{settings.engine || '—'}</strong>
                 {settings.skill_count > 0 ? ` · 技能 ${settings.skill_count}` : null}
               </p>
+              <div className="settings-jelly-preview">
+                <JellyAvatar color={jellyDraft} size={56} state="idle" />
+              </div>
+              <JellyColorPicker
+                value={jellyDraft}
+                disabled={busy}
+                label="水母颜色"
+                onChange={(c) => {
+                  setJellyDraft(c)
+                  setOkMsg(null)
+                }}
+              />
               <label className="settings-label">
                 系统提示词
                 <textarea
@@ -430,10 +466,14 @@ export function AgentSettingsSheet({
                 <ul className="legacy-mount-list">
                   {mounts.map((m) => (
                     <li key={m.id} className="legacy-mount-item">
-                      <img
+                      <JellyAvatar
                         className="agent-avatar"
-                        src={agentAvatarUrl({ avatar_url: m.source_avatar_url })}
-                        alt=""
+                        color={resolveJellyColor({
+                          id: m.source_agent_name || m.legacy_memory_id || m.id,
+                          name: m.source_agent_name,
+                        })}
+                        size={40}
+                        state="idle"
                       />
                       <div>
                         <strong>{m.source_agent_name}</strong>

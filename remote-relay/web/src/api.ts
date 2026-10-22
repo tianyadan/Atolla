@@ -1,3 +1,6 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core'
+import { resolveApiUrl } from './utils/apiBase'
+
 /** Site JWT storage key */
 export const TOKEN_KEY = 'relay_site_token'
 
@@ -185,7 +188,71 @@ async function request<T>(
     if (unlock) headers.set('X-Instance-Unlock', unlock)
   }
 
-  const res = await fetch(path, { ...init, headers })
+  // App 壳内无同源代理，需拼 VITE_API_BASE / 设置里的中继地址
+  const url = resolveApiUrl(path)
+  const method = String(init.method || 'GET').toUpperCase()
+  const headerMap: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    headerMap[key] = value
+  })
+
+  // 原生：显式 CapacitorHttp → URLSession，避开 WKWebView ATS / 混合内容
+  if (Capacitor.isNativePlatform()) {
+    let dataBody: unknown
+    if (init.body != null && method !== 'GET' && method !== 'HEAD') {
+      const raw = typeof init.body === 'string' ? init.body : String(init.body)
+      try {
+        dataBody = JSON.parse(raw)
+      } catch {
+        dataBody = raw
+      }
+    }
+    let native: { status: number; data: unknown }
+    try {
+      native = await CapacitorHttp.request({
+        url,
+        method,
+        headers: headerMap,
+        data: dataBody,
+        connectTimeout: 20_000,
+        readTimeout: 120_000,
+      })
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e)
+      throw Object.assign(
+        new Error(
+          /App Transport Security|secure connection|load failed|failed to fetch/i.test(raw)
+            ? '无法连接中继：请 Xcode 菜单 Product → Clean Build Folder 后重新 Run 安装'
+            : raw || '网络错误',
+        ),
+        { status: undefined as number | undefined },
+      )
+    }
+    const data = (native.data && typeof native.data === 'object' ? native.data : {}) as T & ApiError
+    if (native.status < 200 || native.status >= 300) {
+      const msg =
+        typeof data.error === 'string' && data.error.trim()
+          ? data.error
+          : typeof native.data === 'string' && native.data.trim()
+            ? native.data
+            : '请求失败，请稍后重试'
+      throw Object.assign(new Error(msg), { status: native.status })
+    }
+    return data
+  }
+
+  let res: Response
+  try {
+    res = await fetch(url, { ...init, headers })
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e)
+    const err = new Error(
+      /load failed|failed to fetch|networkerror|网络|App Transport Security/i.test(raw)
+        ? '无法连接中继（检查 API 地址 / 防火墙 / 是否 https）'
+        : raw || '网络错误',
+    ) as Error & { status?: number }
+    throw err
+  }
   const data = (await res.json().catch(() => ({}))) as T & ApiError
 
   if (!res.ok) {
@@ -272,6 +339,20 @@ export async function fetchAgents(instanceId: string): Promise<PublicMirrorAgent
     `/api/instances/${encodeURIComponent(instanceId)}/agents`,
   )
   return data.agents
+}
+
+/** Create a custom digital employee on Mac (no talent presets) */
+export async function createAgent(
+  instanceId: string,
+  body: { name: string; engine: string; jelly_color?: string },
+): Promise<{ agent_id: string; display_name: string; engine: string }> {
+  return request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 /** Mirror tasks for an agent */
@@ -474,6 +555,8 @@ export type AgentSettings = {
   name: string
   engine: string
   rules_prompt: string
+  /** Pixel jelly color from Mac */
+  jelly_color?: string
   skill_count: number
 }
 
@@ -509,6 +592,36 @@ export type NotifyPrefs = {
   permission: boolean
 }
 
+/** 读取本机 Claude / Codex / Cursor 订阅额度（默认 5 分钟缓存；fresh 强制刷新） */
+export async function fetchEnginesUsage(
+  instanceId: string,
+  opts?: { fresh?: boolean },
+): Promise<{
+  cached_at?: string
+  ttl_seconds?: number
+  engines: Array<{
+    id: string
+    ok: boolean
+    error?: string
+    source?: string
+    plan?: string
+    windows: Array<{
+      kind: string
+      label: string
+      hint: string
+      used_percent: number
+      window_minutes?: number
+      resets_at?: string
+      reset_hint?: string
+    }>
+  }>
+}> {
+  const qs = opts?.fresh ? '?fresh=1' : ''
+  return request(
+    `/api/instances/${encodeURIComponent(instanceId)}/engines/usage${qs}`,
+  )
+}
+
 /** 读取某台电脑的通知开关 */
 export async function fetchNotifyPrefs(instanceId: string): Promise<NotifyPrefs> {
   return request<NotifyPrefs>(
@@ -540,17 +653,20 @@ export async function fetchAgentSettings(
   )
 }
 
-/** Save rules_prompt only */
+/** Save rules_prompt (+ optional jelly_color) */
 export async function updateAgentSettings(
   instanceId: string,
   agentId: string,
   rulesPrompt: string,
+  jellyColor?: string,
 ): Promise<AgentSettings> {
+  const body: Record<string, string> = { rules_prompt: rulesPrompt }
+  if (jellyColor) body.jelly_color = jellyColor
   return request<AgentSettings>(
     `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/settings`,
     {
       method: 'PATCH',
-      body: JSON.stringify({ rules_prompt: rulesPrompt }),
+      body: JSON.stringify(body),
     },
   )
 }

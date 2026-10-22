@@ -15,6 +15,7 @@ export const KNOWN_ACTIONS = [
   'permission.decide',
   'viewer.set',
   'viewer.clear',
+  'agent.create',
   'agent.settings.get',
   'agent.settings.update',
   'agent.skills.list',
@@ -25,6 +26,7 @@ export const KNOWN_ACTIONS = [
   'chat.image.upload',
   'notify.prefs.get',
   'notify.prefs.update',
+  'engines.usage.get',
 ] as const
 
 export type KnownAction = (typeof KNOWN_ACTIONS)[number]
@@ -43,6 +45,7 @@ export const V1_EXECUTABLE = new Set<string>([
   'permission.decide',
   'viewer.set',
   'viewer.clear',
+  'agent.create',
   'agent.settings.get',
   'agent.settings.update',
   'agent.skills.list',
@@ -53,4 +56,5 @@ export const V1_EXECUTABLE = new Set<string>([
   'chat.image.upload',
   'notify.prefs.get',
   'notify.prefs.update',
+  'engines.usage.get',
 ])

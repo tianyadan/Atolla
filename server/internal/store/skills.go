@@ -50,25 +50,25 @@ type SkillCatalogItem struct {
 
 // AgentSkillView is catalog + install state for one agent.
 type AgentSkillView struct {
-	ID               string      `json:"id"`
-	Name             string      `json:"name"`
-	Summary          string      `json:"summary"`
-	Description      string      `json:"description"`
-	IconKey          string      `json:"icon_key"`
-	IconURL          string      `json:"icon_url,omitempty"`
-	Source           string      `json:"source"`
-	PublisherName    string      `json:"publisher_name,omitempty"`
-	Category         string      `json:"category"`
-	Risk             string      `json:"risk"`
-	Author           string      `json:"author,omitempty"`
-	Rules            []SkillRule `json:"rules"`
-	Capabilities     []string    `json:"capabilities"` // enabled capability ids
-	AllCapabilities  []SkillCapability `json:"all_capabilities,omitempty"`
-	Version          string      `json:"version"`
-	Installed        bool        `json:"installed"`
-	Enabled          bool        `json:"enabled"` // install enabled flag
-	InstalledAt      *time.Time  `json:"installed_at,omitempty"`
-	ConfigJSON       string      `json:"config_json,omitempty"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Summary         string            `json:"summary"`
+	Description     string            `json:"description"`
+	IconKey         string            `json:"icon_key"`
+	IconURL         string            `json:"icon_url,omitempty"`
+	Source          string            `json:"source"`
+	PublisherName   string            `json:"publisher_name,omitempty"`
+	Category        string            `json:"category"`
+	Risk            string            `json:"risk"`
+	Author          string            `json:"author,omitempty"`
+	Rules           []SkillRule       `json:"rules"`
+	Capabilities    []string          `json:"capabilities"` // enabled capability ids
+	AllCapabilities []SkillCapability `json:"all_capabilities,omitempty"`
+	Version         string            `json:"version"`
+	Installed       bool              `json:"installed"`
+	Enabled         bool              `json:"enabled"` // install enabled flag
+	InstalledAt     *time.Time        `json:"installed_at,omitempty"`
+	ConfigJSON      string            `json:"config_json,omitempty"`
 }
 
 // EnsureSkillSchema creates skill tables and seeds builtin catalog.
@@ -149,7 +149,10 @@ func (s *Store) EnsureSkillSchema(ctx context.Context) error {
 			return fmt.Errorf("add agent_skill_installs.enabled: %w", err)
 		}
 	}
-	return s.seedBuiltinSkills(ctx)
+	if err := s.seedBuiltinSkills(ctx); err != nil {
+		return err
+	}
+	return s.retireRemovedBuiltinSkills(ctx)
 }
 
 func (s *Store) seedBuiltinSkills(ctx context.Context) error {
@@ -183,6 +186,16 @@ ON DUPLICATE KEY UPDATE
 	return nil
 }
 
+// retireRemovedBuiltinSkills 从商店彻底移除已下架的内置技能（级联清安装记录）。
+func (s *Store) retireRemovedBuiltinSkills(ctx context.Context) error {
+	for _, id := range []string{"atolla.coding", "atolla.shell"} {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM skill_catalog WHERE id=? AND source='builtin'`, id); err != nil {
+			return fmt.Errorf("retire skill %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
 // BuiltinSkillSeeds returns the built-in marketplace catalog.
 func BuiltinSkillSeeds() []SkillCatalogItem {
 	rule := func(typ, text string) SkillRule { return SkillRule{Type: typ, Text: text} }
@@ -202,27 +215,6 @@ func BuiltinSkillSeeds() []SkillCatalogItem {
 		}
 	}
 	return []SkillCatalogItem{
-		mk("atolla.coding", "代码读写", "在工作目录读改代码与配置",
-			"允许 Agent 在工作目录内读写文件。适合开发助手。",
-			"coding", "engine", "mid", "1.0.0",
-			[]SkillRule{
-				rule("allow", "可读工作目录内文件"),
-				rule("allow", "可按策略修改工作目录内文件"),
-				rule("deny", "不得越出工作目录"),
-			},
-			[]SkillCapability{
-				cap("engine.read", "读文件", "读取工作目录文件", true),
-				cap("engine.write", "写文件", "修改工作目录文件", true),
-			}),
-		mk("atolla.shell", "终端执行", "运行 shell 命令完成构建与排查",
-			"允许 Agent 执行终端命令。建议搭配人工审批。",
-			"shell", "engine", "high", "1.0.0",
-			[]SkillRule{
-				rule("allow", "可执行与任务相关的命令"),
-				rule("deny", "禁止破坏性系统命令（除非用户明确授权）"),
-				rule("note", "危险命令应走 Permission Gateway 审批"),
-			},
-			[]SkillCapability{cap("engine.exec", "执行命令", "运行 shell", true)}),
 		mk("atolla.search", "网络检索", "搜索公开信息与文档",
 			"允许 Agent 发起网络搜索辅助调研。",
 			"search", "engine", "low", "1.0.0",
@@ -665,9 +657,7 @@ func SyncEngineFlagsFromSkills(skills []AgentSkillView, a *ManagedAgent) {
 			installedIDs[sk.ID] = true
 		}
 	}
-	if installedIDs["atolla.coding"] {
-		a.AllowWrite = has["engine.write"]
-	}
+	// 读写/终端由员工权限策略控制，不再对应商店技能。
 	if installedIDs["atolla.search"] {
 		a.AllowNetwork = has["engine.web_search"]
 	}

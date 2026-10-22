@@ -130,8 +130,18 @@ func ParseCodexJSONLLine(line []byte) (CodexEvent, bool) {
 				ok = true
 			}
 		case "reasoning", "thought":
-			// 不刷屏，仅轻量状态
-			if typ == "item.started" {
+			// 思考正文及时进时间线；无正文时仅提示状态
+			text := strAny(item["text"])
+			if text == "" {
+				text = strAny(item["content"])
+			}
+			if text == "" {
+				text = strAny(item["reasoning"])
+			}
+			if strings.TrimSpace(text) != "" && (typ == "item.completed" || typ == "item.started") {
+				ev.Chunk = text
+				ok = true
+			} else if typ == "item.started" {
 				ev.Activity = &Activity{Tool: "codex", Summary: "思考中…"}
 				ok = true
 			}

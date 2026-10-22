@@ -18,3 +18,7 @@ bin/
 # 前端(node_modules 已在 web/.gitignore)
 
 .superpowers/
+
+# macOS 灵动岛编译产物（源码在 macos/AtollaIsland，二进制用户本机生成）
+macos/AtollaIsland/.build/
+macos/AtollaIsland/.swiftpm/

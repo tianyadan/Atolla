@@ -15,6 +15,7 @@ import (
 )
 
 // UploadAgentAvatar 压缩并上传到 OSS，更新 avatar_url。
+// 仅供内部使用（如 Bark 把人才市场本地图提升为公网 URL）；管理台用户上传入口已移除。
 func (s *Service) UploadAgentAvatar(ctx context.Context, agentID int64, raw []byte) (*store.ManagedAgent, error) {
 	if !s.Cfg.OSSConfigured() {
 		return nil, fmt.Errorf("未配置 OSS")
@@ -106,17 +107,3 @@ func localAvatarPath(urlPath string) string {
 	return ""
 }
 
-// ClearAgentAvatar 清空头像（展示默认图）。
-func (s *Service) ClearAgentAvatar(ctx context.Context, agentID int64) (*store.ManagedAgent, error) {
-	a, err := s.Store.GetManagedAgent(ctx, agentID)
-	if err != nil || a == nil {
-		if a == nil && err == nil {
-			return nil, fmt.Errorf("agent not found")
-		}
-		return nil, err
-	}
-	if err := s.Store.SetManagedAgentAvatarURL(ctx, agentID, ""); err != nil {
-		return nil, err
-	}
-	return s.Store.GetManagedAgent(ctx, agentID)
-}

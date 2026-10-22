@@ -1,0 +1,12 @@
+[Unit]
+Description=Atolla Remote Relay Watchdog Timer
+After=network-online.target
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=15s
+Unit=atolla-relay-watchdog.service
+
+[Install]
+WantedBy=timers.target

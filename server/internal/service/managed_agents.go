@@ -234,9 +234,6 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 			}
 		}
 	}
-	onChunk := func(chunk string) {
-		emitAsk(onEvent, map[string]any{"type": "chunk", "content": chunk})
-	}
 	agentID := a.ID
 	atts := NormalizeChatAttachments(opts.attachments)
 	question = strings.TrimSpace(question)
@@ -280,6 +277,14 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		_ = s.Store.SetManagedAgentStatus(runCtx, agentID, "running", "", 0, statusConvID(opts.bindMainConv, convID))
 		// 状态已是 running，马上推镜像。等回合结束再推时，状态已经变回 idle，手机全程显示空闲。
 		s.PushAgentsMirrorNow()
+	}
+	liveBuf := s.beginLiveAssistant(convID, agentID)
+	defer s.abandonLiveAssistant(convID)
+	onChunk := func(chunk string) {
+		if liveBuf != nil {
+			liveBuf.appendChunk(chunk)
+		}
+		emitAsk(onEvent, map[string]any{"type": "chunk", "content": chunk})
 	}
 	if a.AutoReview {
 		s.Perms.SetAuto(convID, true)
@@ -508,12 +513,29 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 	} else if tp != nil {
 		tp.done(context.WithoutCancel(ctx), "已完成")
 	}
+
+	// 若中途已按「思考→命令」切段落库，收尾只写入尚未落库的尾巴，避免整段 out 再插一条破坏时间线。
+	tail, hadFlush := s.endLiveAssistant(convID)
+	persist := out
+	if hadFlush {
+		persist = tail
+		if strings.TrimSpace(persist) == "" && runErr != nil {
+			persist = out
+		}
+	}
+
 	msg := &store.Message{
 		ConversationID: convID, Role: "assistant", Content: out, Status: status, ReplyMs: ms,
 	}
-	if !opts.silent {
-		if _, err := s.Store.InsertMessage(context.WithoutCancel(ctx), msg); err != nil {
+	if !opts.silent && strings.TrimSpace(persist) != "" {
+		row := &store.Message{
+			ConversationID: convID, Role: "assistant", Content: persist, Status: status, ReplyMs: ms,
+		}
+		if id, err := s.Store.InsertMessage(context.WithoutCancel(ctx), row); err != nil {
 			log.Printf("finishManagedAsk: insert assistant failed: %v", err)
+		} else {
+			msg.ID = id
+			msg.Content = persist
 		}
 	}
 	if !opts.holdStatus {

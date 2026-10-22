@@ -69,3 +69,11 @@ func TestParseCodexJSONLInvalid(t *testing.T) {
 	}
 	_ = json.RawMessage{}
 }
+
+func TestParseCodexJSONLReasoningChunk(t *testing.T) {
+	line := `{"type":"item.completed","item":{"id":"r1","type":"reasoning","text":"先确认工作区再执行命令"}}`
+	ev, ok := ParseCodexJSONLLine([]byte(line))
+	if !ok || ev.Chunk != "先确认工作区再执行命令" {
+		t.Fatalf("ev=%+v ok=%v", ev, ok)
+	}
+}

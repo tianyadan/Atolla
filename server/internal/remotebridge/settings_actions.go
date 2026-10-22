@@ -40,7 +40,7 @@ func handleAgentSettingsGet(ec *ExecContext) (any, error) {
 	return settingsPublic(a, counts[a.ID]), nil
 }
 
-// handleAgentSettingsUpdate saves rules_prompt only; keeps policy fields from DB.
+// handleAgentSettingsUpdate saves rules_prompt and optional jelly_color; keeps other policy fields from DB.
 func handleAgentSettingsUpdate(ec *ExecContext) (any, error) {
 	if ec.Store == nil {
 		return nil, fmt.Errorf("store not configured")
@@ -54,6 +54,16 @@ func handleAgentSettingsUpdate(ec *ExecContext) (any, error) {
 		return nil, fmt.Errorf("rules_prompt required")
 	}
 	rules, _ := raw.(string)
+
+	var jellyPtr *string
+	if rawColor, hasColor := ec.Payload["jelly_color"]; hasColor {
+		colorStr, _ := rawColor.(string)
+		norm := store.NormalizeJellyColor(colorStr)
+		if norm == "" {
+			return nil, store.ErrInvalidJellyColor
+		}
+		jellyPtr = &norm
+	}
 
 	a, err := ec.Store.GetManagedAgent(ec.Context, agentID)
 	if err != nil || a == nil {
@@ -76,6 +86,7 @@ func handleAgentSettingsUpdate(ec *ExecContext) (any, error) {
 		ScheduleEnabled: &se,
 		ScheduleCron:    &cron,
 		ScheduleLabel:   &label,
+		JellyColor:      jellyPtr,
 	}
 	if err := ec.Store.UpdateManagedAgent(ec.Context, agentID, in); err != nil {
 		return nil, err

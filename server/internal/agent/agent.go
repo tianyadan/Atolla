@@ -149,8 +149,8 @@ func itoa64(n int64) string {
 	return string(buf[i:])
 }
 
-// claudeLineText 从一行 stream-json 取出正文。
-// snapshot 表示整段快照（assistant/result），调用方仅在还没有增量时采用，避免和 text_delta 重复。
+// claudeLineText 从一行 stream-json 取出正文（含思考增量）。
+// snapshot 表示整段快照（assistant/result），调用方仅在还没有增量时采用，避免和 delta 重复。
 // isResult 表示本轮 result 事件，用于关闭 stdin。
 func claudeLineText(line []byte) (text string, snapshot, isResult bool) {
 	var raw map[string]interface{}
@@ -164,16 +164,10 @@ func claudeLineText(line []byte) (text string, snapshot, isResult bool) {
 			return "", false, false
 		}
 		delta, _ := ev["delta"].(map[string]interface{})
-		if strField(delta, "type") != "text_delta" {
-			return "", false, false
-		}
-		return strField(delta, "text"), false, false
+		return claudeDeltaText(delta), false, false
 	case "content_block_delta":
 		delta, _ := raw["delta"].(map[string]interface{})
-		if strField(delta, "type") != "text_delta" {
-			return "", false, false
-		}
-		return strField(delta, "text"), false, false
+		return claudeDeltaText(delta), false, false
 	case "assistant":
 		msg, _ := raw["message"].(map[string]interface{})
 		return assistantMessageText(msg), true, false
@@ -184,7 +178,27 @@ func claudeLineText(line []byte) (text string, snapshot, isResult bool) {
 	}
 }
 
-// assistantMessageText 拼接 assistant 消息里的 text 块（跳过 thinking / tool_use）。
+// claudeDeltaText 取出 text_delta / thinking_delta 正文，便于命令执行前及时展示思考。
+func claudeDeltaText(delta map[string]interface{}) string {
+	if delta == nil {
+		return ""
+	}
+	switch strField(delta, "type") {
+	case "text_delta":
+		return strField(delta, "text")
+	case "thinking_delta":
+		t := strField(delta, "thinking")
+		if t == "" {
+			t = strField(delta, "text")
+		}
+		return t
+	default:
+		return ""
+	}
+}
+
+// assistantMessageText 拼接 assistant 里的 thinking + text（跳过 tool_use）。
+// 思考块在引擎侧往往先于命令产出；若不展示会被压到最后的 result。
 func assistantMessageText(msg map[string]interface{}) string {
 	if msg == nil {
 		return ""
@@ -193,10 +207,16 @@ func assistantMessageText(msg map[string]interface{}) string {
 	var b strings.Builder
 	for _, it := range arr {
 		m, _ := it.(map[string]interface{})
-		if strField(m, "type") != "text" {
-			continue
+		switch strField(m, "type") {
+		case "thinking":
+			t := strField(m, "thinking")
+			if t == "" {
+				t = strField(m, "text")
+			}
+			b.WriteString(t)
+		case "text":
+			b.WriteString(strField(m, "text"))
 		}
-		b.WriteString(strField(m, "text"))
 	}
 	return b.String()
 }

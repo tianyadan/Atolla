@@ -10,6 +10,8 @@
     "dev:web": "npm run dev -w web",
     "dev:local": "bash scripts/dev-local.sh",
     "build": "npm run build -w web && npm run build -w server",
-    "start": "npm run start -w server"
+    "start": "npm run start -w server",
+    "ios": "npm run ios -w web",
+    "cap:sync": "npm run cap:sync -w web"
   }
 }

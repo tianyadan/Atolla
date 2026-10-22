@@ -1,6 +1,8 @@
+import { Capacitor } from '@capacitor/core'
 import { useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { clearToken, getToken, login } from '../api'
+import { getApiBase, setApiBase } from '../utils/apiBase'
 
 /** Site gate — branded home / sign-in */
 export function LoginPage() {
@@ -8,6 +10,9 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const native = Capacitor.isNativePlatform()
+  const [apiBaseDraft, setApiBaseDraft] = useState(() => getApiBase())
+  const showApiField = native || !!getApiBase() || !!import.meta.env.VITE_API_BASE
 
   if (getToken()) {
     return <Navigate to="/instances" replace />
@@ -17,6 +22,13 @@ export function LoginPage() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+    if (native) {
+      setApiBase(apiBaseDraft)
+      if (!getApiBase()) {
+        setError('Please enter the relay API URL first.')
+        return
+      }
+    }
     setLoading(true)
     try {
       await login(password.trim())
@@ -53,6 +65,22 @@ export function LoginPage() {
       </div>
 
       <form className="login-form" onSubmit={onSubmit}>
+        {showApiField ? (
+          <label className="field">
+            <span>Relay API URL</span>
+            <input
+              type="url"
+              inputMode="url"
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="url"
+              value={apiBaseDraft}
+              onChange={(e) => setApiBaseDraft(e.target.value)}
+              placeholder="https://your-relay.example.com"
+              required={native}
+            />
+          </label>
+        ) : null}
         <label className="field">
           <span>Site password</span>
           <input

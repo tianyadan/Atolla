@@ -1,0 +1,9 @@
+# 编译产物（勿提交；用户自行 swift build）
+.build/
+.swiftpm/
+*.xcodeproj/
+DerivedData/
+
+# 本地日志 / 杂项
+*.log
+.DS_Store

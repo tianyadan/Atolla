@@ -1,0 +1,22 @@
+{
+ "cell": 16,
+ "frames": 8,
+ "rows": {
+  "float": 0,
+  "jump": 1
+ },
+ "scales": [
+  1,
+  2,
+  3
+ ],
+ "colors": {
+  "orange": 24,
+  "yellow": 46,
+  "blue": 212,
+  "green": 140,
+  "purple": 262,
+  "red": 352
+ },
+ "note": "帧里不含位移；漂浮用 CSS translateY ±1格 3s 缓动，跳动用 translateY -3格 0.6s，帧0/7为落地压扁"
+}

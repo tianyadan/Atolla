@@ -4,6 +4,7 @@ import { clearToken, fetchAgents, logoutUnlockSession } from '../api'
 import { AgentsHubIcon, GroupChatHubIcon } from '../components/HubIcons'
 import { PageShell } from '../components/PageShell'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
+import { syncIslandFromAgents } from '../islandLiveActivity'
 import { countBusyAgents } from '../utils/agentStatus'
 
 /** 4-grid feature menu after instance unlock */
@@ -17,12 +18,13 @@ export function InstanceHubPage() {
 
   useUnlockHeartbeat(instanceId || undefined)
 
-  /** Refresh busy badge count */
+  /** Refresh busy badge + 灵动岛 */
   const loadBusy = useCallback(async () => {
     if (!instanceId) return
     try {
       const agents = await fetchAgents(instanceId)
       setBusyCount(countBusyAgents(agents))
+      void syncIslandFromAgents(agents)
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
       const status = (err as { status?: number })?.status

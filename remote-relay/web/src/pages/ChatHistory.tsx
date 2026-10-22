@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core'
+import { Keyboard } from '@capacitor/keyboard'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -40,12 +42,28 @@ import {
   revokePendingImages,
   type PendingImage,
 } from '../utils/chatImages'
+import { ChatThinkingTip } from '../components/ChatThinkingTip'
+import {
+  ClearIcon,
+  ImageIcon,
+  SendIcon,
+  StopIcon,
+} from '../components/ComposerIcons'
+import { EngineTag } from '../components/EngineTag'
+import { EngineUsageChip } from '../components/EngineUsageChip'
+import {
+  loadChatHeaderExpanded,
+  saveChatHeaderExpanded,
+} from '../utils/chatHeaderCollapse'
+import { syncIslandOptimisticAgent } from '../islandLiveActivity'
+import { JellyAvatar } from '../jelly/JellyAvatar'
+import { jellyStateFromAgent, resolveMirrorJellyColor } from '../jelly/jellyColor'
 import {
   agentAutoApproveAll,
   agentAutoReview,
-  agentAvatarUrl,
   agentBusy,
   agentContextUsage,
+  agentRunStartedAt,
   agentStatusLabel,
   agentTaskPlanEnabled,
 } from '../utils/agentStatus'
@@ -145,6 +163,17 @@ export function ChatHistoryPage() {
   const [lightboxSrc, setLightboxSrc] = useState('')
   /** Album / screenshot picker (no capture) */
   const albumInputRef = useRef<HTMLInputElement | null>(null)
+  /** 顶栏展开；默认展开，localStorage 记住 */
+  const [headerExpanded, setHeaderExpanded] = useState(() => loadChatHeaderExpanded())
+
+  /** 切换顶栏展开并持久化 */
+  function toggleHeaderExpanded() {
+    setHeaderExpanded((prev) => {
+      const next = !prev
+      saveChatHeaderExpanded(next)
+      return next
+    })
+  }
 
   const threadRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
@@ -220,23 +249,51 @@ export function ChatHistoryPage() {
     scrollThreadToBottom('auto')
   }, [messages, loading, awaitingReply])
 
-  /** Lift composer above soft keyboard via visualViewport */
+  /**
+   * 输入框抬到软键盘上方：
+   * - Capacitor 原生：keyboardWillShow 高度最准（全面屏 + resize:none）
+   * - 浏览器：visualViewport 兜底
+   */
   useEffect(() => {
-    const vv = window.visualViewport
-    if (!vv) return
-    const update = () => {
-      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop)
+    let cancelled = false
+    let useNative = false
+    const applyInset = (px: number) => {
+      if (cancelled) return
+      const inset = Math.max(0, Math.round(px))
       setKbdInset(inset)
       if (inset > 0 && stickToBottomRef.current) {
         requestAnimationFrame(() => scrollThreadToBottom('auto'))
       }
     }
-    update()
-    vv.addEventListener('resize', update)
-    vv.addEventListener('scroll', update)
+
+    const handles: { remove: () => void }[] = []
+
+    if (Capacitor.isNativePlatform()) {
+      useNative = true
+      void Keyboard.addListener('keyboardWillShow', (info) => {
+        applyInset(info.keyboardHeight)
+      }).then((h) => handles.push(h))
+      void Keyboard.addListener('keyboardWillHide', () => {
+        applyInset(0)
+      }).then((h) => handles.push(h))
+    }
+
+    const vv = window.visualViewport
+    const onVv = () => {
+      if (useNative || !vv) return
+      applyInset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop))
+    }
+    if (!useNative) {
+      vv?.addEventListener('resize', onVv)
+      vv?.addEventListener('scroll', onVv)
+      onVv()
+    }
+
     return () => {
-      vv.removeEventListener('resize', update)
-      vv.removeEventListener('scroll', update)
+      cancelled = true
+      handles.forEach((h) => h.remove())
+      vv?.removeEventListener('resize', onVv)
+      vv?.removeEventListener('scroll', onVv)
     }
   }, [])
 
@@ -435,6 +492,13 @@ export function ChatHistoryPage() {
   const busy = agentBusy(agent?.status) || awaitingReply
   const pendingPerm = permQueue[0] ?? null
   const pendingMore = Math.max(0, permQueue.length - 1)
+
+  /** 对话中忙碌 / 等待回复时立刻上岛（不必回到列表） */
+  useEffect(() => {
+    if (!agent) return
+    if (!busy) return
+    void syncIslandOptimisticAgent(agent, { forceBusy: true })
+  }, [agent, busy, awaitingReply])
 
   const activeTask = useMemo(() => {
     const running = tasks.find((t) => {
@@ -664,59 +728,91 @@ export function ChatHistoryPage() {
   }
 
   const title = agent?.display_name || agentId || '对话'
-  const agentAvatar = agentAvatarUrl(agent?.payload)
+  const jellyColor = resolveMirrorJellyColor(agent)
+  const jellyState = jellyStateFromAgent(agent, {
+    loading: awaitingReply,
+    streaming: awaitingReply,
+  })
   const ctxUsage = agentContextUsage(agent?.payload)
-  const lastSpeak = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const r = messages[i]?.role
-      if (r === 'user' || r === 'assistant') return r
-    }
-    return null
-  }, [messages])
-  /** ChatGPT-like thinking row while waiting for the next assistant turn */
-  const showThinking = awaitingReply || (busy && lastSpeak === 'user')
-
   return (
     <PageShell title={title} backTo={agentsPath} bodyClassName="page-body-chat">
       <div className="chat-layout" style={{ ['--kbd-inset' as string]: `${kbdInset}px` }}>
-        <div className="chat-sticky-top">
-          <div className="chat-header-card">
-            <img className="agent-avatar lg" src={agentAvatar} alt="" />
-            <div className="chat-header-meta">
-              <div className="list-title">{title}</div>
-              <span className={`status-pill compact ${busy ? 'busy' : 'idle'}`}>
-                {agentStatusLabel(agent?.status)}
-              </span>
-            </div>
-            <button
-              type="button"
-              className="icon-btn chat-agent-settings-btn"
-              aria-label="员工设置"
-              onClick={() => setAgentSettingsOpen(true)}
-            >
-              <SettingsIcon size={22} />
-            </button>
-          </div>
-
-          {taskPlanOn ? (
-            <button
-              type="button"
-              className="progress-strip"
-              onClick={() => setProgressOpen(true)}
-            >
-              <div className="progress-strip-label">
-                {activeTask
-                  ? String(activeTask.payload?.task_name || activeTask.task_id)
-                  : '暂无进行中的任务'}
-                {activeTask ? ` · ${activeProgress}%` : ''}
+        <div className={`chat-sticky-top${headerExpanded ? '' : ' is-collapsed'}`}>
+          {headerExpanded ? (
+            <>
+              <div className="chat-header-card">
+                <JellyAvatar
+                  className="agent-avatar lg"
+                  color={jellyColor}
+                  size={48}
+                  state={jellyState}
+                />
+                <div className="chat-header-meta">
+                  <div className="list-title">{title}</div>
+                  <div className="chat-header-tags">
+                    <span className={`status-pill compact ${busy ? 'busy' : 'idle'}`}>
+                      {agentStatusLabel(agent?.status)}
+                    </span>
+                    <EngineTag engine={agent?.engine} />
+                    {instanceId ? (
+                      <EngineUsageChip instanceId={instanceId} engine={agent?.engine} />
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="icon-btn chat-agent-settings-btn"
+                  aria-label="员工设置"
+                  onClick={() => setAgentSettingsOpen(true)}
+                >
+                  <SettingsIcon size={22} />
+                </button>
               </div>
-              <div className="agent-progress-bar">
-                <div style={{ width: `${activeTask ? activeProgress : 0}%` }} />
-              </div>
-            </button>
-          ) : null}
 
-          {error ? <p className="error-banner">{error}</p> : null}
+              {taskPlanOn ? (
+                <button
+                  type="button"
+                  className="progress-strip"
+                  onClick={() => setProgressOpen(true)}
+                >
+                  <div className="progress-strip-label">
+                    {activeTask
+                      ? String(activeTask.payload?.task_name || activeTask.task_id)
+                      : '暂无进行中的任务'}
+                    {activeTask ? ` · ${activeProgress}%` : ''}
+                  </div>
+                  <div className="agent-progress-bar">
+                    <div style={{ width: `${activeTask ? activeProgress : 0}%` }} />
+                  </div>
+                </button>
+              ) : null}
+
+              {error ? <p className="error-banner">{error}</p> : null}
+
+              <button
+                type="button"
+                className="chat-header-fold-tri"
+                aria-label="收起状态栏"
+                title="收起状态栏"
+                onClick={toggleHeaderExpanded}
+              >
+                ▲
+              </button>
+            </>
+          ) : (
+            <>
+              {error ? <p className="error-banner">{error}</p> : null}
+              <button
+                type="button"
+                className="chat-header-fold-tri alone"
+                aria-label="展开状态栏"
+                title="展开状态栏"
+                onClick={toggleHeaderExpanded}
+              >
+                ▼
+              </button>
+            </>
+          )}
         </div>
 
         <div
@@ -776,7 +872,12 @@ export function ChatHistoryPage() {
                 <header className={isAssistant ? 'bubble-agent-head' : undefined}>
                   {isAssistant ? (
                     <>
-                      <img className="bubble-agent-avatar" src={agentAvatar} alt="" />
+                      <JellyAvatar
+                        className="bubble-agent-avatar"
+                        color={jellyColor}
+                        size={22}
+                        state="idle"
+                      />
                       <span className="bubble-agent-name">{label}</span>
                       <button
                         type="button"
@@ -842,21 +943,17 @@ export function ChatHistoryPage() {
               </article>
             )
           })}
-          {showThinking ? (
-            <article className="chat-bubble bubble-assistant bubble-thinking" aria-live="polite">
-              <header className="bubble-agent-head">
-                <img className="bubble-agent-avatar" src={agentAvatar} alt="" />
-                <span className="bubble-agent-name">{title}</span>
-              </header>
-              <div className="thinking-row">
-                <span className="thinking-label">正在思考</span>
-                <span className="thinking-dots" aria-hidden>
-                  <i />
-                  <i />
-                  <i />
-                </span>
-              </div>
-            </article>
+          {/* 发送后 / 忙碌中：小水母浮动 + Claude CLI 风格 loading 文案 */}
+          {busy ? (
+            <ChatThinkingTip
+              color={jellyColor}
+              runStartedAt={
+                agentRunStartedAt(agent?.payload) ??
+                (awaitSinceRef.current > 0
+                  ? Math.floor(awaitSinceRef.current / 1000)
+                  : null)
+              }
+            />
           ) : null}
           <div ref={bottomRef} className="chat-thread-end" aria-hidden />
         </div>
@@ -882,32 +979,33 @@ export function ChatHistoryPage() {
               {(approveAllOn || autoReviewOn) && <span className="approve-dot" aria-hidden />}
             </button>
           </div>
-          {pendingImages.length > 0 ? (
-            <div className="chat-attach-preview" aria-label="待发送图片">
-              {pendingImages.map((it) => (
-                <div
-                  key={it.localId}
-                  className={`chat-attach-thumb${it.uploading ? ' uploading' : ''}${it.error ? ' err' : ''}`}
-                >
-                  <img src={it.previewUrl} alt="" />
-                  {it.uploading ? <span className="chat-attach-spin" aria-hidden /> : null}
-                  {it.error ? <span className="chat-attach-err" title={it.error}>!</span> : null}
-                  <button
-                    type="button"
-                    className="chat-attach-rm"
-                    aria-label="移除图片"
-                    disabled={sending}
-                    onClick={() => onRemovePending(it.localId)}
+          <div className="chat-composer-shell">
+            {pendingImages.length > 0 ? (
+              <div className="chat-attach-preview" aria-label="待发送图片">
+                {pendingImages.map((it) => (
+                  <div
+                    key={it.localId}
+                    className={`chat-attach-thumb${it.uploading ? ' uploading' : ''}${it.error ? ' err' : ''}`}
                   >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="chat-composer-input-wrap">
+                    <img src={it.previewUrl} alt="" />
+                    {it.uploading ? <span className="chat-attach-spin" aria-hidden /> : null}
+                    {it.error ? <span className="chat-attach-err" title={it.error}>!</span> : null}
+                    <button
+                      type="button"
+                      className="chat-attach-rm"
+                      aria-label="移除图片"
+                      disabled={sending}
+                      onClick={() => onRemovePending(it.localId)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <textarea
               rows={2}
+              className="chat-composer-field"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               onFocus={() => {
@@ -916,54 +1014,68 @@ export function ChatHistoryPage() {
               }}
               placeholder={busy ? '输入插话内容…' : '输入任务或附图…'}
             />
-            <ContextRing usage={ctxUsage} />
-          </div>
-          <div className="chat-composer-actions">
-            <input
-              ref={albumInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              hidden
-              onChange={(e) => {
-                onPickImages(e.target.files)
-                e.target.value = ''
-              }}
-            />
-            <button
-              type="button"
-              className="btn outline small"
-              disabled={sending || pendingImages.length >= MAX_CHAT_IMAGES}
-              onClick={() => albumInputRef.current?.click()}
-            >
-              图片
-            </button>
-            <button
-              type="button"
-              className="btn outline small"
-              disabled={!question && pendingImages.length === 0}
-              onClick={() => {
-                setQuestion('')
-                saveChatDraft(instanceId, agentId, '')
-                revokePendingImages(pendingImages)
-                setPendingImages([])
-              }}
-            >
-              清空
-            </button>
-            <button
-              type="button"
-              className="btn primary"
-              disabled={sending || (!question.trim() && pendingImages.length === 0)}
-              onClick={() => void onSend()}
-            >
-              {sending ? '发送中…' : busy ? '插话' : '发送'}
-            </button>
-            {busy ? (
-              <button type="button" className="btn danger outline" onClick={() => void onStop()}>
-                终止
+            <div className="chat-composer-toolbar">
+              <input
+                ref={albumInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => {
+                  onPickImages(e.target.files)
+                  e.target.value = ''
+                }}
+              />
+              <button
+                type="button"
+                className="composer-icon-btn"
+                aria-label="选择图片"
+                title="选择图片"
+                disabled={sending || pendingImages.length >= MAX_CHAT_IMAGES}
+                onClick={() => albumInputRef.current?.click()}
+              >
+                <ImageIcon />
               </button>
-            ) : null}
+              <div className="chat-composer-toolbar-spacer" />
+              <ContextRing usage={ctxUsage} />
+              {(question || pendingImages.length > 0) && !sending ? (
+                <button
+                  type="button"
+                  className="composer-icon-btn"
+                  aria-label="清空"
+                  title="清空"
+                  onClick={() => {
+                    setQuestion('')
+                    saveChatDraft(instanceId, agentId, '')
+                    revokePendingImages(pendingImages)
+                    setPendingImages([])
+                  }}
+                >
+                  <ClearIcon />
+                </button>
+              ) : null}
+              {busy ? (
+                <button
+                  type="button"
+                  className="composer-icon-btn is-stop"
+                  aria-label="终止"
+                  title="终止"
+                  onClick={() => void onStop()}
+                >
+                  <StopIcon />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={`composer-send-btn${busy ? ' is-interrupt' : ''}`}
+                aria-label={sending ? '发送中' : busy ? '插话' : '发送'}
+                title={sending ? '发送中' : busy ? '插话' : '发送'}
+                disabled={sending || (!question.trim() && pendingImages.length === 0)}
+                onClick={() => void onSend()}
+              >
+                <SendIcon />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1060,6 +1172,7 @@ export function ChatHistoryPage() {
             {pendingPerm.note ? <p className="modal-hint">{pendingPerm.note}</p> : null}
             <div className="perm-tool">{pendingPerm.tool_name || 'Tool'}</div>
             <CmdBlock
+              startExpanded
               content={pendingPerm.summary}
               payload={{
                 command: pendingPerm.summary,

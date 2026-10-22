@@ -37,7 +37,8 @@ export AVATAR_ADDR="${AVATAR_ADDR:-:8080}"
 export AVATAR_DB_DSN="${AVATAR_DB_DSN:-root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local}"
 export AVATAR_CLAUDE_BIN="${AVATAR_CLAUDE_BIN:-claude}"
 # 局域网 IP 白名单: 留空=放行全部; 填逗号分隔的 IP,如 AVATAR_ALLOWED_IPS=192.168.1.10,127.0.0.1
-export AVATAR_ALLOWED_IPS="${AVATAR_ALLOWED_IPS:-127.0.0.1}"
+# 本机回环：浏览器/岛可能走 127.0.0.1 或 ::1（localhost）
+export AVATAR_ALLOWED_IPS="${AVATAR_ALLOWED_IPS:-127.0.0.1,::1}"
 export AVATAR_WORKSPACE_ROOT="${AVATAR_WORKSPACE_ROOT:-/Users/tianhaowen/Desktop/code_work_space}"
 # 分身单次回答超时(秒),默认 28800s=8h(v0.2.4；避免约 15min signal: killed)
 export AVATAR_TIMEOUT_SEC="${AVATAR_TIMEOUT_SEC:-28800}"

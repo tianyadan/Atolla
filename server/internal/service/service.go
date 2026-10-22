@@ -73,6 +73,7 @@ type Service struct {
 
 	cloneJobMap    *sync.Map
 	compactPending *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
+	liveAssist     *sync.Map // convID -> *liveAssistantBuf，流式思考在命令前落库
 }
 
 type managedRun struct {
@@ -93,6 +94,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		trustedDirs:           map[string]struct{}{},
 		cloneJobMap:           &sync.Map{},
 		compactPending:        &sync.Map{},
+		liveAssist:            &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
@@ -396,6 +398,8 @@ func (s *Service) recordCommandEx(ctx context.Context, convID int64, tool, cmd, 
 		"command": cmd, "decision": decision, "by": by, "risk": risk, "meaning": meaning, "note": note, "tool": tool,
 	})
 	if convID > 0 {
+		// 先落库已缓冲的思考/正文，再写命令，避免移动端时间线「命令在前、思考在后」
+		s.flushLiveAssistantBeforeCommand(ctx, convID)
 		_, _ = s.Store.InsertMessage(ctx, &store.Message{
 			ConversationID: convID,
 			Role:           "command",

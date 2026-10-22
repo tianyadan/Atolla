@@ -309,6 +309,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureJellyColorSchema(ctx); err != nil {
 		return err
 	}
+	// 23) PC 群聊（Grok 式共享时间线）
+	if err := s.EnsureGroupChatSchema(ctx); err != nil {
+		return err
+	}
+	// 24) 任务完成未读（灵动岛 / PC / 移动端共用）
+	if err := s.EnsureTaskUnreadSchema(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -369,7 +377,7 @@ type ConvWithPreview struct {
 }
 
 // TrimIPConversations 保留该 IP 最新的 limit 个会话,更旧的删除(messages 靠外键级联)。
-// 数字员工、访客和项目协作仍在引用的会话不删，避免员工 conversation_id 变成空指针。
+// 数字员工、访客、项目协作、群聊共享时间线仍在引用的会话不删。
 func (s *Store) TrimIPConversations(ctx context.Context, ip string, limit int) error {
 	if limit <= 0 {
 		limit = 20
@@ -378,6 +386,7 @@ func (s *Store) TrimIPConversations(ctx context.Context, ip string, limit int) e
 		`DELETE c FROM conversations c
 		 WHERE c.user_ip = ?
 		   AND (c.agent_id IS NULL OR c.agent_id = 0)
+		   AND IFNULL(c.mode,'') <> 'group_chat'
 		   AND c.id NOT IN (
 		     SELECT conversation_id FROM managed_agents
 		     WHERE conversation_id IS NOT NULL AND conversation_id > 0
@@ -385,6 +394,10 @@ func (s *Store) TrimIPConversations(ctx context.Context, ip string, limit int) e
 		   AND c.id NOT IN (
 		     SELECT conversation_id FROM workflow_agent_sessions
 		     WHERE conversation_id IS NOT NULL AND conversation_id > 0
+		   )
+		   AND c.id NOT IN (
+		     SELECT shared_conversation_id FROM group_chats
+		     WHERE shared_conversation_id IS NOT NULL AND shared_conversation_id > 0
 		   )
 		   AND c.id NOT IN (
 		     SELECT id FROM (

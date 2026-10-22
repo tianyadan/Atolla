@@ -3,6 +3,7 @@ import { marked } from 'marked'
 import './App.css'
 import { CHANGELOG, CURRENT_VERSION } from './changelog.js'
 import ManagedAgentsPanel, { ManagedAgentPermOverlay } from './ManagedAgents.jsx'
+import GroupChats from './GroupChats.jsx'
 import { anyAgentLoading, allPendingPerms, getAgentSession, listSessionAgentIds, subscribeAgentSessions } from './managedAgentSessions.js'
 import { WorkflowPanel } from './workflow/index.js'
 import WorkflowPermOverlay, { useWorkflowBadges } from './workflow/WorkflowPermOverlay.jsx'
@@ -18,6 +19,8 @@ import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
 import NotifySettings from './NotifySettings.jsx'
 import EngineOnboarding from './EngineOnboarding.jsx'
 import EngineSettings from './EngineSettings.jsx'
+import WatchdogSettings from './WatchdogSettings.jsx'
+import IslandSettings from './IslandSettings.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -32,6 +35,7 @@ const ADMIN_MENUS = [
     children: [
       { id: 'agents', label: '对话' },
       { id: 'agents-manage', label: '数字人管理' },
+      { id: 'group-chats', label: '群聊' },
       { id: 'legacy-memories', label: '数字员工记忆' },
     ],
   },
@@ -55,6 +59,7 @@ export default function App() {
   const [adminMenu, setAdminMenu] = useState('agents')
   const [digitalOpen, setDigitalOpen] = useState(true)
   const [focusAgentId, setFocusAgentId] = useState(0)
+  const [focusGroupId, setFocusGroupId] = useState(0)
   const [openAgentSettings, setOpenAgentSettings] = useState(false)
   const [openHire, setOpenHire] = useState(false)
   const [jumpWorkflowRunId, setJumpWorkflowRunId] = useState(0)
@@ -110,7 +115,7 @@ export default function App() {
     if (msg) setError(msg)
   }
 
-  // 启动时校验本地 token
+  // 启动时校验本地 token；并消费 ?agent= / #agent= 深链（灵动岛跳转）
   useEffect(() => {
     if (!authToken) {
       setAuthChecking(false)
@@ -129,12 +134,47 @@ export default function App() {
         setAdminMenu('agents')
         setDigitalOpen(true)
         setView('admin')
+        void syncIslandToken(authToken)
+        consumeAgentDeepLink()
       })
       .catch(() => { if (!cancelled) clearAuth('') })
       .finally(() => { if (!cancelled) setAuthChecking(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /** 灵动岛深链：?agent= / #agent=；保留 hash 便于岛复用已开标签。 */
+  function consumeAgentDeepLink() {
+    try {
+      const q = new URLSearchParams(window.location.search || '')
+      let aid = Number(q.get('agent') || 0)
+      const hm = (window.location.hash || '').match(/^#?agent=(\d+)/i)
+      if (!aid && hm) aid = Number(hm[1])
+      if (aid > 0) {
+        setFocusAgentId(aid)
+        setAdminMenu('agents')
+        setDigitalOpen(true)
+        setView('admin')
+        const url = new URL(window.location.href)
+        url.searchParams.delete('agent')
+        url.hash = `agent=${aid}`
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 已打开的管理台被岛再次导航时（同标签改 URL / hash），继续聚焦对应数字人
+  useEffect(() => {
+    if (!authToken) return undefined
+    const onHash = () => consumeAgentDeepLink()
+    window.addEventListener('hashchange', onHash)
+    window.addEventListener('popstate', onHash)
+    return () => {
+      window.removeEventListener('hashchange', onHash)
+      window.removeEventListener('popstate', onHash)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken])
 
   /** 打开登录框时询问是否还要注册首位管理员。 */
   function openLogin() {
@@ -183,6 +223,34 @@ export default function App() {
     }
   }
 
+  /** 把管理台 Token 同步到本机灵动岛（~/.atolla/island.json）。 */
+  async function syncIslandToken(token) {
+    const tok = String(token || '').trim()
+    if (!tok) return
+    try {
+      // 岛请求必须走 127.0.0.1：localhost 在 macOS 常解析为 ::1，会被 AVATAR_ALLOWED_IPS=127.0.0.1 拦成 403
+      const host = window.location.hostname
+      const loopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+      const apiHost = loopback ? '127.0.0.1' : host
+      const webBase = loopback
+        ? `${window.location.protocol}//127.0.0.1${window.location.port ? `:${window.location.port}` : ''}`
+        : window.location.origin
+      await fetch(`${API}/admin/island/sync`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tok}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          api_base: `${window.location.protocol}//${apiHost}:8080`,
+          web_base: webBase,
+        }),
+      })
+    } catch {
+      /* 岛未装或不在本机时忽略 */
+    }
+  }
+
   /** 写入令牌并进入管理台。 */
   function finishAuth(d) {
     localStorage.setItem(AUTH_TOKEN_KEY, d.token)
@@ -199,6 +267,7 @@ export default function App() {
     setDigitalOpen(true)
     setView('admin')
     setError('')
+    void syncIslandToken(d.token)
   }
 
   async function doLogin(e) {
@@ -764,7 +833,7 @@ export default function App() {
   // —— 管理菜单 ——
   function switchAdminMenu(id) {
     setAdminMenu(id)
-    if (id === 'agents' || id === 'agents-manage' || id === 'legacy-memories') setDigitalOpen(true)
+    if (id === 'agents' || id === 'agents-manage' || id === 'group-chats' || id === 'legacy-memories') setDigitalOpen(true)
     if (id === 'changelog') setClPage(1)
   }
 
@@ -932,8 +1001,22 @@ export default function App() {
                   setJumpWorkflowRunId(runId)
                   setAdminMenu('plans')
                 }}
+                onOpenGroupChat={(groupId) => {
+                  setFocusGroupId(Number(groupId) || 0)
+                  setAdminMenu('group-chats')
+                  setDigitalOpen(true)
+                }}
               />
             </div>
+            {adminMenu === 'group-chats' && (
+              <GroupChats
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'group-chats'}
+                focusGroupId={focusGroupId}
+                onFocusConsumed={() => setFocusGroupId(0)}
+              />
+            )}
             {adminMenu === 'agents-manage' && (
               <DigitalHumanCards
                 authHeaders={authHeaders}
@@ -969,7 +1052,21 @@ export default function App() {
                   onUnauthorized={() => clearAuth('登录已过期')}
                   active={adminMenu === 'settings'}
                 />
-                <EngineSettings active={adminMenu === 'settings'} />
+                <WatchdogSettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
+                <IslandSettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
+                <EngineSettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
               </section>
             )}
             {adminMenu === 'network-allowlist' && (
@@ -1015,7 +1112,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'group-chats', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>
@@ -1085,13 +1182,7 @@ export default function App() {
       )}
 
       <footer className="app-footer ph-footer">当前版本 {CURRENT_VERSION}</footer>
-      <div style={{ display: 'none' }} aria-hidden>
-        <ManagedAgentsPanel
-          authHeaders={authHeaders}
-          onUnauthorized={() => clearAuth('登录已过期')}
-          active={false}
-        />
-      </div>
+      {/* 数字人面板仅挂一份：菜单切换用 display:none 保活 SSE；勿再挂隐藏副本，否则双实例抢选中/串会话 */}
       <ManagedAgentPermOverlay
         authHeaders={authHeaders}
         onUnauthorized={() => clearAuth('登录已过期')}
