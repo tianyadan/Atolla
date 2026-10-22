@@ -86,6 +86,11 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   cloned_from_id  BIGINT         NULL,
   last_error      TEXT           NULL,
   last_run_ms     INT            NULL,
+  task_unread     TINYINT        NOT NULL DEFAULT 0,
+  task_unread_kind VARCHAR(16)    NOT NULL DEFAULT '', -- completed|error
+  task_unread_at  DATETIME       NULL,
+  task_unread_duration_ms INT     NULL,
+  task_unread_summary TEXT        NULL,
   run_started_at  DATETIME       NULL,
   created_at      DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

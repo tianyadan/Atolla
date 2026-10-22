@@ -10,39 +10,43 @@ import (
 
 // ManagedAgent 管理台注册的数字员工（API/表名仍为 agent）。
 type ManagedAgent struct {
-	ID                  int64                 `json:"id"`
-	Name                string                `json:"name"`
-	AvatarURL           string                `json:"avatar_url"`
-	JellyColor          string                `json:"jelly_color"` // 像素小水母颜色
-	FolderID            int64                 `json:"folder_id"`   // 0=根目录
-	Engine              string                `json:"engine"`
-	ContextWindowTokens int64                 `json:"context_window_tokens"` // claude | codex | agent
-	BinPath             string                `json:"bin_path"`
-	RulesPrompt         string                `json:"rules_prompt"`
-	AutoReview          bool                  `json:"auto_review"`
-	AutoApproveAll      bool                  `json:"auto_approve_all"`  // 命令全部审批通过（无需人工）
-	TaskPlanEnabled     bool                  `json:"task_plan_enabled"` // 默认 true：Ask 前 AI 拆分步骤
-	AllowWrite          bool                  `json:"allow_write"`
-	AllowNetwork        bool                  `json:"allow_network"`
-	AllowRm             bool                  `json:"allow_rm"`
-	AllowBrowser        bool                  `json:"allow_browser"`
-	WorkspacePath       string                `json:"workspace_path"`
-	ScheduleEnabled     bool                  `json:"schedule_enabled"`
-	ScheduleCron        string                `json:"schedule_cron"`
-	ScheduleLabel       string                `json:"schedule_label"`
-	Status              string                `json:"status"`
-	IsReceptionist      bool                  `json:"is_receptionist"`
-	ConversationID      int64                 `json:"conversation_id"`
-	ClonedFromID        int64                 `json:"cloned_from_id"`
-	FolderName          string                `json:"folder_name,omitempty"` // 列表展示用，非列
-	SkillCount          int                   `json:"skill_count"`           // 已安装技能数（列表富化）
-	SkillIcons          []AgentSkillIconBrief `json:"skill_icons,omitempty"` // 悬停展示用
-	LastError           string                `json:"last_error"`
-	LastRunMs           int                   `json:"last_run_ms"`
-	TaskUnread          bool                  `json:"task_unread"` // 任务完成待查看
-	RunStartedAt        *time.Time            `json:"run_started_at,omitempty"`
-	CreatedAt           time.Time             `json:"created_at"`
-	UpdatedAt           time.Time             `json:"updated_at"`
+	ID                   int64                 `json:"id"`
+	Name                 string                `json:"name"`
+	AvatarURL            string                `json:"avatar_url"`
+	JellyColor           string                `json:"jelly_color"` // 像素小水母颜色
+	FolderID             int64                 `json:"folder_id"`   // 0=根目录
+	Engine               string                `json:"engine"`
+	ContextWindowTokens  int64                 `json:"context_window_tokens"` // claude | codex | agent
+	BinPath              string                `json:"bin_path"`
+	RulesPrompt          string                `json:"rules_prompt"`
+	AutoReview           bool                  `json:"auto_review"`
+	AutoApproveAll       bool                  `json:"auto_approve_all"`  // 命令全部审批通过（无需人工）
+	TaskPlanEnabled      bool                  `json:"task_plan_enabled"` // 默认 true：Ask 前 AI 拆分步骤
+	AllowWrite           bool                  `json:"allow_write"`
+	AllowNetwork         bool                  `json:"allow_network"`
+	AllowRm              bool                  `json:"allow_rm"`
+	AllowBrowser         bool                  `json:"allow_browser"`
+	WorkspacePath        string                `json:"workspace_path"`
+	ScheduleEnabled      bool                  `json:"schedule_enabled"`
+	ScheduleCron         string                `json:"schedule_cron"`
+	ScheduleLabel        string                `json:"schedule_label"`
+	Status               string                `json:"status"`
+	IsReceptionist       bool                  `json:"is_receptionist"`
+	ConversationID       int64                 `json:"conversation_id"`
+	ClonedFromID         int64                 `json:"cloned_from_id"`
+	FolderName           string                `json:"folder_name,omitempty"` // 列表展示用，非列
+	SkillCount           int                   `json:"skill_count"`           // 已安装技能数（列表富化）
+	SkillIcons           []AgentSkillIconBrief `json:"skill_icons,omitempty"` // 悬停展示用
+	LastError            string                `json:"last_error"`
+	LastRunMs            int                   `json:"last_run_ms"`
+	TaskUnread           bool                  `json:"task_unread"` // 任务终态待查看（兼容旧客户端）
+	TaskUnreadKind       string                `json:"task_unread_kind"`
+	TaskUnreadAt         *time.Time            `json:"task_unread_at,omitempty"`
+	TaskUnreadDurationMs int                   `json:"task_unread_duration_ms"`
+	TaskUnreadSummary    string                `json:"task_unread_summary"`
+	RunStartedAt         *time.Time            `json:"run_started_at,omitempty"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
 }
 
 // ManagedAgentInput 招聘/更新数字员工入参。
@@ -172,12 +176,14 @@ func scanManagedAgent(scanner interface {
 	Scan(dest ...any) error
 }) (ManagedAgent, error) {
 	var a ManagedAgent
-	var runAt sql.NullTime
+	var runAt, unreadAt sql.NullTime
 	var auto, aaa, tp, aw, an, ar, ab, se, recv, unread int
 	err := scanner.Scan(
 		&a.ID, &a.Name, &a.AvatarURL, &a.JellyColor, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
-		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &unread, &runAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &unread,
+		&a.TaskUnreadKind, &unreadAt, &a.TaskUnreadDurationMs, &a.TaskUnreadSummary,
+		&runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
 		return a, err
@@ -192,6 +198,10 @@ func scanManagedAgent(scanner interface {
 	a.ScheduleEnabled = se != 0
 	a.IsReceptionist = recv != 0
 	a.TaskUnread = unread != 0
+	if unreadAt.Valid {
+		t := unreadAt.Time
+		a.TaskUnreadAt = &t
+	}
 	// 兼容旧行或异常空值：读出时补齐稳定默认色。
 	if a.JellyColor == "" || !ValidJellyColor(a.JellyColor) {
 		a.JellyColor = AssignJellyColor(a.ID)
@@ -210,7 +220,9 @@ const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(jelly_color,'
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
 		status, IFNULL(is_receptionist,0), IFNULL(conversation_id,0), IFNULL(cloned_from_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
-		IFNULL(task_unread,0), run_started_at, created_at, updated_at`
+		IFNULL(task_unread,0), IFNULL(task_unread_kind,''), task_unread_at,
+		IFNULL(task_unread_duration_ms,0), IFNULL(task_unread_summary,''),
+		run_started_at, created_at, updated_at`
 
 // ListManagedAgents 全部数字员工(最新更新在前)。
 func (s *Store) ListManagedAgents(ctx context.Context) ([]ManagedAgent, error) {
@@ -560,7 +572,7 @@ func (s *Store) DeleteManagedAgent(ctx context.Context, id int64) error {
 
 // SetManagedAgentStatus 更新运行状态。
 // running / compressing 视为工作中：保留已有 run_started_at，否则置 NOW()；结束态清空时钟并写 last_run_ms。
-// 从忙碌态落到 idle/error 时自动置 task_unread=1（查看对话后清除）。
+// 从忙碌态落到 idle/error 时写入最新终态快照（查看对话后清除）。
 func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, lastErr string, runMs int, convID int64) error {
 	if status == "running" || status == "compressing" {
 		_, err := s.db.ExecContext(ctx,
@@ -570,16 +582,35 @@ func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, las
 			status, lastErr, runMs, convID, id)
 		return err
 	}
-	// MySQL：同一 UPDATE 中右侧的 status 仍是旧值，可据此判断「忙→闲」打未读
+	// status 放在最后赋值，前面的表达式才能依据旧状态判断「忙→终态」。
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE managed_agents SET status=?, last_error=?, last_run_ms=?, run_started_at=NULL,
+		`UPDATE managed_agents SET last_error=?, last_run_ms=?, run_started_at=NULL,
 		 conversation_id=IFNULL(NULLIF(?,0), conversation_id),
 		 task_unread = IF(
 		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
 		   1, IFNULL(task_unread,0)
-		 )
+		 ),
+		 task_unread_kind = IF(
+		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
+		   IF(?='error','error','completed'), task_unread_kind
+		 ),
+		 task_unread_at = IF(
+		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
+		   NOW(), task_unread_at
+		 ),
+		 task_unread_duration_ms = IF(
+		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
+		   ?, task_unread_duration_ms
+		 ),
+		 task_unread_summary = IF(
+		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
+		   IF(?='error', ?, ''), task_unread_summary
+		 ),
+		 status=?
 		 WHERE id=?`,
-		status, lastErr, runMs, convID, status, id)
+		lastErr, runMs, convID,
+		status, status, status, status, status, runMs, status, status, lastErr,
+		status, id)
 	return err
 }
 
@@ -588,24 +619,45 @@ func (s *Store) ClearManagedAgentTaskUnread(ctx context.Context, id int64) error
 	if id <= 0 {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET task_unread=0 WHERE id=? AND IFNULL(task_unread,0)<>0`, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE managed_agents
+		SET task_unread=0, task_unread_kind='', task_unread_at=NULL,
+			task_unread_duration_ms=NULL, task_unread_summary=NULL
+		WHERE id=?`, id)
 	return err
 }
 
-// EnsureTaskUnreadSchema 幂等增加 task_unread 列。
+// EnsureTaskUnreadSchema 幂等增加终态未读快照列并回填旧未读记录。
 func (s *Store) EnsureTaskUnreadSchema(ctx context.Context) error {
-	var n int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'task_unread'`,
-	).Scan(&n); err != nil {
-		return err
+	columns := []struct {
+		name string
+		ddl  string
+	}{
+		{"task_unread", `ALTER TABLE managed_agents ADD COLUMN task_unread TINYINT NOT NULL DEFAULT 0 AFTER last_run_ms`},
+		{"task_unread_kind", `ALTER TABLE managed_agents ADD COLUMN task_unread_kind VARCHAR(16) NOT NULL DEFAULT '' AFTER task_unread`},
+		{"task_unread_at", `ALTER TABLE managed_agents ADD COLUMN task_unread_at DATETIME NULL AFTER task_unread_kind`},
+		{"task_unread_duration_ms", `ALTER TABLE managed_agents ADD COLUMN task_unread_duration_ms INT NULL AFTER task_unread_at`},
+		{"task_unread_summary", `ALTER TABLE managed_agents ADD COLUMN task_unread_summary TEXT NULL AFTER task_unread_duration_ms`},
 	}
-	if n > 0 {
-		return nil
+	for _, col := range columns {
+		var n int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = ?`, col.name,
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
+				return err
+			}
+		}
 	}
-	_, err := s.db.ExecContext(ctx,
-		`ALTER TABLE managed_agents ADD COLUMN task_unread TINYINT NOT NULL DEFAULT 0 AFTER last_run_ms`)
+	_, err := s.db.ExecContext(ctx, `UPDATE managed_agents
+		SET task_unread_kind=IF(status='error','error','completed'),
+			task_unread_at=updated_at,
+			task_unread_duration_ms=last_run_ms,
+			task_unread_summary=IF(status='error',last_error,'')
+		WHERE task_unread=1 AND IFNULL(task_unread_kind,'')=''`)
 	return err
 }
 
