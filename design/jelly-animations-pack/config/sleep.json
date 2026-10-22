@@ -1,0 +1,25 @@
+{
+  "id": "sleep",
+  "label": "睡觉",
+  "row": 2,
+  "loop": true,
+  "fps": 5,
+  "css": {
+    "translateY": "±0.5cell",
+    "duration": "4s",
+    "easing": "ease-in-out"
+  },
+  "trigger": "frontend: long idle auto; click to wake→idle",
+  "notes": "闭眼 + zzz；触手垂短；点一下叫醒，不单独做 wake 文件",
+  "sprite_row": 2,
+  "frame_count": 8,
+  "cell": 16,
+  "files": {
+    "orange": "sprites/jelly-orange@{16,32,48}.png",
+    "yellow": "sprites/jelly-yellow@{16,32,48}.png",
+    "blue": "sprites/jelly-blue@{16,32,48}.png",
+    "green": "sprites/jelly-green@{16,32,48}.png",
+    "purple": "sprites/jelly-purple@{16,32,48}.png",
+    "red": "sprites/jelly-red@{16,32,48}.png"
+  }
+}

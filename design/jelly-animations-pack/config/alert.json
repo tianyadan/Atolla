@@ -1,0 +1,24 @@
+{
+  "id": "alert",
+  "label": "等你拍板",
+  "row": 4,
+  "loop": true,
+  "fps": 10,
+  "css": {
+    "opacity_flash": true,
+    "period": "0.7s"
+  },
+  "trigger": "state=waiting (PR#2)",
+  "notes": "头顶小闪点；可叠加透明度闪",
+  "sprite_row": 4,
+  "frame_count": 8,
+  "cell": 16,
+  "files": {
+    "orange": "sprites/jelly-orange@{16,32,48}.png",
+    "yellow": "sprites/jelly-yellow@{16,32,48}.png",
+    "blue": "sprites/jelly-blue@{16,32,48}.png",
+    "green": "sprites/jelly-green@{16,32,48}.png",
+    "purple": "sprites/jelly-purple@{16,32,48}.png",
+    "red": "sprites/jelly-red@{16,32,48}.png"
+  }
+}

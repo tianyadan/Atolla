@@ -1,0 +1,24 @@
+{
+  "id": "error",
+  "label": "出错",
+  "row": 5,
+  "loop": false,
+  "fps": 9,
+  "css": {
+    "translateY": "+1.5cell",
+    "filter": "already baked darker in frames"
+  },
+  "trigger": "state=error (PR#2)",
+  "notes": "变暗下沉、触手耷拉；播完可定格末帧",
+  "sprite_row": 5,
+  "frame_count": 8,
+  "cell": 16,
+  "files": {
+    "orange": "sprites/jelly-orange@{16,32,48}.png",
+    "yellow": "sprites/jelly-yellow@{16,32,48}.png",
+    "blue": "sprites/jelly-blue@{16,32,48}.png",
+    "green": "sprites/jelly-green@{16,32,48}.png",
+    "purple": "sprites/jelly-purple@{16,32,48}.png",
+    "red": "sprites/jelly-red@{16,32,48}.png"
+  }
+}

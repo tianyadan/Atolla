@@ -1,0 +1,21 @@
+{
+  "id": "eat",
+  "label": "吃饭/喂食",
+  "row": 3,
+  "loop": false,
+  "fps": 11,
+  "css": null,
+  "trigger": "frontend: click feed once",
+  "notes": "光点从旁飞入吞掉；播完回 idle；纯前端交互",
+  "sprite_row": 3,
+  "frame_count": 8,
+  "cell": 16,
+  "files": {
+    "orange": "sprites/jelly-orange@{16,32,48}.png",
+    "yellow": "sprites/jelly-yellow@{16,32,48}.png",
+    "blue": "sprites/jelly-blue@{16,32,48}.png",
+    "green": "sprites/jelly-green@{16,32,48}.png",
+    "purple": "sprites/jelly-purple@{16,32,48}.png",
+    "red": "sprites/jelly-red@{16,32,48}.png"
+  }
+}
