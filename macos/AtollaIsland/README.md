@@ -2,50 +2,69 @@
 
 可选组件：在 Mac 刘海/顶部展示**正在运行的数字人**，点击跳转 Atolla 管理台对话。
 
-本目录为**纯源码**，不含编译二进制。可随 Atolla 仓库使用，也可单独拷到 GitHub 自用。
+## 别人怎么装（推荐：预编译，无需 Xcode）
+
+1. 从 GitHub **Releases** 下载 `AtollaIsland-macos-<你的芯片>-….zip`
+2. 解压后执行 `./install.sh`
+3. 打开 Atolla 管理台 **登录一次**（自动写凭证）
+
+详细步骤、排错见 **[INSTALL.md](./INSTALL.md)**。
+
+> 无苹果开发者证书也可分发：包未签名，安装脚本会清除隔离属性；若仍被拦，对 `AtollaIsland` 右键 → 打开。
 
 ## 依赖
 
 - macOS 14+
-- 完整 Xcode（含 Swift / macOS SDK；仅 Command Line Tools 不够）
-- 本机已运行 Atolla 后端（默认 `http://127.0.0.1:8080`）并登录过管理台
+- Atolla 后端已运行，并登录过管理台（或手动 `configure.sh`）
+- **预编译用户**：不需要 Xcode  
+- **从源码编译**：需要完整 Xcode（仅 Command Line Tools 不够）
 
-## 一键安装（推荐）
+## 发布者：打预编译包
 
-在 Atolla 管理台 → **设置 → 灵动岛** → 点「安装」（会编译并注册 LaunchAgent）。
-
-或在本目录手动：
+本机有 Xcode 时：
 
 ```bash
-# 可选：指定 Xcode
-# export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+./scripts/package-release.sh
+# 产物：dist/AtollaIsland-macos-<arch>-<stamp>-<git>.zip
+# 上传到 GitHub Releases，并把 INSTALL.md「别人怎么用」贴到 Release 说明
+```
 
+本地试装预编译目录：
+
+```bash
+cd dist/stage && ./install.sh
+```
+
+## 从源码一键安装（开发机）
+
+管理台 → **设置 → 灵动岛** →「安装」，或：
+
+```bash
 ./scripts/install-launchagent.sh
 ```
 
 安装结果：
 
-- 二进制：`~/.atolla/bin/AtollaIsland`（本机生成，不进 git）
+- 二进制：`~/.atolla/bin/AtollaIsland`
 - LaunchAgent：`com.atolla.island`（登录常驻）
 
-## 仅临时运行（不装 LaunchAgent）
+## 仅临时运行
 
 ```bash
-./scripts/run.sh
+FOREGROUND=1 ./scripts/run.sh
 ```
 
 ## 卸载 / 关闭
 
-管理台胶囊开关关闭，或：
-
 ```bash
 ./scripts/uninstall-launchagent.sh
+# 预编译包内：./uninstall.sh
 ```
 
 ## 与 Atolla 的衔接
 
-登录管理台后会写入 `~/.atolla/island.json`（API / Web 地址 + Token）。  
-岛进程轮询 `GET /api/admin/island/busy`，点击打开 `/?agent=<id>`。
+登录管理台后写入 `~/.atolla/island.json`（API / Web + Token）。  
+岛轮询 `GET /api/admin/island/busy`，点击打开 `/?agent=<id>`。
 
 ## 目录结构
 
@@ -53,6 +72,8 @@
 macos/AtollaIsland/
   Package.swift
   Sources/AtollaIsland/   # Swift 源码
-  scripts/                # install / uninstall / status / run
+  scripts/                # install / package-release / configure / uninstall
+  INSTALL.md              # 预编译用户说明书
   README.md
+  dist/                   # package-release 产物（不进 git）
 ```
