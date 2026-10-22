@@ -1,0 +1,16 @@
+{
+  "id": "typing",
+  "name": "跳动/思考",
+  "row": 1,
+  "frames": 8,
+  "fps": 13,
+  "durationMs": 615,
+  "loop": true,
+  "trigger": "state=working|typing",
+  "cssHint": {
+    "translateY": "-3cell",
+    "duration": "0.6s",
+    "easing": "ease-in-out"
+  },
+  "notes": "帧0/7落地压扁；模型排队与输出共用"
+}

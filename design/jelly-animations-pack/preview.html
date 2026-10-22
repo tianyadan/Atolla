@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>Atolla jelly animations preview</title>
+<style>
+  body{font-family:ui-sans-serif,system-ui;background:#0e0e1e;color:#e8e4ff;margin:24px}
+  h1{font-size:18px;font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;margin-top:16px}
+  .card{background:#16162a;border:1px solid #2a2a48;border-radius:12px;padding:12px;text-align:center}
+  .stage{width:64px;height:64px;margin:8px auto;image-rendering:pixelated;background-repeat:no-repeat}
+  .meta{font-size:12px;opacity:.7;line-height:1.4}
+  select,button{background:#222244;color:#fff;border:1px solid #444;border-radius:8px;padding:6px 10px}
+</style>
+</head>
+<body>
+<h1>jelly-animations-pack 预览</h1>
+<p class="meta">本地打开本文件。默认紫色 @48。切换动作看切帧。</p>
+<label>颜色 <select id="color"></select></label>
+<label style="margin-left:12px">尺寸 <select id="scale"><option value="16">16</option><option value="32">32</option><option value="48" selected>48</option></select></label>
+<div class="grid" id="grid"></div>
+<script>
+const ACTIONS=["idle","typing","sleep","eat","alert","error","celebrate"];
+const COLORS=["orange","yellow","blue","green","purple","red"];
+const CELL=16, FRAMES=8;
+const meta={
+ idle:{fps:8,loop:true}, typing:{fps:13,loop:true}, sleep:{fps:5,loop:true},
+ eat:{fps:11,loop:false}, alert:{fps:10,loop:true}, error:{fps:9,loop:false}, celebrate:{fps:12,loop:false}
+};
+const colorSel=document.getElementById('color');
+COLORS.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;if(c==='purple')o.selected=true;colorSel.appendChild(o)});
+const grid=document.getElementById('grid');
+function rebuild(){
+  grid.innerHTML='';
+  const color=colorSel.value, scale=+document.getElementById('scale').value;
+  const url=`sprites/jelly-${color}@${scale}.png`;
+  const px=scale; // display at native sprite cell size scaled? use 48 display
+  const display=48;
+  const cellDisp=display;
+  ACTIONS.forEach((a,row)=>{
+    const card=document.createElement('div'); card.className='card';
+    const stage=document.createElement('div'); stage.className='stage';
+    stage.style.width=stage.style.height=display+'px';
+    stage.style.backgroundImage=`url(${url})`;
+    stage.style.backgroundSize=`${FRAMES*display}px ${ACTIONS.length*display}px`;
+    const m=document.createElement('div'); m.className='meta';
+    m.innerHTML=`<b>${a}</b><br/>row ${row} · ${meta[a].fps}fps · loop=${meta[a].loop}`;
+    card.appendChild(stage); card.appendChild(m); grid.appendChild(card);
+    let f=0; const ms=1000/meta[a].fps;
+    setInterval(()=>{
+      f=(f+1)%FRAMES;
+      if(!meta[a].loop && f===0){ /* hold last */ f=FRAMES-1; }
+      stage.style.backgroundPosition=`${-f*display}px ${-row*display}px`;
+    }, ms);
+  });
+}
+colorSel.onchange=rebuild; document.getElementById('scale').onchange=rebuild; rebuild();
+</script>
+</body>
+</html>

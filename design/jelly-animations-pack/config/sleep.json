@@ -1,0 +1,16 @@
+{
+  "id": "sleep",
+  "name": "睡觉",
+  "row": 2,
+  "frames": 8,
+  "fps": 5,
+  "durationMs": 1600,
+  "loop": true,
+  "trigger": "frontend: long idle auto; click to wake→idle",
+  "cssHint": {
+    "translateY": "±0.5cell",
+    "duration": "4s",
+    "easing": "ease-in-out"
+  },
+  "notes": "闭眼 + zzz；触手垂短；点一下叫醒，不单独做 wake 文件"
+}

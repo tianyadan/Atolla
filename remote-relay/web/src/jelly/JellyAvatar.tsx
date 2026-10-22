@@ -1,18 +1,23 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { isJellyColor, normalizeJellyColor, type JellyAvatarState } from './jellyColor'
 import {
+  JELLY_ACTION_ROWS,
   JELLY_CELL,
   JELLY_FRAMES,
+  jellyActionRow,
   jellySpriteUrl,
   pickSpriteScale,
   prefersReducedMotion,
 } from './jellySprite'
 
-const ROW = { float: 0, jump: 1 } as const
 const FLOAT_MS = 3000
 const JUMP_MS = 600
+const ALERT_MS = 800
+const ERROR_MS = 889
 const FRAME_MS_FLOAT = FLOAT_MS / JELLY_FRAMES
 const FRAME_MS_JUMP = JUMP_MS / JELLY_FRAMES
+const FRAME_MS_ALERT = ALERT_MS / JELLY_FRAMES
+const FRAME_MS_ERROR = ERROR_MS / JELLY_FRAMES
 
 type Props = {
   color?: string
@@ -23,7 +28,7 @@ type Props = {
   'aria-label'?: string
 }
 
-/** 可复用像素水母头像（与 PC 行为一致） */
+/** 可复用像素水母头像（v2：7 行动作精灵表，与 PC 一致） */
 export function JellyAvatar({
   color = 'blue',
   size = 32,
@@ -48,11 +53,18 @@ export function JellyAvatar({
     return () => mq.removeEventListener?.('change', onChange)
   }, [])
 
-  const animRow = state === 'typing' || state === 'working' ? 'jump' : 'float'
-  const frameMs = animRow === 'jump' ? FRAME_MS_JUMP : FRAME_MS_FLOAT
+  const row = jellyActionRow(state)
+  const frameMs =
+    state === 'waiting'
+      ? FRAME_MS_ALERT
+      : state === 'error'
+        ? FRAME_MS_ERROR
+        : state === 'working' || state === 'typing'
+          ? FRAME_MS_JUMP
+          : FRAME_MS_FLOAT
 
   useEffect(() => {
-    if (state === 'waiting' || state === 'error' || reduced) {
+    if (reduced) {
       setFrame(0)
       return undefined
     }
@@ -79,19 +91,16 @@ export function JellyAvatar({
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
   const scale = pickSpriteScale(px, dpr)
   const sheetW = JELLY_FRAMES * px
-  const sheetH = 2 * px
-  const row = ROW[animRow]
+  const sheetH = JELLY_ACTION_ROWS * px
   const bgX = -frame * px
   const bgY = -row * px
 
   let transform = 'translateY(0)'
-  let filter = 'none'
   let opacity = 1
   let animClass = ''
 
-  if (state === 'error') {
-    filter = 'brightness(0.55) saturate(0.7)'
-    transform = reduced ? 'translateY(0)' : `translateY(${cellPx * 1.5}px)`
+  if (state === 'error' && !reduced) {
+    transform = `translateY(${cellPx * 1.5}px)`
   } else if (state === 'waiting') {
     opacity = flashOn ? 1 : 0.35
   } else if (!reduced && state === 'idle') {
@@ -109,7 +118,6 @@ export function JellyAvatar({
     backgroundSize: `${sheetW}px ${sheetH}px`,
     backgroundPosition: `${bgX}px ${bgY}px`,
     transform,
-    filter,
     opacity,
   } as CSSProperties
 

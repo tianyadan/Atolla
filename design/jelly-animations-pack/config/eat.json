@@ -1,0 +1,12 @@
+{
+  "id": "eat",
+  "name": "吃饭/喂食",
+  "row": 3,
+  "frames": 8,
+  "fps": 11,
+  "durationMs": 727,
+  "loop": false,
+  "trigger": "frontend: click feed once",
+  "cssHint": null,
+  "notes": "光点从旁飞入吞掉；播完回 idle；纯前端交互"
+}
