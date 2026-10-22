@@ -1,0 +1,15 @@
+{
+  "id": "error",
+  "name": "出错",
+  "row": 5,
+  "frames": 8,
+  "fps": 9,
+  "durationMs": 889,
+  "loop": false,
+  "trigger": "state=error (PR#2)",
+  "cssHint": {
+    "translateY": "+1.5cell",
+    "filter": "already baked darker in frames"
+  },
+  "notes": "变暗下沉、触手耷拉；播完可定格末帧"
+}
