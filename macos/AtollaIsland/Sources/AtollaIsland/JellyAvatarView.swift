@@ -26,6 +26,8 @@ struct JellyAvatarView: View {
   var state: JellyAnimState = .working
 
   private let frames = 8
+  /// v2 精灵表：8 列 × 7 行（idle/typing/sleep/eat/alert/error/celebrate）
+  private let actionRows = 7
   private let cellLogical: CGFloat = 16
 
   @State private var flashOn = true
@@ -46,20 +48,30 @@ struct JellyAvatarView: View {
     return 3
   }
 
+  /// 与 animations.json state_map 对齐
   private var animRow: Int {
-    // jump=1, float=0 —— 与 sprites.json 一致
-    state == .working ? 1 : 0
+    switch state {
+    case .working: return 1 // typing
+    case .waiting: return 4 // alert
+    case .error: return 5
+    case .idle: return 0
+    }
   }
 
   private var frameMs: Double {
-    state == .working ? (0.6 / Double(frames)) : (3.0 / Double(frames))
+    switch state {
+    case .working: return 0.6 / Double(frames)
+    case .waiting: return 0.8 / Double(frames)
+    case .error: return 0.889 / Double(frames)
+    case .idle: return 3.0 / Double(frames)
+    }
   }
 
   var body: some View {
     let sheet = JellySpriteStore.shared.image(color: safeColor, scale: spriteScale)
-    TimelineView(.animation(minimumInterval: frameMs, paused: state == .waiting || state == .error)) { timeline in
+    TimelineView(.animation(minimumInterval: frameMs, paused: false)) { timeline in
       let idx = Int(timeline.date.timeIntervalSinceReferenceDate / frameMs) % frames
-      spriteFrame(sheet: sheet, frame: state == .waiting || state == .error ? 0 : idx)
+      spriteFrame(sheet: sheet, frame: idx)
         .offset(y: bobOffset(for: timeline.date))
         .opacity(stateOpacity)
         .saturation(state == .error ? 0.7 : 1)
@@ -81,7 +93,7 @@ struct JellyAvatarView: View {
         Image(nsImage: sheet)
           .interpolation(.none)
           .resizable()
-          .frame(width: size * CGFloat(frames), height: size * 2)
+          .frame(width: size * CGFloat(frames), height: size * CGFloat(actionRows))
           .offset(x: -CGFloat(frame) * size, y: -CGFloat(animRow) * size)
           .frame(width: size, height: size, alignment: .topLeading)
           .clipped()

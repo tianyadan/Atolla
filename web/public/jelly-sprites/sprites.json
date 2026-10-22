@@ -1,22 +1,161 @@
 {
- "cell": 16,
- "frames": 8,
- "rows": {
-  "float": 0,
-  "jump": 1
- },
- "scales": [
-  1,
-  2,
-  3
- ],
- "colors": {
-  "orange": 24,
-  "yellow": 46,
-  "blue": 212,
-  "green": 140,
-  "purple": 262,
-  "red": 352
- },
- "note": "帧里不含位移；漂浮用 CSS translateY ±1格 3s 缓动，跳动用 translateY -3格 0.6s，帧0/7为落地压扁"
+  "version": 2,
+  "cell": 16,
+  "frames": 8,
+  "actions": [
+    "idle",
+    "typing",
+    "sleep",
+    "eat",
+    "alert",
+    "error",
+    "celebrate"
+  ],
+  "action_meta": {
+    "idle": {
+      "id": "idle",
+      "name": "漂浮",
+      "row": 0,
+      "frames": 8,
+      "fps": 8,
+      "durationMs": 1000,
+      "loop": true,
+      "trigger": "state=idle",
+      "cssHint": {
+        "translateY": "±1cell",
+        "duration": "3s",
+        "easing": "ease-in-out"
+      },
+      "notes": "空闲默认态；帧内触手轻摆，位移用 CSS"
+    },
+    "typing": {
+      "id": "typing",
+      "name": "跳动/思考",
+      "row": 1,
+      "frames": 8,
+      "fps": 13,
+      "durationMs": 615,
+      "loop": true,
+      "trigger": "state=working|typing",
+      "cssHint": {
+        "translateY": "-3cell",
+        "duration": "0.6s",
+        "easing": "ease-in-out"
+      },
+      "notes": "帧0/7落地压扁；模型排队与输出共用"
+    },
+    "sleep": {
+      "id": "sleep",
+      "name": "睡觉",
+      "row": 2,
+      "frames": 8,
+      "fps": 5,
+      "durationMs": 1600,
+      "loop": true,
+      "trigger": "frontend: long idle auto; click to wake→idle",
+      "cssHint": {
+        "translateY": "±0.5cell",
+        "duration": "4s",
+        "easing": "ease-in-out"
+      },
+      "notes": "闭眼 + zzz；触手垂短；点一下叫醒，不单独做 wake 文件"
+    },
+    "eat": {
+      "id": "eat",
+      "name": "吃饭/喂食",
+      "row": 3,
+      "frames": 8,
+      "fps": 11,
+      "durationMs": 727,
+      "loop": false,
+      "trigger": "frontend: click feed once",
+      "cssHint": null,
+      "notes": "光点从旁飞入吞掉；播完回 idle；纯前端交互"
+    },
+    "alert": {
+      "id": "alert",
+      "name": "等你拍板",
+      "row": 4,
+      "frames": 8,
+      "fps": 10,
+      "durationMs": 800,
+      "loop": true,
+      "trigger": "state=waiting (PR#2)",
+      "cssHint": {
+        "opacity_flash": true,
+        "period": "0.7s"
+      },
+      "notes": "头顶小闪点；可叠加透明度闪"
+    },
+    "error": {
+      "id": "error",
+      "name": "出错",
+      "row": 5,
+      "frames": 8,
+      "fps": 9,
+      "durationMs": 889,
+      "loop": false,
+      "trigger": "state=error (PR#2)",
+      "cssHint": {
+        "translateY": "+1.5cell",
+        "filter": "already baked darker in frames"
+      },
+      "notes": "变暗下沉、触手耷拉；播完可定格末帧"
+    },
+    "celebrate": {
+      "id": "celebrate",
+      "name": "庆祝",
+      "row": 6,
+      "frames": 8,
+      "fps": 12,
+      "durationMs": 667,
+      "loop": false,
+      "trigger": "task success | hire success",
+      "cssHint": {
+        "translateY": "optional hop"
+      },
+      "notes": "转圈感靠触手甩 + 星星；播完回 idle"
+    }
+  },
+  "colors": {
+    "orange": 24,
+    "yellow": 46,
+    "blue": 212,
+    "green": 140,
+    "purple": 262,
+    "red": 352
+  },
+  "scales": [
+    1,
+    2,
+    3
+  ],
+  "sheet_layout": "columns=frames, rows=actions in ACTIONS order",
+  "usage": "备选素材，尚未写入 Atolla 仓库。前端接入时复制到 web/public/jelly-sprites/",
+  "compat": {
+    "jelly_color": [
+      "orange",
+      "yellow",
+      "blue",
+      "green",
+      "purple",
+      "red"
+    ],
+    "existing_pr4_rows": {
+      "float": "idle",
+      "jump": "typing"
+    }
+  },
+  "state_map": {
+    "idle": "idle",
+    "working": "typing",
+    "typing": "typing",
+    "waiting": "alert",
+    "error": "error"
+  },
+  "frontend_only": [
+    "sleep",
+    "eat",
+    "celebrate"
+  ]
 }

@@ -1,0 +1,15 @@
+{
+  "id": "alert",
+  "name": "等你拍板",
+  "row": 4,
+  "frames": 8,
+  "fps": 10,
+  "durationMs": 800,
+  "loop": true,
+  "trigger": "state=waiting (PR#2)",
+  "cssHint": {
+    "opacity_flash": true,
+    "period": "0.7s"
+  },
+  "notes": "头顶小闪点；可叠加透明度闪"
+}

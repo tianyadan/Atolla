@@ -26,6 +26,8 @@ struct JellyAvatarView: View {
   var animPhase: Int = 0
 
   private let frames = 8
+  /// v2：8 列 × 7 行
+  private let actionRows = 7
   /// 逻辑格（与 PC --jelly-cell = size/16 一致）
   private var cell: CGFloat { size / 16 }
 
@@ -38,18 +40,25 @@ struct JellyAvatarView: View {
     }
   }
 
-  /// 精灵只取 jump 行一帧定格，避免左右切帧；落地/腾空略换姿态即可
+  /// 上下跳用相位驱动；帧只取落地/腾空两姿态，避免横滑切帧
   private var frameIndex: Int {
     switch state {
     case .waiting, .error, .idle:
       return 0
     case .working:
-      // 腾空用中间帧，落地用第 0 帧（压扁感），最多两帧、无连续横滑
       return (animPhase % 2 == 0) ? 0 : 3
     }
   }
 
-  private var animRow: Int { state == .working ? 1 : 0 }
+  /// idle=0 typing=1 alert=4 error=5（animations.json）
+  private var animRow: Int {
+    switch state {
+    case .working: return 1
+    case .waiting: return 4
+    case .error: return 5
+    case .idle: return 0
+    }
+  }
 
   /**
    PC keyframes jelly-jump:
@@ -99,7 +108,7 @@ struct JellyAvatarView: View {
       Image(uiImage: sheet)
         .interpolation(.none)
         .resizable()
-        .frame(width: size * CGFloat(frames), height: size * 2)
+        .frame(width: size * CGFloat(frames), height: size * CGFloat(actionRows))
         .offset(x: -CGFloat(frameIndex) * size, y: -CGFloat(animRow) * size)
         .frame(width: size, height: size, alignment: .topLeading)
         .clipped()
