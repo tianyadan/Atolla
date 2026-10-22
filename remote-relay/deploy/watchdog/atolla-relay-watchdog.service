@@ -1,0 +1,8 @@
+[Unit]
+Description=Atolla Remote Relay Watchdog (one-shot health check)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __REMOTE_DIR__/remote-relay/deploy/watchdog/relay-check.sh
+Nice=10

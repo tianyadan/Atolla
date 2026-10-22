@@ -57,27 +57,32 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 		if usedPercent > 100 {
 			anomaly = fmt.Sprintf("current_context_exceeds_window: used=%d window=%d", usedTokens, windowTokens)
 		}
+		payload := map[string]any{
+			"avatar_url":         a.AvatarURL,
+			"jelly_color":        a.JellyColor,
+			"folder_id":          a.FolderID,
+			"folder_name":        fn,
+			"task_plan_enabled":  a.TaskPlanEnabled,
+			"auto_review":        a.AutoReview,
+			"auto_approve_all":   a.AutoApproveAll,
+			"task_unread":        a.TaskUnread,
+			"used_tokens":        usedTokens,
+			"window_tokens":      windowTokens,
+			"used_percent":       usedPercent,
+			"estimated":          estimated,
+			"context_source":     ctxSource,
+			"context_updated_at": ctxUpdated,
+			"anomaly":            anomaly,
+		}
+		if a.RunStartedAt != nil {
+			payload["run_started_at"] = a.RunStartedAt.Unix()
+		}
 		rows = append(rows, map[string]any{
 			"agent_id":     strconv.FormatInt(a.ID, 10),
 			"display_name": a.Name,
 			"engine":       a.Engine,
 			"status":       a.Status,
-			"payload": map[string]any{
-				"avatar_url":         a.AvatarURL,
-				"jelly_color":        a.JellyColor,
-				"folder_id":          a.FolderID,
-				"folder_name":        fn,
-				"task_plan_enabled":  a.TaskPlanEnabled,
-				"auto_review":        a.AutoReview,
-				"auto_approve_all":   a.AutoApproveAll,
-				"used_tokens":        usedTokens,
-				"window_tokens":      windowTokens,
-				"used_percent":       usedPercent,
-				"estimated":          estimated,
-				"context_source":     ctxSource,
-				"context_updated_at": ctxUpdated,
-				"anomaly":            anomaly,
-			},
+			"payload":      payload,
 		})
 	}
 	if err := ec.Client.PostAgentsSnapshot(ec.Context, rows); err != nil {

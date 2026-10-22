@@ -90,8 +90,6 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/talent-market/hire", h.AdminTalentMarketHire)
 			adm.POST("/admin/agents/:id/copy", h.AdminAgentsCopy)
 			adm.POST("/admin/agents/:id/retry-init", h.AdminAgentsRetryInit)
-			adm.POST("/admin/agents/:id/avatar", h.AdminAgentsUploadAvatar)
-			adm.DELETE("/admin/agents/:id/avatar", h.AdminAgentsClearAvatar)
 			adm.PATCH("/admin/agents/:id", h.AdminAgentsUpdate)
 			adm.DELETE("/admin/agents/:id", h.AdminAgentsDelete)
 			adm.POST("/admin/agents/:id/dismiss", h.AdminAgentsDismiss)
@@ -114,6 +112,7 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agents/:id/ask", h.AdminAgentsAsk)
 			adm.POST("/admin/chat-images", h.AdminChatImageUpload)
 			adm.POST("/admin/agents/:id/stop", h.AdminAgentsStop)
+			adm.POST("/admin/agents/:id/mark-read", h.AdminAgentsMarkRead)
 			adm.POST("/admin/agents/:id/ensure-conversation", h.AdminAgentsEnsureConversation)
 			adm.POST("/admin/agents/:id/clear", h.AdminAgentsClear)
 			adm.POST("/admin/agents/:id/compress", h.AdminAgentsCompress)
@@ -135,9 +134,21 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/browser-use", h.AdminBrowserUseStatus)
 			adm.POST("/admin/browser-use/ensure", h.AdminBrowserUseEnsure)
+			adm.GET("/admin/engines/usage", h.AdminEnginesUsage)
 
 			adm.GET("/admin/notify-prefs", h.AdminNotifyPrefsGet)
 			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)
+
+			adm.GET("/admin/watchdog/local", h.AdminWatchdogLocalGet)
+			adm.PUT("/admin/watchdog/local", h.AdminWatchdogLocalPut)
+			adm.GET("/admin/watchdog/relay", h.AdminWatchdogRelayGet)
+			adm.PUT("/admin/watchdog/relay", h.AdminWatchdogRelayPut)
+
+			adm.POST("/admin/island/sync", h.AdminIslandSync)
+			adm.GET("/admin/island/busy", h.AdminIslandBusy)
+			adm.GET("/admin/island/settings", h.AdminIslandSettingsGet)
+			adm.POST("/admin/island/settings/install", h.AdminIslandSettingsInstall)
+			adm.PUT("/admin/island/settings", h.AdminIslandSettingsPut)
 
 			adm.GET("/admin/network-allowlist", h.AdminNetworkAllowlistGet)
 			adm.PUT("/admin/network-allowlist", h.AdminNetworkAllowlistPut)
@@ -168,6 +179,14 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agent-folders", h.AdminAgentFoldersCreate)
 			adm.PATCH("/admin/agent-folders/:id", h.AdminAgentFoldersUpdate)
 			adm.DELETE("/admin/agent-folders/:id", h.AdminAgentFoldersDelete)
+
+			adm.POST("/admin/group-chats", h.AdminGroupChatsCreate)
+			adm.GET("/admin/group-chats", h.AdminGroupChatsList)
+			adm.GET("/admin/group-chats/:id", h.AdminGroupChatsGet)
+			adm.POST("/admin/group-chats/:id/start-meeting", h.AdminGroupChatsStartMeeting)
+			adm.POST("/admin/group-chats/:id/ask", h.AdminGroupChatsAsk)
+			adm.POST("/admin/group-chats/:id/transfer-owner", h.AdminGroupChatsTransferOwner)
+			adm.PATCH("/admin/group-chats/:id/members/:agentId", h.AdminGroupChatsSetMemberTag)
 
 			adm.GET("/admin/workflows", h.AdminWorkflowsList)
 			adm.POST("/admin/workflows", h.AdminWorkflowsCreate)

@@ -1,22 +1,33 @@
 {
   "name": "web",
   "private": true,
-  "version": "0.0.15",
+  "version": "0.0.23",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cap:sync": "npm run build && npx cap sync ios",
+    "cap:open": "npx cap open ios",
+    "ios:widget": "ruby ios/scripts/ensure_island_widget.rb",
+    "ios": "npm run cap:sync && npm run ios:widget && npx cap open ios"
   },
   "dependencies": {
+    "@capacitor/app": "^7.1.0",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/ios": "^7.4.3",
+    "@capacitor/keyboard": "^7.0.3",
+    "@capacitor/splash-screen": "^7.0.3",
+    "@capacitor/status-bar": "^7.0.3",
     "marked": "^15.0.12",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",

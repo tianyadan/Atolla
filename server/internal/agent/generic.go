@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -80,30 +81,193 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 	}
 
 	start := time.Now()
-	// 先 stream-json：任务完成后 CLI 常在写出 result 后又因 JSON.parse 失败退出。
-	// 只要 stdout 里已有回复，就不再把这段 SyntaxError 当成整轮失败，也不重跑任务。
+	// 先真流式读 stream-json：中途 assistant 行立刻 onChunk，避免命令已展示而思考压到收尾。
+	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta)
+	if streamErr != nil && IsCursorWorkspaceTrustRequired(streamErr.Error()) {
+		return "", int(time.Since(start).Milliseconds()), streamErr
+	}
+	if strings.TrimSpace(text) != "" {
+		if onMeta != nil && (meta.SessionID != "" || meta.InputTokens > 0 || meta.OutputTokens > 0) {
+			onMeta(meta)
+		}
+		return text, int(time.Since(start).Milliseconds()), nil
+	}
+
+	// 回退：整包跑 json/text；任务完成后 CLI 常在写出 result 后又因 JSON.parse 失败退出。
 	var lastErr error
 	var out string
-	for _, mode := range []string{"stream-json", "json", "text", "bare"} {
+	for _, mode := range []string{"json", "text", "bare"} {
 		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust))
 		if lastErr != nil && IsCursorWorkspaceTrustRequired(lastErr.Error()) {
 			return "", int(time.Since(start).Milliseconds()), lastErr
 		}
-		if text, meta, ok := cursorAnswer(out); ok {
-			text, ms := deliverCursor(text, meta, onChunk, onMeta, start)
-			return text, ms, nil
+		if ans, m, ok := cursorAnswer(out); ok {
+			ans, ms := deliverCursor(ans, m, onChunk, onMeta, start)
+			return ans, ms, nil
 		}
 		if lastErr == nil {
-			text, meta := ParseCursorPrintOutput(out)
-			text = stripCursorJSONParseNoise(text)
-			if strings.TrimSpace(text) == "" {
-				text = strings.TrimSpace(out)
+			ans, m := ParseCursorPrintOutput(out)
+			ans = stripCursorJSONParseNoise(ans)
+			if strings.TrimSpace(ans) == "" {
+				ans = strings.TrimSpace(out)
 			}
-			text, ms := deliverCursor(text, meta, onChunk, onMeta, start)
-			return text, ms, nil
+			ans, ms := deliverCursor(ans, m, onChunk, onMeta, start)
+			return ans, ms, nil
 		}
 	}
+	if streamErr != nil {
+		return "", int(time.Since(start).Milliseconds()), streamErr
+	}
 	return "", int(time.Since(start).Milliseconds()), lastErr
+}
+
+// runCursorStreamJSON 边读边推送 assistant；result 优先作为最终落库正文。
+func runCursorStreamJSON(
+	ctx context.Context, bin, dir string, args []string,
+	onChunk func(string), onMeta MetaFn,
+) (string, RunMeta, error) {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	AttachKillable(cmd)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = CleanEnv(os.Environ())
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", RunMeta{}, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return "", RunMeta{}, err
+	}
+
+	var meta RunMeta
+	var streamed strings.Builder
+	lastAssist := ""
+	result := ""
+	sawResult := false
+
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var m map[string]interface{}
+		if json.Unmarshal([]byte(line), &m) != nil {
+			continue
+		}
+		if sid := ExtractSessionID(m); sid != "" {
+			meta.SessionID = sid
+		}
+		fillCursorUsage(&meta, m)
+		if onMeta != nil && (meta.SessionID != "" || meta.InputTokens > 0 || meta.OutputTokens > 0) {
+			onMeta(meta)
+		}
+		switch strAny(m["type"]) {
+		case "assistant":
+			piece := cursorAssistantText(m)
+			if piece == "" {
+				continue
+			}
+			delta := cursorAssistDelta(lastAssist, piece)
+			if delta == "" {
+				continue
+			}
+			if lastAssist != "" && !strings.HasPrefix(piece, lastAssist) {
+				if onChunk != nil {
+					onChunk("\n")
+				}
+				streamed.WriteByte('\n')
+			}
+			lastAssist = piece
+			if onChunk != nil {
+				onChunk(delta)
+			}
+			streamed.WriteString(delta)
+		case "result", "":
+			if r, ok := m["result"].(string); ok {
+				result = r
+				sawResult = true
+			}
+		}
+	}
+	_ = sc.Err()
+	runErr := cmd.Wait()
+
+	final := strings.TrimSpace(result)
+	if final == "" {
+		final = strings.TrimSpace(streamed.String())
+	}
+	final = stripCursorJSONParseNoise(final)
+
+	// result 相对已推送正文的增量；已覆盖 / 仅「前面多说明」时不整段补推，避免 PC/移动重复全文
+	if sawResult && final != "" && onChunk != nil {
+		if extra := cursorResultAppend(streamed.String(), final); extra != "" {
+			onChunk(extra)
+			streamed.WriteString(extra)
+		}
+	}
+
+	if runErr != nil && final == "" {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = runErr.Error()
+		}
+		return "", meta, fmt.Errorf("%s: %s", bin, msg)
+	}
+	return final, meta, nil
+}
+
+// cursorAssistDelta 若 CLI 重复推送「越来越长」的同一段，只吐增量。
+func cursorAssistDelta(prev, next string) string {
+	if next == "" || next == prev {
+		return ""
+	}
+	if prev != "" && strings.HasPrefix(next, prev) {
+		return next[len(prev):]
+	}
+	// 已推送正文已包含本段 → 跳过
+	if prev != "" && strings.Contains(prev, next) {
+		return ""
+	}
+	// 新段把旧段整段吞在末尾（常见：过程说明 + 已推送的结论）→ 勿整段重放
+	if prev != "" && strings.HasSuffix(next, prev) {
+		return ""
+	}
+	return next
+}
+
+// cursorResultAppend 计算 result 相对已流式正文还需补推的内容。
+// 典型重复：流式已是结论 A，result 是「过程说明 + A」时再整段 onChunk 会变成 A + 过程 + A。
+func cursorResultAppend(prev, final string) string {
+	prev = strings.TrimSpace(prev)
+	final = strings.TrimSpace(final)
+	if final == "" || final == prev {
+		return ""
+	}
+	if prev == "" {
+		return final
+	}
+	// 流式已包含完整 result
+	if strings.Contains(prev, final) {
+		return ""
+	}
+	// result 是流式加长版 → 只补尾巴
+	if strings.HasPrefix(final, prev) {
+		return final[len(prev):]
+	}
+	// 流式已是 result 的后缀（result 前面多了过程/说明）→ 不补，落库仍用 final
+	if strings.HasSuffix(final, prev) {
+		return ""
+	}
+	// 流式末尾已带上 result
+	if strings.HasSuffix(prev, final) {
+		return ""
+	}
+	return "\n" + final
 }
 
 // deliverCursor 把解析后的正文交给调用方，并回传 session/usage。

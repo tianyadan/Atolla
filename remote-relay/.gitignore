@@ -5,3 +5,9 @@ data/
 *.db-journal
 *.db-wal
 *.db-shm
+web/.env
+web/ios/App/Pods
+web/ios/App/Podfile.lock
+web/ios/DerivedData
+web/ios/App/App/public
+**/.DS_Store

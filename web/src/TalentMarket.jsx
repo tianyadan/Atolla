@@ -19,8 +19,6 @@ const BUILTIN_SKILL_ICON = {
   database: '/skill-icons/database.svg',
   server: '/skill-icons/server.svg',
   browser: '/skill-icons/browser.svg',
-  coding: null,
-  shell: null,
   search: null,
 }
 

@@ -32,6 +32,7 @@ import {
 } from './chatImages.js'
 import { ChatAttachPreview, ChatLightbox, ChatMessageImages } from './ChatImageUI.jsx'
 import { MobileViewerIcon } from './MobileViewerIcon.jsx'
+import GroupChatOfferSheet, { buildGroupMemberSet } from './GroupChatOfferSheet.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -196,7 +197,7 @@ function statusClass(st) {
  * 管理台「数字人 · 对话」：授权弹窗、自动审核、分页、插话、设置。
  */
 export default function ManagedAgentsPanel({
-  authHeaders, onUnauthorized, active = true, onOpenWorkflowRun,
+  authHeaders, onUnauthorized, active = true, onOpenWorkflowRun, onOpenGroupChat,
   focusAgentId = 0, onFocusConsumed, openHire = false, onHireConsumed, openSettings = false,
 }) {
   const [agents, setAgents] = useState([])
@@ -236,6 +237,9 @@ export default function ManagedAgentsPanel({
   const [workspaces, setWorkspaces] = useState([])
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionIdx, setMentionIdx] = useState(0)
+  /** @ 3～5 人时的「生成群聊」岔路；null=未弹出 */
+  const [groupOffer, setGroupOffer] = useState(null) // { memberIds, question, attachments }
+  const [groupCreating, setGroupCreating] = useState(false)
   const [pendingImages, setPendingImages] = useState([])
   const [lightboxSrc, setLightboxSrc] = useState('')
   const [attachBusy, setAttachBusy] = useState(false)
@@ -250,7 +254,7 @@ export default function ManagedAgentsPanel({
   const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
   const [taskPlanSaving, setTaskPlanSaving] = useState(false)
   const [, setTick] = useState(0)
-  const [, setSessVer] = useState(0)
+  const [sessVer, setSessVer] = useState(0)
   const boxRef = useRef(null)
   /** 列表请求序号：慢返回的旧轮询不能盖掉刚创建出来的员工。 */
   const agentsLoadGen = useRef(0)
@@ -303,7 +307,13 @@ export default function ManagedAgentsPanel({
     return () => clearInterval(t)
   }, [selectedId, permQueue.length])
 
-  async function loadAgents(preferId) {
+  /**
+   * 刷新数字员工列表。
+   * 默认保留当前选中：轮询/状态变更不得把对话窗拽到别人。
+   * forceSelect + preferId：创建/复制/招聘后主动跳到新同事。
+   */
+  async function loadAgents(preferId, opts = {}) {
+    const forceSelect = !!opts.forceSelect
     const headers = authHeaders()
     // 首页未登录也会挂着本面板轮询。没令牌时接口必然 401，不能当成登录过期。
     if (!hasBearerToken(headers)) return
@@ -330,10 +340,15 @@ export default function ManagedAgentsPanel({
     items.forEach((a) => {
       if (a && a.id) patchAgentSession(a.id, { autoOn: !!a.auto_review })
     })
-    const next = preferId || selectedId || items[0]?.id || 0
-    if (next && items.some((a) => a.id === next)) setSelectedId(next)
-    else if (items[0]) setSelectedId(items[0].id)
-    else setSelectedId(0)
+    setSelectedId((cur) => {
+      if (forceSelect && preferId && items.some((a) => a.id === preferId)) {
+        return preferId
+      }
+      // 用户正在看的人还在名单里：绝不因过期轮询/状态刷新改选中
+      if (cur && items.some((a) => a.id === cur)) return cur
+      if (preferId && items.some((a) => a.id === preferId)) return preferId
+      return items[0]?.id || 0
+    })
   }
 
   function mapMsgs(items) {
@@ -401,7 +416,10 @@ export default function ManagedAgentsPanel({
   }, [active, selectedId])
 
   async function loadDetail(id, { force = false } = {}) {
-    if (!id) { setTasks([]); return }
+    if (!id) {
+      if (!viewRef.current.selectedId) setTasks([])
+      return
+    }
     const local = getAgentSession(id)
     const [msgRes, taskRes] = await Promise.all([
       fetch(`${API}/admin/agents/${id}/messages?limit=${PAGE_SIZE}`, { headers: authHeaders() }),
@@ -411,13 +429,21 @@ export default function ManagedAgentsPanel({
     const msgData = await msgRes.json().catch(() => ({}))
     const taskData = await taskRes.json().catch(() => ({}))
     if (!msgRes.ok) return
-    setTasks(taskData.items || [])
+    // 打开对话首页已在后端清未读；本地同步去掉蓝徽标 / 「未读」区
+    setAgents((list) => list.map((a) => (a.id === id && a.task_unread ? { ...a, task_unread: false } : a)))
+    // 任务条是全局状态：只更新「当前正在看」的那位，避免 A 刷新写到 B 的进度区
+    if (viewRef.current.selectedId === id) {
+      setTasks(taskData.items || [])
+    }
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
     if (force || !getAgentSession(id).loading) {
       const fromDb = mapMsgs(msgData.items)
-      const next = force ? coalesceChatLog(getAgentSession(id).chatLog, fromDb) : fromDb
-      // 划选复制中不要整表替换聊天 DOM
-      if (!selectionInside(boxRef.current)) {
+      const next = force
+        ? coalesceChatLog(getAgentSession(id).chatLog, fromDb)
+        : fromDb
+      // 划选复制中不要整表替换聊天 DOM（仅当前窗口有选区）
+      const skipDom = viewRef.current.selectedId === id && selectionInside(boxRef.current)
+      if (!skipDom) {
         setAgentChatLog(id, next)
       }
       patchAgentSession(id, {
@@ -540,37 +566,58 @@ export default function ManagedAgentsPanel({
   }, [chatLog, loading, active, permQueue.length])
 
   useEffect(() => {
+    if (!active) return undefined
+    let stopped = false
+    let timer = 0
+    const pollMs = () => {
+      const { selectedId: sid, agents: list } = viewRef.current
+      const selectedViewing = list.some((a) => a.id === sid && a.mobile_viewing)
+      const busy =
+        anyAgentLoading() ||
+        selectedViewing ||
+        list.some(
+          (a) =>
+            a.status === 'running' ||
+            a.status === 'compressing' ||
+            a.status === 'initializing' ||
+            a.occupancy?.source_type === 'CLONE_INIT',
+        )
+      return busy ? 2000 : 4000
+    }
     const tick = () => {
       const headers = authHeaders()
       if (!hasBearerToken(headers)) return
-      loadAgents(selectedId || undefined)
-      if (selectedId) {
-        fetch(`${API}/admin/agents/${selectedId}/tasks`, { headers })
+      const sid = viewRef.current.selectedId
+      // 只刷新名单，不改选中（避免状态变更时对话窗跳到别人）
+      loadAgents()
+      if (sid) {
+        fetch(`${API}/admin/agents/${sid}/tasks`, { headers })
           .then((r) => r.json())
-          .then((d) => setTasks(d.items || []))
+          .then((d) => {
+            if (viewRef.current.selectedId === sid) setTasks(d.items || [])
+          })
           .catch(() => {})
         // 与手机同看时近实时拉消息；本机 SSE 流式中跳过，避免打断打字机
-        if (active && !getAgentSession(selectedId).loading) {
-          void loadDetail(selectedId, { force: true })
+        if (!getAgentSession(sid).loading) {
+          void loadDetail(sid, { force: true })
         }
       }
     }
-    const selectedViewing = agents.some((a) => a.id === selectedId && a.mobile_viewing)
-    const busy =
-      anyAgentLoading() ||
-      selectedViewing ||
-      agents.some(
-        (a) =>
-          a.status === 'running' ||
-          a.status === 'compressing' ||
-          a.status === 'initializing' ||
-          a.occupancy?.source_type === 'CLONE_INIT',
-      )
-    const ms = busy ? 2000 : 4000
-    const t = setInterval(tick, ms)
-    return () => clearInterval(t)
+    const schedule = () => {
+      clearTimeout(timer)
+      if (stopped) return
+      timer = window.setTimeout(() => {
+        tick()
+        schedule()
+      }, pollMs())
+    }
+    schedule()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, active, agents.map((a) => `${a.status}:${a.mobile_viewing ? 1 : 0}`).join(',')])
+  }, [active])
 
   function onChatScroll() {
     const el = boxRef.current
@@ -623,7 +670,7 @@ export default function ManagedAgentsPanel({
       setCreateOpen(false)
       setNewPolicy(emptyPolicy())
       setNewJellyColor(assignJellyColor(String(Date.now())))
-      await loadAgents(d?.id)
+      await loadAgents(d?.id, { forceSelect: true })
     } catch (err) {
       setCreateErr(err?.message || '创建失败')
     } finally { setBusy(false) }
@@ -648,7 +695,7 @@ export default function ManagedAgentsPanel({
       const d = await res.json()
       if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '复制失败' }); return }
       setCopyOpen(false)
-      await loadAgents(d.id)
+      await loadAgents(d.id, { forceSelect: true })
     } finally { setBusy(false) }
   }
 
@@ -1289,6 +1336,7 @@ export default function ManagedAgentsPanel({
   async function ask() {
     if (!selected) return
     if (selected.status === 'initializing' || isCloneInitBusy(selected)) return
+    if (groupOffer) return // 岔路面板打开时先别叠发
     const q = question.trim()
     const pending = pendingImages
     if (!q && !pending.length) return
@@ -1321,7 +1369,51 @@ export default function ManagedAgentsPanel({
       s.abort?.abort()
       return
     }
+    // 3～5 人（含当前窗口）→ 5s「生成群聊」岔路；否则直接旧并行
+    const { memberIds, canOfferGroup } = buildGroupMemberSet(id, q)
+    if (canOfferGroup) {
+      setGroupOffer({ memberIds, question: q, attachments: atts })
+      return
+    }
     await sendQuestion(id, q, atts)
+  }
+
+  /** 岔路超时 / 选并行：关闭面板并走现有 ask SSE */
+  async function resolveGroupOfferParallel() {
+    const offer = groupOffer
+    setGroupOffer(null)
+    if (!offer || !selectedId) return
+    await sendQuestion(selectedId, offer.question, offer.attachments || [])
+  }
+
+  /** 点「生成群聊」：建群并跳转群聊页，本轮不跑并行 invoke */
+  async function resolveGroupOfferCreate() {
+    const offer = groupOffer
+    if (!offer || !selectedId) return
+    setGroupCreating(true)
+    try {
+      const res = await fetch(`${API}/admin/group-chats`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          from_agent_id: selectedId,
+          member_ids: offer.memberIds.filter((mid) => Number(mid) !== Number(selectedId)),
+          seed_question: offer.question,
+        }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`)
+      setGroupOffer(null)
+      onOpenGroupChat?.(d.id)
+    } catch (err) {
+      patchAgentSession(selectedId, { error: String(err.message || err) })
+      // 建群失败：回落到并行，避免问题丢了
+      setGroupOffer(null)
+      await sendQuestion(selectedId, offer.question, offer.attachments || [])
+    } finally {
+      setGroupCreating(false)
+    }
   }
 
   async function stopRun() {
@@ -1421,6 +1513,18 @@ export default function ManagedAgentsPanel({
     if (!searchQ) return agents
     return agents.filter((a) => (a.name || '').toLowerCase().includes(searchQ))
   }, [agents, searchQ])
+  // 依赖 sessVer：本地 loading 变化时刷新「运行中」镜像区
+  const busyAgents = useMemo(
+    () => filteredAgents.filter((a) => isAgentBusy(a)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
+    [filteredAgents, sessVer],
+  )
+  /** 任务完成未读（非忙碌）；系统分类「未读」 */
+  const unreadAgents = useMemo(
+    () => filteredAgents.filter((a) => !!a.task_unread && !isAgentBusy(a)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
+    [filteredAgents, sessVer],
+  )
 
   function renderAgentItem(a) {
     const st = statusLabel(a)
@@ -1461,6 +1565,9 @@ export default function ManagedAgentsPanel({
           </strong>
           <span className="ma-item-badges">
             {pend > 0 && <span className="admin-badge admin-badge-perm" title="待授权">{pend}</span>}
+            {!!a.task_unread && !isAgentBusy(a) && (
+              <span className="admin-badge admin-badge-unread" title="任务完成未读">未读</span>
+            )}
             <span className={`ma-status st-${stClass}`}>{st}</span>
           </span>
         </div>
@@ -1491,6 +1598,20 @@ export default function ManagedAgentsPanel({
       try { localStorage.setItem('ma_list_collapsed', next ? '1' : '0') } catch { /* 隐私模式忽略 */ }
       return next
     })
+  }
+
+  /** 一键展开所有工作组（含未入组）。 */
+  function expandAllFolders() {
+    setCollapsedFolders({})
+  }
+
+  /** 一键折叠所有工作组（含未入组）。 */
+  function collapseAllFolders() {
+    const next = { root: true }
+    for (const f of folders) {
+      if (f?.id != null) next[f.id] = true
+    }
+    setCollapsedFolders(next)
   }
 
   return (
@@ -1528,7 +1649,53 @@ export default function ManagedAgentsPanel({
             onChange={(e) => setAgentSearch(e.target.value)}
             placeholder="搜索数字员工名称…"
           />
+          {folders.length > 0 || filteredAgents.some((a) => isUngroupedAgent(a, folders)) ? (
+            <div className="ma-fold-toolbar">
+              <button type="button" className="ghost ma-fold-btn" onClick={expandAllFolders}>
+                全部展开
+              </button>
+              <button type="button" className="ghost ma-fold-btn" onClick={collapseAllFolders}>
+                全部折叠
+              </button>
+            </div>
+          ) : null}
           {filteredAgents.length === 0 && <p className="empty">暂无匹配的数字员工</p>}
+
+          {busyAgents.length > 0 && (
+            <div className="ma-folder-block ma-running-block">
+              <div className="ma-folder-head">
+                <div className="ma-folder-title">
+                  <span className="ma-folder-title-text">运行中</span>
+                  <span className="ma-folder-title-right">
+                    <span className="admin-badge ma-folder-badge" title="运行中">
+                      {busyAgents.length}
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <div className="ma-folder-agents">
+                {busyAgents.map(renderAgentItem)}
+              </div>
+            </div>
+          )}
+
+          {unreadAgents.length > 0 && (
+            <div className="ma-folder-block ma-unread-block">
+              <div className="ma-folder-head">
+                <div className="ma-folder-title">
+                  <span className="ma-folder-title-text">未读</span>
+                  <span className="ma-folder-title-right">
+                    <span className="admin-badge admin-badge-unread ma-folder-badge" title="任务完成未读">
+                      {unreadAgents.length}
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <div className="ma-folder-agents">
+                {unreadAgents.map(renderAgentItem)}
+              </div>
+            </div>
+          )}
 
           <div
             className="ma-folder-block ma-folder-root"
@@ -1540,8 +1707,12 @@ export default function ManagedAgentsPanel({
             }}
           >
             <div className="ma-folder-head">
-              <div className="ma-folder-title">
-                <span className="ma-folder-title-text">未入组</span>
+              <button
+                type="button"
+                className="ma-folder-title"
+                onClick={() => setCollapsedFolders((m) => ({ ...m, root: !m.root }))}
+              >
+                <span className="ma-folder-title-text">{collapsedFolders.root ? '▸' : '▾'} 未入组</span>
                 <span className="ma-folder-title-right">
                   {(() => {
                     const kids = filteredAgents.filter((a) => isUngroupedAgent(a, folders))
@@ -1555,17 +1726,20 @@ export default function ManagedAgentsPanel({
                     )
                   })()}
                 </span>
+              </button>
+            </div>
+            {(!collapsedFolders.root || !!searchQ) && (
+              <div className="ma-folder-agents">
+                {filteredAgents.filter((a) => isUngroupedAgent(a, folders)).map(renderAgentItem)}
               </div>
-            </div>
-            <div className="ma-folder-agents">
-              {filteredAgents.filter((a) => isUngroupedAgent(a, folders)).map(renderAgentItem)}
-            </div>
+            )}
           </div>
 
           {folders.map((f) => {
             const kids = filteredAgents.filter((a) => Number(a.folder_id) === Number(f.id))
             if (searchQ && kids.length === 0) return null
-            const collapsed = !!collapsedFolders[f.id]
+            // 搜索时强制展开，避免匹配结果被藏在折叠组里
+            const collapsed = !searchQ && !!collapsedFolders[f.id]
             return (
               <div
                 key={f.id}
@@ -1854,6 +2028,14 @@ export default function ManagedAgentsPanel({
                   onChange={toggleTaskPlan}
                 />
                 <div className="ma-composer-wrap">
+                  <GroupChatOfferSheet
+                    open={!!groupOffer}
+                    agents={agents}
+                    memberIds={groupOffer?.memberIds || []}
+                    creating={groupCreating}
+                    onCreate={resolveGroupOfferCreate}
+                    onTimeout={resolveGroupOfferParallel}
+                  />
                   {mentionOpen && mentionCandidates.length > 0 && (
                     <ul className="ma-mention-list">
                       {mentionCandidates.map((a, i) => (
@@ -1879,7 +2061,7 @@ export default function ManagedAgentsPanel({
                     onPaste={onComposerPaste}
                     rows={3}
                     placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事；可粘贴图片' : '输入任务，Ctrl+Enter 发送，Enter 换行；@ 协作；可粘贴/拖入图片')}
-                    disabled={initializing}
+                    disabled={initializing || !!groupOffer}
                   />
                   <ContextRing
                     used={sess.contextUsed || 0}
@@ -1896,7 +2078,7 @@ export default function ManagedAgentsPanel({
                       type="button"
                       className="primary"
                       onClick={ask}
-                      disabled={(!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                      disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
                     >
                       {attachBusy ? '上传中…' : '发送'}
                     </button>
@@ -1906,7 +2088,7 @@ export default function ManagedAgentsPanel({
                         type="button"
                         className="primary"
                         onClick={ask}
-                        disabled={(!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                        disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
                       >
                         {attachBusy ? '上传中…' : (interrupting ? '插话中…' : '插话')}
                       </button>
@@ -2006,7 +2188,7 @@ export default function ManagedAgentsPanel({
         authHeaders={authHeaders}
         onUnauthorized={onUnauthorized}
         onClose={() => setTalentMarketOpen(false)}
-        onHired={(a) => { if (a?.id) loadAgents(a.id) }}
+        onHired={(a) => { if (a?.id) loadAgents(a.id, { forceSelect: true }) }}
         onCustomHire={() => {
           setTalentMarketOpen(false)
           setNewPolicy(emptyPolicy())
@@ -2611,6 +2793,21 @@ function countFolderBusy(list) {
     else if (getAgentSession(a.id).loading || a.status === 'running') direct += 1
   }
   return { direct, wf }
+}
+
+/** 是否「忙」（与移动端 agentBusy 对齐，并含本地 loading/compressing） */
+function isAgentBusy(a) {
+  const local = getAgentSession(a?.id)
+  if (local?.loading || local?.compressing) return true
+  const s = String(a?.status || 'idle').toLowerCase()
+  return (
+    s === 'running' ||
+    s === 'busy' ||
+    s === '插话中' ||
+    s === 'initializing' ||
+    s === 'compressing' ||
+    s === 'waiting'
+  )
 }
 
 function fmtToken(n) {

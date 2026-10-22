@@ -7,8 +7,15 @@ import (
 
 func TestBuiltinSkillSeedsHaveRequiredFields(t *testing.T) {
 	seeds := BuiltinSkillSeeds()
-	if len(seeds) < 5 {
-		t.Fatalf("want >=5 builtin skills, got %d", len(seeds))
+	if len(seeds) < 4 {
+		t.Fatalf("want >=4 builtin skills, got %d", len(seeds))
+	}
+	for _, banned := range []string{"atolla.coding", "atolla.shell"} {
+		for _, s := range seeds {
+			if s.ID == banned {
+				t.Fatalf("retired skill still seeded: %s", banned)
+			}
+		}
 	}
 	seen := map[string]bool{}
 	for _, s := range seeds {
@@ -43,11 +50,11 @@ func TestNormalizeCapabilitiesKeepsKnown(t *testing.T) {
 
 func TestSkillPromptBlockIsCompact(t *testing.T) {
 	block := FormatInstalledSkillsPrompt([]AgentSkillView{{
-		ID: "atolla.coding", Name: "代码读写", Summary: "读写文件",
-		Rules: []SkillRule{{Type: "allow", Text: "可读"}, {Type: "deny", Text: "不得越界"}},
-		Capabilities: []string{"engine.write"},
+		ID: "atolla.search", Name: "网络检索", Summary: "检索公开信息",
+		Rules:        []SkillRule{{Type: "allow", Text: "可检索"}, {Type: "deny", Text: "不得抓取私密资源"}},
+		Capabilities: []string{"engine.web_search"},
 	}})
-	if block == "" || !containsAll(block, "atolla.coding", "engine.write", "不得越界") {
+	if block == "" || !containsAll(block, "atolla.search", "engine.web_search", "不得抓取私密资源") {
 		t.Fatalf("block=%s", block)
 	}
 	// database skill is omitted from generic block (injected as compact DS list)

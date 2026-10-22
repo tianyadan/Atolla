@@ -16,11 +16,14 @@ export function agentStatusLabel(status: string | null | undefined): string {
   return agentBusy(status) ? '忙' : '闲'
 }
 
-/** Default avatar (same strategy as PC) */
+/** @deprecated 上传头像已由像素水母替代；保留常量以免旧引用崩 */
 export const DEFAULT_AGENT_AVATAR =
   'https://img0.baidu.com/it/u=890210585,2769039861&fm=253&fmt=auto&app=138&f=JPEG?w=500&h=667'
 
-/** Resolve display avatar from mirror payload */
+/**
+ * @deprecated 请改用 JellyAvatar + resolveMirrorJellyColor
+ * 仍返回 URL 仅作兼容；新 UI 不再使用。
+ */
 export function agentAvatarUrl(payload: Record<string, unknown> | undefined): string {
   const u = String(payload?.avatar_url || '').trim()
   return u || DEFAULT_AGENT_AVATAR
@@ -152,4 +155,64 @@ export function contextRingLabel(usage: AgentContextUsage): string {
 /** Count busy agents (direct running), PC sidebar badge semantics */
 export function countBusyAgents(agents: import('../api').PublicMirrorAgent[]): number {
   return agents.reduce((n, a) => n + (agentBusy(a.status) ? 1 : 0), 0)
+}
+
+/** 忙碌数字人列表（供「运行中」快捷区；可选按名称/id 过滤） */
+export function listBusyAgents(
+  agents: import('../api').PublicMirrorAgent[],
+  query = '',
+): import('../api').PublicMirrorAgent[] {
+  const q = query.trim().toLowerCase()
+  return agents.filter((a) => {
+    if (!agentBusy(a.status)) return false
+    if (!q) return true
+    const name = String(a.display_name || '').toLowerCase()
+    const id = String(a.agent_id || '').toLowerCase()
+    return name.includes(q) || id.includes(q)
+  })
+}
+
+/** payload.task_unread 是否为真 */
+export function agentTaskUnread(payload: Record<string, unknown> | undefined): boolean {
+  const v = payload?.task_unread
+  return v === true || v === 1 || v === '1'
+}
+
+/** 任务完成未读列表（非忙碌；供系统分类「未读」） */
+export function listUnreadAgents(
+  agents: import('../api').PublicMirrorAgent[],
+  query = '',
+): import('../api').PublicMirrorAgent[] {
+  const q = query.trim().toLowerCase()
+  return agents.filter((a) => {
+    if (agentBusy(a.status)) return false
+    if (!agentTaskUnread(a.payload)) return false
+    if (!q) return true
+    const name = String(a.display_name || '').toLowerCase()
+    const id = String(a.agent_id || '').toLowerCase()
+    return name.includes(q) || id.includes(q)
+  })
+}
+
+/** Read run start unix seconds from mirror payload */
+export function agentRunStartedAt(payload: Record<string, unknown> | undefined): number | null {
+  const n = Number(payload?.run_started_at)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.floor(n)
+}
+
+/** Format busy elapsed time from run_started_at (unix sec) → "3分12秒" */
+export function formatBusyElapsed(
+  runStartedAt: number | null | undefined,
+  nowSec = Math.floor(Date.now() / 1000),
+): string {
+  if (runStartedAt == null || !Number.isFinite(runStartedAt) || runStartedAt <= 0) return ''
+  let sec = Math.max(0, nowSec - Math.floor(runStartedAt))
+  if (sec < 60) return `${sec}秒`
+  const mins = Math.floor(sec / 60)
+  sec = sec % 60
+  if (mins < 60) return sec > 0 ? `${mins}分${sec}秒` : `${mins}分`
+  const hours = Math.floor(mins / 60)
+  const remMin = mins % 60
+  return remMin > 0 ? `${hours}小时${remMin}分` : `${hours}小时`
 }

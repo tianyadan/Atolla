@@ -76,6 +76,13 @@ func handleViewerSet(ec *ExecContext) (any, error) {
 		return nil, err
 	}
 	ec.Viewer.SetMobileViewer(agentID)
+	// 手机打开对话 = 已读，清任务完成未读并刷新镜像
+	if ec.Store != nil && agentID > 0 {
+		_ = ec.Store.ClearManagedAgentTaskUnread(ec.Context, agentID)
+		if ec.Client != nil {
+			_, _ = handleSyncAgents(ec)
+		}
+	}
 	return map[string]any{
 		"ok":       true,
 		"agent_id": strconv.FormatInt(agentID, 10),

@@ -90,3 +90,47 @@ func TestParseCursorPrintOutputPlain(t *testing.T) {
 		t.Fatalf("text=%q meta=%+v", text, meta)
 	}
 }
+
+func TestCursorAssistDelta(t *testing.T) {
+	if d := cursorAssistDelta("", "先想"); d != "先想" {
+		t.Fatalf("empty prev: %q", d)
+	}
+	if d := cursorAssistDelta("先想", "先想一下"); d != "一下" {
+		t.Fatalf("grow: %q", d)
+	}
+	if d := cursorAssistDelta("先想一下", "先想一下"); d != "" {
+		t.Fatalf("same: %q", d)
+	}
+	if d := cursorAssistDelta("旧段", "新段"); d != "新段" {
+		t.Fatalf("replace: %q", d)
+	}
+	if d := cursorAssistDelta("结论A", "过程说明\n结论A"); d != "" {
+		t.Fatalf("swallow suffix should skip: %q", d)
+	}
+	if d := cursorAssistDelta("过程说明\n结论A", "结论A"); d != "" {
+		t.Fatalf("already contained: %q", d)
+	}
+}
+
+func TestCursorResultAppendNoDup(t *testing.T) {
+	// 流式已是结论，result 带过程 + 同一结论 → 不补推
+	if g := cursorResultAppend("已落地，热更新。", "先摸清结构。\n已落地，热更新。"); g != "" {
+		t.Fatalf("suffix overlap: %q", g)
+	}
+	// 流式为空 → 整段
+	if g := cursorResultAppend("", "最终结论"); g != "最终结论" {
+		t.Fatalf("empty prev: %q", g)
+	}
+	// result 加长 → 只补尾巴
+	if g := cursorResultAppend("你好", "你好世界"); g != "世界" {
+		t.Fatalf("prefix grow: %q", g)
+	}
+	// 流式已含 result → 不补
+	if g := cursorResultAppend("开场\n结论\n收尾", "结论"); g != "" {
+		t.Fatalf("contained: %q", g)
+	}
+	// 真正新结论
+	if g := cursorResultAppend("思考中…", "最终答案"); g != "\n最终答案" {
+		t.Fatalf("new conclusion: %q", g)
+	}
+}

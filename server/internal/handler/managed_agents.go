@@ -193,64 +193,6 @@ func (h *Handler) AdminAgentsRetryInit(c *gin.Context) {
 	c.JSON(http.StatusOK, a)
 }
 
-// AdminAgentsUploadAvatar 上传头像到 OSS（压缩后）。
-func (h *Handler) AdminAgentsUploadAvatar(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
-		return
-	}
-	fh, err := c.FormFile("file")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file required"})
-		return
-	}
-	f, err := fh.Open()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, 8<<20+1))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if len(raw) > 8<<20 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "图片过大（上限 8MB）"})
-		return
-	}
-	a, err := h.svc.UploadAgentAvatar(c.Request.Context(), id, raw)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, a)
-}
-
-// AdminAgentsClearAvatar 清空头像（回默认图）。
-func (h *Handler) AdminAgentsClearAvatar(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
-		return
-	}
-	a, err := h.svc.ClearAgentAvatar(c.Request.Context(), id)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, a)
-}
-
 // AdminAgentsUpdate 重命名 / 改规则 / 改 bin / 权限策略。
 func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -431,11 +373,15 @@ func (h *Handler) AdminAgentsMessages(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
+	beforeID, _ := strconv.ParseInt(c.DefaultQuery("before_id", "0"), 10, 64)
+	// 打开对话首页视为已读，清除任务完成未读
+	if beforeID == 0 && a.TaskUnread {
+		_ = h.svc.MarkAgentTaskRead(c.Request.Context(), id)
+	}
 	if a.ConversationID == 0 {
 		c.JSON(http.StatusOK, gin.H{"items": []store.Message{}, "conversation_id": 0, "total": 0, "has_more": false})
 		return
 	}
-	beforeID, _ := strconv.ParseInt(c.DefaultQuery("before_id", "0"), 10, 64)
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	items, total, hasMore, err := h.svc.Store.MessagesPage(c.Request.Context(), a.ConversationID, beforeID, limit)
 	if err != nil {
@@ -557,7 +503,8 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 						"meaning": ev.Req.Meaning, "risk": ev.Req.Risk, "conversation_id": convID,
 					}
 				} else if ev.Kind == "command" && ev.Req != nil {
-					if ev.Req.ConvID != 0 && ev.Req.ConvID != convID {
+					// 必须按会话隔离：ConvID 缺失或与本轮不符时丢弃，避免串到其他数字人窗口。
+					if ev.Req.ConvID == 0 || ev.Req.ConvID != convID {
 						continue
 					}
 					payload = map[string]interface{}{
@@ -571,6 +518,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 						"summary": activitySummary(ev.Req.ToolName, ev.Req.Summary),
 					})
 				} else if ev.Kind == "resolved" && ev.Res != nil {
+					// request_id 全局唯一；前端按本会话 permQueue 过滤，误转发无害
 					payload = map[string]interface{}{"type": "permission_resolved", "request_id": ev.Res.ID, "behavior": ev.Res.Behavior, "by": ev.Res.By}
 				} else {
 					continue
@@ -605,6 +553,20 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 		"type": "done", "conversation_id": msg.ConversationID,
 		"reply_ms": msg.ReplyMs, "status": msg.Status,
 	})
+}
+
+// AdminAgentsMarkRead POST /api/admin/agents/:id/mark-read — 清除任务完成未读。
+func (h *Handler) AdminAgentsMarkRead(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := h.svc.MarkAgentTaskRead(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "task_unread": false})
 }
 
 // AdminAgentsClear 清空对话。

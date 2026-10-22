@@ -1,0 +1,181 @@
+import AppKit
+import SwiftUI
+
+/// 与 PC `JellyAvatar` 对齐：精灵图帧循环 + 运行时跳动。
+enum JellyAnimState {
+  case idle
+  case working
+  case waiting
+  case error
+
+  static func from(agentStatus: String, reason: String?) -> JellyAnimState {
+    let s = agentStatus.lowercased()
+    if s == "error" { return .error }
+    if s == "waiting" { return .waiting }
+    if reason == "workflow" || s == "running" || s == "busy" || s == "插话中"
+      || s == "initializing" || s == "compressing" {
+      return .working
+    }
+    return .idle
+  }
+}
+
+struct JellyAvatarView: View {
+  let color: String
+  var size: CGFloat = 22
+  var state: JellyAnimState = .working
+
+  private let frames = 8
+  private let cellLogical: CGFloat = 16
+
+  @State private var flashOn = true
+
+  private var safeColor: String {
+    let c = color.lowercased()
+    switch c {
+    case "blue", "green", "orange", "purple", "red", "yellow": return c
+    default: return "blue"
+    }
+  }
+
+  /// 选 @16 / @32 / @48
+  private var spriteScale: Int {
+    let need = size * (NSScreen.main?.backingScaleFactor ?? 2)
+    if need <= 16 { return 1 }
+    if need <= 32 { return 2 }
+    return 3
+  }
+
+  private var animRow: Int {
+    // jump=1, float=0 —— 与 sprites.json 一致
+    state == .working ? 1 : 0
+  }
+
+  private var frameMs: Double {
+    state == .working ? (0.6 / Double(frames)) : (3.0 / Double(frames))
+  }
+
+  var body: some View {
+    let sheet = JellySpriteStore.shared.image(color: safeColor, scale: spriteScale)
+    TimelineView(.animation(minimumInterval: frameMs, paused: state == .waiting || state == .error)) { timeline in
+      let idx = Int(timeline.date.timeIntervalSinceReferenceDate / frameMs) % frames
+      spriteFrame(sheet: sheet, frame: state == .waiting || state == .error ? 0 : idx)
+        .offset(y: bobOffset(for: timeline.date))
+        .opacity(stateOpacity)
+        .saturation(state == .error ? 0.7 : 1)
+    }
+    .frame(width: size, height: size)
+    .onAppear { startFlashIfNeeded() }
+    .onChange(of: state) { _ in startFlashIfNeeded() }
+  }
+
+  private var stateOpacity: Double {
+    if state == .error { return 0.85 }
+    if state == .waiting { return flashOn ? 1 : 0.35 }
+    return 1
+  }
+
+  private func spriteFrame(sheet: NSImage?, frame: Int) -> some View {
+    Group {
+      if let sheet {
+        Image(nsImage: sheet)
+          .interpolation(.none)
+          .resizable()
+          .frame(width: size * CGFloat(frames), height: size * 2)
+          .offset(x: -CGFloat(frame) * size, y: -CGFloat(animRow) * size)
+          .frame(width: size, height: size, alignment: .topLeading)
+          .clipped()
+      } else {
+        Circle().fill(fallbackColor(safeColor)).frame(width: size, height: size)
+      }
+    }
+  }
+
+  /// idle：±1 格缓动；working：-3 格跳动（与 App.css 一致）
+  private func bobOffset(for date: Date) -> CGFloat {
+    let cell = size / cellLogical
+    switch state {
+    case .error:
+      return cell * 1.5
+    case .waiting:
+      return 0
+    case .idle:
+      let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
+      // ease-in-out 近似：正弦
+      return CGFloat(sin(t * .pi * 2)) * cell
+    case .working:
+      let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.6) / 0.6
+      // 0/1 落地，中间抬起
+      let lift = sin(t * .pi)
+      return -cell * 3 * CGFloat(lift)
+    }
+  }
+
+  private func fallbackColor(_ name: String) -> Color {
+    switch name {
+    case "red": return Color(red: 0.9, green: 0.32, blue: 0.32)
+    case "green": return Color(red: 0.3, green: 0.78, blue: 0.42)
+    case "purple": return Color(red: 0.62, green: 0.4, blue: 0.88)
+    case "orange": return Color(red: 0.95, green: 0.55, blue: 0.2)
+    case "yellow": return Color(red: 0.92, green: 0.78, blue: 0.22)
+    default: return Color(red: 0.32, green: 0.52, blue: 0.95)
+    }
+  }
+
+  private func startFlashIfNeeded() {
+    flashOn = true
+    guard state == .waiting else { return }
+    // TimelineView 外用简单翻转
+    Task { @MainActor in
+      while state == .waiting {
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        flashOn.toggle()
+      }
+    }
+  }
+}
+
+/// 精灵图缓存：Bundle.module → 可执行目录 → ~/.atolla/bin
+enum JellySpriteStore {
+  static let shared = JellySpriteStoreBox()
+}
+
+final class JellySpriteStoreBox {
+  private var cache: [String: NSImage] = [:]
+
+  func image(color: String, scale: Int) -> NSImage? {
+    let key = "\(color)@\(scale)"
+    if let hit = cache[key] { return hit }
+    let px = 16 * scale
+    let name = "jelly-\(color)@\(px).png"
+    guard let url = resolveURL(fileName: name) else { return nil }
+    guard let img = NSImage(contentsOf: url) else { return nil }
+    cache[key] = img
+    return img
+  }
+
+  private func resolveURL(fileName: String) -> URL? {
+    // SPM 资源
+    if let u = Bundle.module.url(forResource: fileName.replacingOccurrences(of: ".png", with: ""), withExtension: "png", subdirectory: "jelly-sprites") {
+      return u
+    }
+    if let u = Bundle.module.url(forResource: fileName, withExtension: nil, subdirectory: "jelly-sprites") {
+      return u
+    }
+    // 目录列举
+    if let dir = Bundle.module.resourceURL?.appendingPathComponent("jelly-sprites") {
+      let u = dir.appendingPathComponent(fileName)
+      if FileManager.default.fileExists(atPath: u.path) { return u }
+    }
+    // 安装目录
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let stable = home.appendingPathComponent(".atolla/bin/jelly-sprites/\(fileName)")
+    if FileManager.default.fileExists(atPath: stable.path) { return stable }
+    // 可执行文件旁
+    if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
+      let u = exe.appendingPathComponent("jelly-sprites/\(fileName)")
+      if FileManager.default.fileExists(atPath: u.path) { return u }
+    }
+    return nil
+  }
+}

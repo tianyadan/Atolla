@@ -6,8 +6,6 @@ import ServerSourcesPanel from './ServerSourcesPanel.jsx'
 const API = '/api'
 
 const ICON_GLYPH = {
-  coding: '</>',
-  shell: '>_',
   search: '◎',
   browser: '◉',
   database: '▦',

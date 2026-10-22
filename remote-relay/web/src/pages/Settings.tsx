@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
@@ -11,6 +12,7 @@ import {
   type PublicInstance,
 } from '../api'
 import { PageShell } from '../components/PageShell'
+import { getApiBase, setApiBase } from '../utils/apiBase'
 
 /** 一台已解锁电脑上的两条 Bark 开关 */
 function NotifyInstanceCard({ inst }: { inst: PublicInstance }) {
@@ -89,12 +91,15 @@ function NotifyInstanceCard({ inst }: { inst: PublicInstance }) {
   )
 }
 
-/** Site settings: version + Bark 通知开关 + changelog entry */
+/** Site settings: version + API 基址(App) + Bark 通知开关 + changelog entry */
 export function SettingsPage() {
   const navigate = useNavigate()
   const [version, setVersion] = useState<string>('…')
   const [error, setError] = useState<string | null>(null)
   const [instances, setInstances] = useState<PublicInstance[]>([])
+  const [apiBaseDraft, setApiBaseDraft] = useState(() => getApiBase())
+  const [apiSaved, setApiSaved] = useState(false)
+  const showApiBase = Capacitor.isNativePlatform() || !!getApiBase() || !!import.meta.env.VITE_API_BASE
 
   useEffect(() => {
     void (async () => {
@@ -128,6 +133,13 @@ export function SettingsPage() {
     })()
   }, [navigate])
 
+  /** 保存中继地址并刷新版本探测 */
+  function saveApiBase() {
+    setApiBase(apiBaseDraft)
+    setApiSaved(true)
+    window.setTimeout(() => setApiSaved(false), 1600)
+  }
+
   const unlocked = instances.filter((inst) => hasUnlockToken(inst.instance_id))
 
   return (
@@ -139,6 +151,31 @@ export function SettingsPage() {
           <span className="settings-value">{version}</span>
         </div>
       </div>
+      {showApiBase ? (
+        <>
+          <h2 className="settings-section-title">中继服务</h2>
+          <p className="settings-section-hint">
+            App 壳内无浏览器同源代理，请填写可访问的中继根地址（含 https://，不要末尾斜杠）。
+          </p>
+          <div className="settings-block">
+            <label className="field" style={{ display: 'block', padding: '0.75rem 0' }}>
+              <span className="settings-label">API 地址</span>
+              <input
+                type="url"
+                inputMode="url"
+                autoCapitalize="off"
+                autoCorrect="off"
+                placeholder="https://your-relay.example.com"
+                value={apiBaseDraft}
+                onChange={(e) => setApiBaseDraft(e.target.value)}
+              />
+            </label>
+            <button type="button" className="btn primary" onClick={saveApiBase}>
+              {apiSaved ? '已保存' : '保存'}
+            </button>
+          </div>
+        </>
+      ) : null}
       <h2 className="settings-section-title">通知</h2>
       <p className="settings-section-hint">与电脑端「设置 · 通知」同一开关。离开对话后是否推送到手机。</p>
       {unlocked.length === 0 ? (

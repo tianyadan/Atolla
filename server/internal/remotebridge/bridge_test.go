@@ -19,7 +19,7 @@ func TestRegisteredActionsMatchHandlers(t *testing.T) {
 }
 
 func TestRegisteredActionsCount(t *testing.T) {
-	if len(RegisteredActions()) != 22 {
-		t.Fatalf("expected 22 V1 actions, got %d", len(RegisteredActions()))
+	if len(RegisteredActions()) != 24 {
+		t.Fatalf("expected 24 V1 actions, got %d", len(RegisteredActions()))
 	}
 }

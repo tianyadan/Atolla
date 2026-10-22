@@ -68,6 +68,16 @@ const chatImageUploadBodySchema = z.object({
 
 const settingsUpdateBodySchema = z.object({
   rules_prompt: z.string(),
+  /** Optional pixel jelly color; omit to leave unchanged on Mac */
+  jelly_color: z
+    .enum(['orange', 'yellow', 'blue', 'green', 'purple', 'red'])
+    .optional(),
+})
+
+const agentCreateBodySchema = z.object({
+  name: z.string().min(1).max(80),
+  engine: z.enum(['claude', 'codex', 'agent']),
+  jelly_color: z.enum(['orange', 'yellow', 'blue', 'green', 'purple', 'red']).optional(),
 })
 
 const skillInstallBodySchema = z.object({
@@ -220,6 +230,31 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     }
     res.json({ command: result.command })
   })
+
+  /** Mobile: create a custom digital employee (no talent-market presets) */
+  router.post(
+    '/instances/:id/agents',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const parsed = agentCreateBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid create payload' })
+        return
+      }
+      const payload: Record<string, unknown> = {
+        name: parsed.data.name.trim(),
+        engine: parsed.data.engine,
+      }
+      if (parsed.data.jelly_color) payload.jelly_color = parsed.data.jelly_color
+      await respondRpc(res, instanceId, 'agent.create', payload)
+    },
+  )
 
   router.get('/instances/:id/agents', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
@@ -609,7 +644,7 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     },
   )
 
-  /** Mobile settings: save rules_prompt only */
+  /** Mobile settings: save rules_prompt (+ optional jelly_color) */
   router.patch(
     '/instances/:id/agents/:agentId/settings',
     guard,
@@ -626,10 +661,14 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         res.status(400).json({ error: 'Invalid settings payload' })
         return
       }
-      await respondRpc(res, instanceId, 'agent.settings.update', {
+      const payload: Record<string, unknown> = {
         agent_id: agentId,
         rules_prompt: parsed.data.rules_prompt,
-      })
+      }
+      if (parsed.data.jelly_color) {
+        payload.jelly_color = parsed.data.jelly_color
+      }
+      await respondRpc(res, instanceId, 'agent.settings.update', payload)
     },
   )
 
@@ -793,6 +832,23 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         task_done: parsed.data.task_done,
         permission: parsed.data.permission,
       })
+    },
+  )
+
+  /** 读取本机 Claude / Codex / Cursor 订阅额度（Mac 聚合，默认缓存） */
+  router.get(
+    '/instances/:id/engines/usage',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const freshRaw = String(req.query.fresh ?? '')
+      const fresh = freshRaw === '1' || freshRaw === 'true' || freshRaw === 'yes'
+      await respondRpc(res, instanceId, 'engines.usage.get', { fresh })
     },
   )
 

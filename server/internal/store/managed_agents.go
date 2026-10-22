@@ -39,6 +39,7 @@ type ManagedAgent struct {
 	SkillIcons          []AgentSkillIconBrief `json:"skill_icons,omitempty"` // 悬停展示用
 	LastError           string                `json:"last_error"`
 	LastRunMs           int                   `json:"last_run_ms"`
+	TaskUnread          bool                  `json:"task_unread"` // 任务完成待查看
 	RunStartedAt        *time.Time            `json:"run_started_at,omitempty"`
 	CreatedAt           time.Time             `json:"created_at"`
 	UpdatedAt           time.Time             `json:"updated_at"`
@@ -172,11 +173,11 @@ func scanManagedAgent(scanner interface {
 }) (ManagedAgent, error) {
 	var a ManagedAgent
 	var runAt sql.NullTime
-	var auto, aaa, tp, aw, an, ar, ab, se, recv int
+	var auto, aaa, tp, aw, an, ar, ab, se, recv, unread int
 	err := scanner.Scan(
 		&a.ID, &a.Name, &a.AvatarURL, &a.JellyColor, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
-		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &unread, &runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
 		return a, err
@@ -190,6 +191,7 @@ func scanManagedAgent(scanner interface {
 	a.AllowBrowser = ab != 0
 	a.ScheduleEnabled = se != 0
 	a.IsReceptionist = recv != 0
+	a.TaskUnread = unread != 0
 	// 兼容旧行或异常空值：读出时补齐稳定默认色。
 	if a.JellyColor == "" || !ValidJellyColor(a.JellyColor) {
 		a.JellyColor = AssignJellyColor(a.ID)
@@ -208,7 +210,7 @@ const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(jelly_color,'
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
 		status, IFNULL(is_receptionist,0), IFNULL(conversation_id,0), IFNULL(cloned_from_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
-		run_started_at, created_at, updated_at`
+		IFNULL(task_unread,0), run_started_at, created_at, updated_at`
 
 // ListManagedAgents 全部数字员工(最新更新在前)。
 func (s *Store) ListManagedAgents(ctx context.Context) ([]ManagedAgent, error) {
@@ -538,6 +540,10 @@ func (s *Store) DeleteManagedAgent(ctx context.Context, id int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	// 先清群聊成员，避免测试/解聘后残留挂在 group_chat_members
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_chat_members WHERE agent_id=?`, id); err != nil {
+		return err
+	}
 	if a.ConversationID > 0 {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE id=?`, a.ConversationID); err != nil {
 			return err
@@ -554,6 +560,7 @@ func (s *Store) DeleteManagedAgent(ctx context.Context, id int64) error {
 
 // SetManagedAgentStatus 更新运行状态。
 // running / compressing 视为工作中：保留已有 run_started_at，否则置 NOW()；结束态清空时钟并写 last_run_ms。
+// 从忙碌态落到 idle/error 时自动置 task_unread=1（查看对话后清除）。
 func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, lastErr string, runMs int, convID int64) error {
 	if status == "running" || status == "compressing" {
 		_, err := s.db.ExecContext(ctx,
@@ -563,10 +570,42 @@ func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, las
 			status, lastErr, runMs, convID, id)
 		return err
 	}
+	// MySQL：同一 UPDATE 中右侧的 status 仍是旧值，可据此判断「忙→闲」打未读
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE managed_agents SET status=?, last_error=?, last_run_ms=?, run_started_at=NULL,
-		 conversation_id=IFNULL(NULLIF(?,0), conversation_id) WHERE id=?`,
-		status, lastErr, runMs, convID, id)
+		 conversation_id=IFNULL(NULLIF(?,0), conversation_id),
+		 task_unread = IF(
+		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
+		   1, IFNULL(task_unread,0)
+		 )
+		 WHERE id=?`,
+		status, lastErr, runMs, convID, status, id)
+	return err
+}
+
+// ClearManagedAgentTaskUnread 清除任务完成未读（PC / 移动 / 灵动岛查看时调用）。
+func (s *Store) ClearManagedAgentTaskUnread(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET task_unread=0 WHERE id=? AND IFNULL(task_unread,0)<>0`, id)
+	return err
+}
+
+// EnsureTaskUnreadSchema 幂等增加 task_unread 列。
+func (s *Store) EnsureTaskUnreadSchema(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'task_unread'`,
+	).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`ALTER TABLE managed_agents ADD COLUMN task_unread TINYINT NOT NULL DEFAULT 0 AFTER last_run_ms`)
 	return err
 }
 
