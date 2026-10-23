@@ -293,6 +293,37 @@ export function listPermissionsMirror(
   }
 }
 
+/** List pending permissions across one instance, excluding expired and removed-agent rows. */
+export function listInstancePermissionsMirror(
+  db: RelayDatabase,
+  instanceId: string,
+  nowMs: number = Date.now(),
+): { ok: true; items: PublicMirrorPermission[] } | { ok: false; status: number; error: string } {
+  if (!getInstanceRow(db, instanceId)) {
+    return { ok: false, status: 404, error: 'Instance not found' }
+  }
+  const rows = db
+    .prepare(
+      `SELECT p.request_id, p.agent_id, p.conversation_id, p.tool_name, p.summary,
+              p.note, p.meaning, p.risk, p.created_at, p.deadline, p.synced_at
+       FROM permissions_mirror p
+       INNER JOIN agents_mirror a
+         ON a.instance_id = p.instance_id AND a.agent_id = p.agent_id
+       WHERE p.instance_id = ?
+       ORDER BY p.synced_at DESC, p.request_id ASC`,
+    )
+    .all(instanceId) as PublicMirrorPermission[]
+
+  return {
+    ok: true,
+    items: rows.filter((row) => {
+      if (!row.deadline) return true
+      const deadline = Date.parse(row.deadline)
+      return !Number.isFinite(deadline) || deadline > nowMs
+    }),
+  }
+}
+
 /** Upsert messages by (instance_id, message_id) */
 export function upsertMessagesMirror(
   db: RelayDatabase,

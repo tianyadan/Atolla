@@ -284,4 +284,47 @@ describe('mirror snapshot ingest and site read', () => {
     expect(after.status).toBe(200)
     expect(after.body.items).toEqual([])
   })
+
+  it('lists live pending permissions for an unlocked instance', async () => {
+    await register()
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+    const future = new Date(Date.now() + 60_000).toISOString()
+    const expired = new Date(Date.now() - 60_000).toISOString()
+
+    await devicePost('/api/device/snapshot/agents', {
+      agents: [
+        { agent_id: 'agent-a', display_name: 'A', status: 'idle' },
+        { agent_id: 'agent-b', display_name: 'B', status: 'idle' },
+      ],
+    })
+    await devicePost('/api/device/snapshot/permissions', {
+      permissions: [
+        { request_id: 'req-b', agent_id: 'agent-b', summary: 'deploy', deadline: future },
+        { request_id: 'req-a', agent_id: 'agent-a', summary: 'write', deadline: future },
+        { request_id: 'req-expired', agent_id: 'agent-a', summary: 'old', deadline: expired },
+      ],
+    })
+
+    const withoutUnlock = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/permissions/pending`)
+      .set('Authorization', `Bearer ${token}`)
+    expect(withoutUnlock.status).toBe(403)
+
+    const list = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/permissions/pending`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(list.status).toBe(200)
+    expect(list.body.items.map((item: { request_id: string }) => item.request_id)).toEqual([
+      'req-a',
+      'req-b',
+    ])
+
+    const unknown = await request(app)
+      .get('/api/instances/missing-instance/permissions/pending')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(unknown.status).toBe(404)
+  })
 })
