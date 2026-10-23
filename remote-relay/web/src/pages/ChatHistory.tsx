@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core'
 import { Keyboard } from '@capacitor/keyboard'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   askAgent,
   clearToken,
@@ -135,6 +135,8 @@ function mergeServerMessages(prev: LocalBubble[], page: PublicMirrorMessage[]): 
 /** Chat with sticky agent header, bottom-anchored thread, older-on-scroll-up */
 export function ChatHistoryPage() {
   const { instanceId = '', agentId = '' } = useParams()
+  const [searchParams] = useSearchParams()
+  const approvalRequestId = searchParams.get('approval_request_id') || ''
   useUnlockHeartbeat(instanceId || undefined)
   const navigate = useNavigate()
   const [agent, setAgent] = useState<PublicMirrorAgent | null>(null)
@@ -455,13 +457,25 @@ export function ChatHistoryPage() {
       for (const id of [...decided]) {
         if (!items.some((p) => p.request_id === id)) decided.delete(id)
       }
-      setPermQueue(items.filter((p) => !decided.has(p.request_id)))
+      const available = items.filter((p) => !decided.has(p.request_id))
+      if (approvalRequestId) {
+        const targetIndex = available.findIndex((p) => p.request_id === approvalRequestId)
+        if (targetIndex >= 0) {
+          const target = available[targetIndex]
+          setPermQueue([target, ...available.filter((_, index) => index !== targetIndex)])
+        } else {
+          setPermQueue(available)
+          setError('该审批已处理或已过期')
+        }
+      } else {
+        setPermQueue(available)
+      }
     } catch (err) {
       if (!handleApiError(err)) {
         /* keep last queue; transient offline is ok */
       }
     }
-  }, [instanceId, agentId, navigate])
+  }, [approvalRequestId, instanceId, agentId, navigate])
 
   useEffect(() => {
     if (!instanceId || !agentId) return
@@ -720,6 +734,12 @@ export function ChatHistoryPage() {
     try {
       await decidePermission(instanceId, agentId, rid, behavior)
       invalidateIslandSync()
+      if (approvalRequestId === rid) {
+        navigate(
+          `/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/chat`,
+          { replace: true },
+        )
+      }
     } catch (err) {
       decidedIdsRef.current.delete(rid)
       if (!handleApiError(err)) {
