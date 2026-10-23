@@ -134,10 +134,10 @@ func (s *Service) syncAfterCompact(ctx context.Context, convID int64, keepLatest
 	}
 	// 自动同步不把员工打成「压缩记忆」，避免与手动压缩状态竞态导致二次全量清空
 	if !keepLatest && agentID > 0 && prevStatus != AgentStatusCompressing {
-		_ = s.Store.SetManagedAgentStatus(ctx, agentID, AgentStatusCompressing, "", 0, convID)
+		_ = s.setManagedAgentStatus(ctx, agentID, AgentStatusCompressing, "", 0, convID)
 	} else if keepLatest && agentID > 0 && prevStatus == "running" {
 		// 回合中自动压缩：短暂标记，结束后恢复 running
-		_ = s.Store.SetManagedAgentStatus(ctx, agentID, AgentStatusCompressing, "", 0, convID)
+		_ = s.setManagedAgentStatus(ctx, agentID, AgentStatusCompressing, "", 0, convID)
 	}
 
 	if err := s.Store.ClearConversationMessages(ctx, convID); err != nil {
@@ -190,15 +190,17 @@ func (s *Service) finishCompactAgentStatus(ctx context.Context, agentID int64, p
 		ms = 1
 	}
 	if syncErr != nil {
-		_ = s.Store.SetManagedAgentStatus(ctx, agentID, "error", syncErr.Error(), ms, convID)
+		_ = s.setManagedAgentStatus(ctx, agentID, "error", syncErr.Error(), ms, convID)
+		s.notifyAgentTerminal(ctx, agentID)
 		return
 	}
 	next := CompactStatusAfterSync(prevStatus)
 	if next == "running" {
-		_ = s.Store.SetManagedAgentStatus(ctx, agentID, "running", "", 0, convID)
+		_ = s.setManagedAgentStatus(ctx, agentID, "running", "", 0, convID)
 		return
 	}
-	_ = s.Store.SetManagedAgentStatus(ctx, agentID, "idle", "", ms, convID)
+	_ = s.setManagedAgentStatus(ctx, agentID, "idle", "", ms, convID)
+	s.notifyAgentTerminal(ctx, agentID)
 }
 
 // CompressConversation 对指定会话执行引擎原生压缩并同步平台历史。
@@ -243,7 +245,7 @@ func (s *Service) CompressManagedChat(ctx context.Context, agentID int64) error 
 	bin := a.BinPath
 	prev := a.Status
 	start := time.Now()
-	_ = s.Store.SetManagedAgentStatus(ctx, agentID, AgentStatusCompressing, "", 0, a.ConversationID)
+	_ = s.setManagedAgentStatus(ctx, agentID, AgentStatusCompressing, "", 0, a.ConversationID)
 	err = s.CompressConversation(ctx, a.ConversationID, a.Engine, bin, dir)
 	if err != nil {
 		ms := int(time.Since(start).Milliseconds())
@@ -252,7 +254,8 @@ func (s *Service) CompressManagedChat(ctx context.Context, agentID int64) error 
 		}
 		cur, _ := s.Store.GetManagedAgent(ctx, agentID)
 		if cur != nil && cur.Status == AgentStatusCompressing {
-			_ = s.Store.SetManagedAgentStatus(ctx, agentID, "error", err.Error(), ms, a.ConversationID)
+			_ = s.setManagedAgentStatus(ctx, agentID, "error", err.Error(), ms, a.ConversationID)
+			s.notifyAgentTerminal(ctx, agentID)
 		}
 		return err
 	}

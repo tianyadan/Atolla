@@ -104,6 +104,8 @@ export function isEnqueueActionAllowed(
   instanceActions: string[],
 ): boolean {
   if (!V1_EXECUTABLE.has(action)) return false
+  // 已读回执幂等且安全：心跳 actions 偶发落后时仍允许入队，避免 App 未读卡死
+  if (action === 'agent.mark_read') return true
   return instanceActions.includes(action)
 }
 
@@ -303,7 +305,8 @@ async function waitCommandTerminal(
   timeoutMs: number,
   clock: CommandClock,
 ): Promise<{ status: string; result_json: string | null } | undefined> {
-  const safeWait = Math.max(0, Math.min(timeoutMs, 120_000))
+  // 普通 RPC ≤2min；JEV 安装等长任务可到 45min
+  const safeWait = Math.max(0, Math.min(timeoutMs, 2_700_000))
   const deadline = clock.now() + safeWait
 
   let row = readCommandOutcome(db, commandId)

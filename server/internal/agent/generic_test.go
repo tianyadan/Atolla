@@ -134,3 +134,29 @@ func TestCursorResultAppendNoDup(t *testing.T) {
 		t.Fatalf("new conclusion: %q", g)
 	}
 }
+
+func TestCursorResultAppendFuzzyOverlap(t *testing.T) {
+	// 空白/换行不一致时，精确 HasSuffix 会失败；旧逻辑会整段再推一遍造成「结论 + 过程 + 结论」
+	prev := "**App 里要重新装一次才会看到。**\n\n源码已有七动作像素水母；手机仍是旧包则看不到。\n\n灵动岛是原生另一套精灵图。"
+	final := "先查移动端水母头像的渲染条件和显示入口。\n" + strings.ReplaceAll(prev, "\n\n", "\n")
+	if g := cursorResultAppend(prev, final); g != "" {
+		t.Fatalf("fuzzy overlap should not append: %q", g)
+	}
+	// result 末尾标点略不同
+	prev2 := "请在 Xcode 覆盖安装后打开数字人列表查看像素水母。"
+	final2 := "先确认中继在线。\n请在 Xcode 覆盖安装后打开数字人列表查看像素水母"
+	if g := cursorResultAppend(prev2, final2); g != "" {
+		t.Fatalf("near-suffix overlap: %q", g)
+	}
+}
+
+func TestCursorAlreadyStreamed(t *testing.T) {
+	streamed := "先查移动端水母头像的渲染条件和显示入口。\n**App 里要重新装一次才会看到。**\n请用 Xcode Run 覆盖安装。"
+	piece := "**App 里要重新装一次才会看到。**\n请用 Xcode Run 覆盖安装。"
+	if !cursorAlreadyStreamed(streamed, piece) {
+		t.Fatal("duplicate final assistant piece should be detected")
+	}
+	if cursorAlreadyStreamed(streamed, "好的，已记下。") {
+		t.Fatal("short new sentence must not be treated as duplicate")
+	}
+}

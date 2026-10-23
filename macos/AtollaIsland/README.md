@@ -64,7 +64,7 @@ FOREGROUND=1 ./scripts/run.sh
 ## 与 Atolla 的衔接
 
 登录管理台后写入 `~/.atolla/island.json`（API / Web + Token）。  
-岛轮询 `GET /api/admin/island/busy`，点击打开 `/?agent=<id>`。
+岛每 2.5 秒轮询 `GET /api/admin/island/events`，按“报错 > 命令审批 > 运行中 > 已完成”展示当前最高优先级；点击可定位数字人，审批事件会额外携带 `approval_request_id` 精确定位命令。
 
 ## 目录结构
 

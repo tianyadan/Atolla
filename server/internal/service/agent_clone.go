@@ -205,7 +205,7 @@ func (s *Service) RetryCloneInit(ctx context.Context, cloneID int64) (*store.Man
 	if a.Status == AgentStatusInitializing {
 		return nil, ErrAgentInitializing
 	}
-	_ = s.Store.SetManagedAgentStatus(ctx, cloneID, AgentStatusInitializing, "", 0, a.ConversationID)
+	_ = s.setManagedAgentStatus(ctx, cloneID, AgentStatusInitializing, "", 0, a.ConversationID)
 	s.startCloneInit(cloneID, a.ClonedFromID)
 	return s.Store.GetManagedAgent(ctx, cloneID)
 }
@@ -244,7 +244,7 @@ func (s *Service) cancelCloneJob(id int64) {
 
 func (s *Service) runCloneInit(ctx context.Context, cloneID, srcID int64) {
 	fail := func(msg string) {
-		_ = s.Store.SetManagedAgentStatus(context.Background(), cloneID, "error", msg, 0, 0)
+		_ = s.setManagedAgentStatus(context.Background(), cloneID, "error", msg, 0, 0)
 	}
 	deadline := time.Now().Add(cloneWaitTimeout)
 	for {
@@ -324,5 +324,5 @@ func (s *Service) runCloneInit(ctx context.Context, cloneID, srcID int64) {
 		fail("隐藏初始化失败: " + askErr.Error())
 		return
 	}
-	_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(ctx), cloneID, "idle", "", 0, clone.ConversationID)
+	_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), cloneID, "idle", "", 0, clone.ConversationID)
 }

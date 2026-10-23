@@ -8,12 +8,14 @@ import {
   clearViewerPresence,
   decidePermission,
   fetchAgents,
+  fetchJevosSettings,
   fetchMessages,
   fetchPendingPermissions,
   fetchTasks,
   setAgentAutoApproveAll,
   setAgentAutoReview,
   setAgentTaskPlan,
+  markAgentTaskRead,
   setViewerPresence,
   stopAgent,
   syncMessages,
@@ -32,6 +34,7 @@ import { PageShell } from '../components/PageShell'
 import { SettingsIcon } from '../components/SettingsIcon'
 import { byLabel, parseCommandMessage } from '../utils/commandMessage'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
+import { tapHaptic } from '../haptics'
 import { loadChatDraft, saveChatDraft } from '../utils/draftCache'
 import {
   appendPendingImages,
@@ -153,6 +156,9 @@ export function ChatHistoryPage() {
   const [progressOpen, setProgressOpen] = useState(false)
   const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
+  /** 电脑端 JEV 已开启且健康：自动审核前置 */
+  const [jevReady, setJevReady] = useState(false)
+  const [jevHint, setJevHint] = useState('')
   const [autoReviewBusy, setAutoReviewBusy] = useState(false)
   const [approveAllBusy, setApproveAllBusy] = useState(false)
   const [permQueue, setPermQueue] = useState<PublicMirrorPermission[]>([])
@@ -192,6 +198,9 @@ export function ChatHistoryPage() {
   /** 发送前已经在列表里的助手消息，避免把上一轮回复当成这一轮的完成。 */
   const replySeenRef = useRef<Set<string>>(new Set())
   const awaitingRef = useRef(false)
+  /** 当前路由数字人；异步 sync/refresh 返回后必须仍匹配，否则会把 A 的消息灌进 B */
+  const routeAgentRef = useRef(agentId)
+  routeAgentRef.current = agentId
 
   const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
 
@@ -316,13 +325,16 @@ export function ChatHistoryPage() {
   /** Refresh agent / tasks / newest message page */
   const refresh = useCallback(async () => {
     if (!instanceId || !agentId) return
+    const forAgent = agentId
     try {
       const [agents, page, taskList] = await Promise.all([
         fetchAgents(instanceId),
-        fetchMessages(instanceId, agentId, { limit: PAGE_SIZE }),
-        fetchTasks(instanceId, agentId),
+        fetchMessages(instanceId, forAgent, { limit: PAGE_SIZE }),
+        fetchTasks(instanceId, forAgent),
       ])
-      const found = agents.find((a) => a.agent_id === agentId) ?? null
+      // 切换数字人后丢弃过期响应，避免 A 的镜像消息合并进 B 的窗口
+      if (routeAgentRef.current !== forAgent) return
+      const found = agents.find((a) => a.agent_id === forAgent) ?? null
       setAgent(() => {
         if (!found) return found
         // 镜像还是上一轮的 idle 时，本机已发出的消息仍应显示忙碌。
@@ -339,17 +351,19 @@ export function ChatHistoryPage() {
       setMessages((prev) => mergeServerMessages(prev, page.messages))
       setError(null)
     } catch (err) {
+      if (routeAgentRef.current !== forAgent) return
       if (!handleApiError(err)) {
         setError(err instanceof Error ? err.message : '加载失败')
       }
     } finally {
-      setLoading(false)
+      if (routeAgentRef.current === forAgent) setLoading(false)
     }
   }, [instanceId, agentId, navigate])
 
   /** Prefetch older messages when user scrolls near top */
   const loadOlder = useCallback(async () => {
     if (!instanceId || !agentId || loadingOlderRef.current || !hasMoreOlder) return
+    const forAgent = agentId
     const oldest = messages.find((m) => !m.pending)
     if (!oldest) return
 
@@ -360,10 +374,11 @@ export function ChatHistoryPage() {
     loadingOlderRef.current = true
     setLoadingOlder(true)
     try {
-      const page = await fetchMessages(instanceId, agentId, {
+      const page = await fetchMessages(instanceId, forAgent, {
         limit: PAGE_SIZE,
         before_id: oldest.message_id,
       })
+      if (routeAgentRef.current !== forAgent) return
       setHasMoreOlder(page.has_more)
       if (page.messages.length === 0) return
       setMessages((prev) => mergeServerMessages(prev, page.messages))
@@ -373,41 +388,48 @@ export function ChatHistoryPage() {
         node.scrollTop = node.scrollHeight - prevHeight + prevTop
       })
     } catch (err) {
+      if (routeAgentRef.current !== forAgent) return
       if (!handleApiError(err)) {
         setError(err instanceof Error ? err.message : '加载历史失败')
       }
     } finally {
       loadingOlderRef.current = false
-      setLoadingOlder(false)
+      if (routeAgentRef.current === forAgent) setLoadingOlder(false)
     }
   }, [instanceId, agentId, hasMoreOlder, messages, navigate])
 
   /** Enqueue Mac→relay message sync then read mirror (needed: mirror is not live SSE) */
   const syncThenRefresh = useCallback(async () => {
     if (!instanceId || !agentId) return
+    const forAgent = agentId
     try {
-      await syncMessages(instanceId, agentId, { limit: SYNC_LIMIT })
+      await syncMessages(instanceId, forAgent, { limit: SYNC_LIMIT })
     } catch {
       /* offline Mac: still try mirror read */
     }
+    if (routeAgentRef.current !== forAgent) return
     await refresh()
   }, [instanceId, agentId, refresh])
 
   useEffect(() => {
     if (!instanceId || !agentId) return
     let cancelled = false
+    const forAgent = agentId
     setLoading(true)
     setMessages([])
     setPermQueue([])
     setHasMoreOlder(false)
     olderSeededRef.current = false
     stickToBottomRef.current = true
+    // 切换对话时作废上一数字人的延迟补拉，避免把 A 的后续输出灌进 B
+    followUpTimersRef.current.forEach((id) => window.clearTimeout(id))
+    followUpTimersRef.current = []
     void (async () => {
-      if (!cancelled) await syncThenRefresh()
+      if (!cancelled && routeAgentRef.current === forAgent) await syncThenRefresh()
     })()
     // Keep pulling Mac messages into the mirror while this chat is open.
     const poll = window.setInterval(() => {
-      if (!cancelled) void syncThenRefresh()
+      if (!cancelled && routeAgentRef.current === forAgent) void syncThenRefresh()
     }, POLL_MS)
     return () => {
       cancelled = true
@@ -416,6 +438,16 @@ export function ChatHistoryPage() {
       followUpTimersRef.current = []
     }
   }, [instanceId, agentId, syncThenRefresh])
+
+  /** 进入对话页时清未读（仅一次；与 viewer 心跳分离） */
+  useEffect(() => {
+    if (!instanceId || !agentId) return
+    void markAgentTaskRead(instanceId, agentId)
+      .then(() => invalidateIslandSync())
+      .catch(() => {
+        /* Mac offline: ignore */
+      })
+  }, [instanceId, agentId])
 
   /** Report phone viewing presence to Mac (PC shows mobile_viewing icon) */
   useEffect(() => {
@@ -450,8 +482,10 @@ export function ChatHistoryPage() {
   /** Poll pending permission cards (Mac → relay mirror) */
   const refreshPerms = useCallback(async () => {
     if (!instanceId || !agentId) return
+    const forAgent = agentId
     try {
-      const items = await fetchPendingPermissions(instanceId, agentId)
+      const items = await fetchPendingPermissions(instanceId, forAgent)
+      if (routeAgentRef.current !== forAgent) return
       const decided = decidedIdsRef.current
       // 服务端已无的 id 从本机黑名单清掉
       for (const id of [...decided]) {
@@ -471,6 +505,7 @@ export function ChatHistoryPage() {
         setPermQueue(available)
       }
     } catch (err) {
+      if (routeAgentRef.current !== forAgent) return
       if (!handleApiError(err)) {
         /* keep last queue; transient offline is ok */
       }
@@ -594,6 +629,9 @@ export function ChatHistoryPage() {
     const q = question.trim()
     if (sending) return
     if (!q && pendingImages.length === 0) return
+    const forAgent = agentId
+    const forInstance = instanceId
+    tapHaptic()
     setSending(true)
     setError(null)
     stickToBottomRef.current = true
@@ -607,10 +645,11 @@ export function ChatHistoryPage() {
     const optimisticId = `local-${Date.now()}`
     try {
       const atts = await ensureUploaded(pendingImages)
+      if (routeAgentRef.current !== forAgent) return
       const displayQ = q || (atts.length ? '请查看图片' : '')
       const optimistic: LocalBubble = {
         message_id: optimisticId,
-        agent_id: agentId,
+        agent_id: forAgent,
         role: 'user',
         content: displayQ,
         payload: atts.length ? { attachments: atts } : {},
@@ -620,16 +659,20 @@ export function ChatHistoryPage() {
       }
       setMessages((prev) => sortMessages([...prev, optimistic]))
       setQuestion('')
-      saveChatDraft(instanceId, agentId, '')
+      saveChatDraft(forInstance, forAgent, '')
       revokePendingImages(pendingImages)
       setPendingImages([])
-      await askAgent(instanceId, agentId, q, atts)
+      await askAgent(forInstance, forAgent, q, atts)
+      if (routeAgentRef.current !== forAgent) return
       await syncThenRefresh()
       followUpTimersRef.current.forEach((id) => window.clearTimeout(id))
       followUpTimersRef.current = [2_000, 6_000, 12_000].map((ms) =>
-        window.setTimeout(() => void syncThenRefresh(), ms),
+        window.setTimeout(() => {
+          if (routeAgentRef.current === forAgent) void syncThenRefresh()
+        }, ms),
       )
     } catch (err) {
+      if (routeAgentRef.current !== forAgent) return
       awaitingRef.current = false
       setAwaitingReply(false)
       if (!handleApiError(err)) {
@@ -641,7 +684,7 @@ export function ChatHistoryPage() {
         )
       }
     } finally {
-      setSending(false)
+      if (routeAgentRef.current === forAgent) setSending(false)
     }
   }
 
@@ -685,9 +728,36 @@ export function ChatHistoryPage() {
     }
   }
 
+  /** 拉取电脑 JEV 是否可用 */
+  async function loadJevReady(): Promise<boolean> {
+    try {
+      const st = await fetchJevosSettings(instanceId, { force: true })
+      const ok = !!st.enabled && !!st.healthy
+      setJevReady(ok)
+      setJevHint(ok ? '' : st.detail || '请先在「功能 → 设置 → JEV」开启')
+      return ok
+    } catch {
+      setJevReady(false)
+      setJevHint('无法检测 JEV 状态')
+      return false
+    }
+  }
+
+  useEffect(() => {
+    if (approveSettingsOpen) void loadJevReady()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approveSettingsOpen, instanceId])
+
   /** Toggle「自动审核」on Mac */
   async function onToggleAutoReview(next: boolean) {
     if (!agent || autoReviewBusy || approveAllOn) return
+    if (next) {
+      const ok = jevReady || (await loadJevReady())
+      if (!ok) {
+        setError(jevHint || '请先在「功能 → 设置 → JEV」开启')
+        return
+      }
+    }
     setAutoReviewBusy(true)
     try {
       await setAgentAutoReview(instanceId, agentId, next)
@@ -1139,12 +1209,16 @@ export function ChatHistoryPage() {
         <label className="policy-row">
           <div>
             <div className="policy-label">自动审核</div>
-            <p className="muted policy-hint">开启后由 AI 审核非常规命令（仍可能弹窗）</p>
+            <p className="muted policy-hint">
+              {jevReady
+                ? '开启后由本地 JEV 审核非常规命令（仍可能弹窗）'
+                : `需先开启 JEV：${jevHint || '请到「功能 → 设置」安装并打开胶囊'}`}
+            </p>
           </div>
           <input
             type="checkbox"
             checked={autoReviewOn}
-            disabled={autoReviewBusy || approveAllOn || !agent}
+            disabled={autoReviewBusy || approveAllOn || !agent || !jevReady}
             onChange={(e) => void onToggleAutoReview(e.target.checked)}
           />
         </label>

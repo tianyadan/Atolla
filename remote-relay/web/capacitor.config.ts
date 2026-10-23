@@ -12,7 +12,8 @@ const config: CapacitorConfig = {
     // never：WebView 铺满屏幕，由 CSS safe-area 自己避让刘海/Home 条
     contentInset: 'never',
     preferredContentMode: 'mobile',
-    backgroundColor: '#09090b',
+    // 冷启动白底：与 LaunchScreen / SplashOverlay 一致，避免首帧露深色
+    backgroundColor: '#FFFFFF',
   },
   server: {
     androidScheme: 'https',
@@ -26,12 +27,16 @@ const config: CapacitorConfig = {
       enabled: true,
     },
     SplashScreen: {
+      // true + 时长兜底：即使 JS hide 失败也不会永久卡在 LaunchScreen
+      // React 就绪后仍会立刻 SplashScreen.hide() 做无缝衔接
       launchAutoHide: true,
-      backgroundColor: '#09090b',
+      launchShowDuration: 2500,
+      backgroundColor: '#FFFFFF',
       showSpinner: false,
     },
     StatusBar: {
-      style: 'DARK',
+      // LIGHT = 深色图标/文字，适配白色启动屏（@capacitor/status-bar Style.Light）
+      style: 'LIGHT',
     },
     Keyboard: {
       // none + JS 监听键盘高度，避免全面屏下输入框被挡

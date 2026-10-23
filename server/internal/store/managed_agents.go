@@ -570,10 +570,15 @@ func (s *Store) DeleteManagedAgent(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// SetManagedAgentStatus 更新运行状态。
-// running / compressing 视为工作中：保留已有 run_started_at，否则置 NOW()；结束态清空时钟并写 last_run_ms。
-// 从忙碌态落到 idle/error 时写入最新终态快照（查看对话后清除）。
+// SetManagedAgentStatus 更新运行状态（忙→终态时默认写入未读快照）。
 func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, lastErr string, runMs int, convID int64) error {
+	return s.SetManagedAgentStatusUnread(ctx, id, status, lastErr, runMs, convID, true)
+}
+
+// SetManagedAgentStatusUnread 更新运行状态。
+// markUnread=false 时：忙→idle/error 不写未读（用户正停留在该对话）。
+// running / compressing 视为工作中：保留已有 run_started_at，否则置 NOW()；结束态清空时钟并写 last_run_ms。
+func (s *Store) SetManagedAgentStatusUnread(ctx context.Context, id int64, status, lastErr string, runMs int, convID int64, markUnread bool) error {
 	if status == "running" || status == "compressing" {
 		_, err := s.db.ExecContext(ctx,
 			`UPDATE managed_agents SET status=?, last_error=?, last_run_ms=?,
@@ -582,34 +587,42 @@ func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, las
 			status, lastErr, runMs, convID, id)
 		return err
 	}
+	unreadFlag := 0
+	if markUnread {
+		unreadFlag = 1
+	}
 	// status 放在最后赋值，前面的表达式才能依据旧状态判断「忙→终态」。
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE managed_agents SET last_error=?, last_run_ms=?, run_started_at=NULL,
 		 conversation_id=IFNULL(NULLIF(?,0), conversation_id),
 		 task_unread = IF(
 		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
-		   1, IFNULL(task_unread,0)
+		   ?, IFNULL(task_unread,0)
 		 ),
 		 task_unread_kind = IF(
 		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
-		   IF(?='error','error','completed'), task_unread_kind
+		   IF(?=0, '', IF(?='error','error','completed')), task_unread_kind
 		 ),
 		 task_unread_at = IF(
 		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
-		   NOW(), task_unread_at
+		   IF(?=0, NULL, NOW()), task_unread_at
 		 ),
 		 task_unread_duration_ms = IF(
 		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
-		   ?, task_unread_duration_ms
+		   IF(?=0, 0, ?), task_unread_duration_ms
 		 ),
 		 task_unread_summary = IF(
 		   status IN ('running','busy','waiting','插话中','compressing') AND ? IN ('idle','error'),
-		   IF(?='error', ?, ''), task_unread_summary
+		   IF(?=0, '', IF(?='error', ?, '')), task_unread_summary
 		 ),
 		 status=?
 		 WHERE id=?`,
 		lastErr, runMs, convID,
-		status, status, status, status, status, runMs, status, status, lastErr,
+		status, unreadFlag,
+		status, unreadFlag, status,
+		status, unreadFlag,
+		status, unreadFlag, runMs,
+		status, unreadFlag, status, lastErr,
 		status, id)
 	return err
 }

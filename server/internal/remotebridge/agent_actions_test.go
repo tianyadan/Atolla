@@ -68,6 +68,9 @@ func (s *stubRuntime) UninstallAgentSkill(context.Context, int64, string) ([]sto
 	return nil, nil
 }
 
+func (s *stubRuntime) JevosSettingsGet(bool) (any, error)             { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsInstall(string) (any, error)        { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsSet(bool) (any, error)              { return map[string]any{}, nil }
 func (s *stubRuntime) ListAgentLegacyMounts(context.Context, int64) ([]store.AgentLegacyMemoryMount, error) {
 	return nil, nil
 }

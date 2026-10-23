@@ -198,7 +198,8 @@ function statusClass(st) {
  */
 export default function ManagedAgentsPanel({
   authHeaders, onUnauthorized, active = true, onOpenWorkflowRun, onOpenGroupChat,
-  focusAgentId = 0, onFocusConsumed, openHire = false, onHireConsumed, openSettings = false,
+  focusAgentId = 0, onFocusConsumed, focusApprovalRequestId = '', onApprovalFocusConsumed,
+  openHire = false, onHireConsumed, openSettings = false,
 }) {
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
@@ -252,22 +253,29 @@ export default function ManagedAgentsPanel({
   const [autoSaving, setAutoSaving] = useState(false)
   const [approveAllSaving, setApproveAllSaving] = useState(false)
   const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
+  /** JEV 胶囊开启且健康：自动审核前置 */
+  const [jevReady, setJevReady] = useState(false)
+  const [jevHint, setJevHint] = useState('')
   const [taskPlanSaving, setTaskPlanSaving] = useState(false)
   const [, setTick] = useState(0)
   const [sessVer, setSessVer] = useState(0)
   const boxRef = useRef(null)
   /** 列表请求序号：慢返回的旧轮询不能盖掉刚创建出来的员工。 */
   const agentsLoadGen = useRef(0)
+  /** loadDetail 世代号：切换数字人后丢弃过期拉取，避免写错会话 */
+  const detailLoadGen = useRef(0)
   const stickBottomRef = useRef(true)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
 
   const selected = agents.find((a) => a.id === selectedId) || null
   const initializing = selected?.status === 'initializing'
+  // sessVer：外部 session patch 必须驱动重渲染，否则 permQueue 更新不刷新审批卡
+  void sessVer
   const sess = getAgentSession(selectedId)
   const loading = !!sess.loading
   const compressing = !!sess.compressing
-  const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog])
+  const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog, sessVer])
   const interrupting = !!sess.interrupting
   const permQueue = sess.permQueue || []
   const autoOn = !!sess.autoOn
@@ -307,6 +315,33 @@ export default function ManagedAgentsPanel({
     return () => clearInterval(t)
   }, [selectedId, permQueue.length])
 
+  // 运行中轮询挂起授权：SSE 若因会话重建漏推，仍能补上审批卡
+  // 绑定「当前选中且正在跑」的数字人 id，切换后不再把结果写进新窗口
+  useEffect(() => {
+    if (!loading || !selectedId || !active) return undefined
+    const agentId = selectedId
+    const pull = () => {
+      if (viewRef.current.selectedId !== agentId) return
+      const conv = getAgentSession(agentId).convId
+        || viewRef.current.agents.find((a) => a.id === agentId)?.conversation_id
+      if (!conv) return
+      fetch(`${API}/permissions/pending?conversation_id=${conv}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (viewRef.current.selectedId !== agentId) return
+          const items = d?.items || []
+          if (!items.length) return
+          patchAgentSession(agentId, {
+            permQueue: dedupPerm([...(getAgentSession(agentId).permQueue || []), ...items]),
+          })
+        })
+        .catch(() => {})
+    }
+    pull()
+    const t = window.setInterval(pull, 2000)
+    return () => window.clearInterval(t)
+  }, [loading, selectedId, active, selected?.conversation_id])
+
   /**
    * 刷新数字员工列表。
    * 默认保留当前选中：轮询/状态变更不得把对话窗拽到别人。
@@ -330,7 +365,28 @@ export default function ManagedAgentsPanel({
     if (!res.ok) return
     const d = await res.json()
     if (gen !== agentsLoadGen.current) return
-    const items = d.items || []
+    let items = d.items || []
+    // 正停留在某数字人对话时，终态不应进「未读」：本地立刻去掉并补一次 mark-read（防服务端竞态闪烁）
+    const viewingId = viewRef.current.selectedId
+    const viewing = viewingId ? items.find((a) => a.id === viewingId) : null
+    if (viewing && viewing.task_unread && !isAgentBusy(viewing)) {
+      items = items.map((a) => (
+        a.id === viewingId
+          ? {
+              ...a,
+              task_unread: false,
+              task_unread_kind: '',
+              task_unread_at: null,
+              task_unread_duration_ms: 0,
+              task_unread_summary: '',
+            }
+          : a
+      ))
+      fetch(`${API}/admin/agents/${viewingId}/mark-read`, {
+        method: 'POST',
+        headers: authHeadersRef.current(),
+      }).catch(() => {})
+    }
     setAgents(items)
     if (folderRes.ok) {
       const fd = await folderRes.json()
@@ -394,7 +450,7 @@ export default function ManagedAgentsPanel({
 
   const authHeadersRef = useRef(authHeaders)
   authHeadersRef.current = authHeaders
-  /** 告诉后端电脑是否正打开这个数字人的对话（含挂机未关页面） */
+  /** 告诉后端电脑是否正打开这个数字人的对话（含挂机未关页面）；仅存在感，不清未读 */
   useEffect(() => {
     const send = (agentId) => {
       fetch(`${API}/admin/agents/pc-viewer`, {
@@ -408,11 +464,21 @@ export default function ManagedAgentsPanel({
       return undefined
     }
     send(selectedId)
-    const timer = window.setInterval(() => send(selectedId), 12000)
+    // 终态跳过未读依赖 pc-viewer 心跳；略缩短以免任务结束时 TTL 误判已离开
+    const timer = window.setInterval(() => send(selectedId), 8000)
     return () => {
       window.clearInterval(timer)
       send(0)
     }
+  }, [active, selectedId])
+
+  /** 主动点选数字人时标记已读（切换选中才触发，非心跳） */
+  useEffect(() => {
+    if (!active || !selectedId) return undefined
+    fetch(`${API}/admin/agents/${selectedId}/mark-read`, {
+      method: 'POST',
+      headers: authHeadersRef.current(),
+    }).catch(() => {})
   }, [active, selectedId])
 
   async function loadDetail(id, { force = false } = {}) {
@@ -420,19 +486,21 @@ export default function ManagedAgentsPanel({
       if (!viewRef.current.selectedId) setTasks([])
       return
     }
+    const gen = ++detailLoadGen.current
     const local = getAgentSession(id)
     const [msgRes, taskRes] = await Promise.all([
       fetch(`${API}/admin/agents/${id}/messages?limit=${PAGE_SIZE}`, { headers: authHeaders() }),
       fetch(`${API}/admin/agents/${id}/tasks`, { headers: authHeaders() }),
     ])
+    // 已发起更新的 loadDetail：只丢弃「写 tasks UI」；会话 chatLog 仍按 id 写入，互不串台
     if (msgRes.status === 401 || taskRes.status === 401) { onUnauthorized?.(); return }
     const msgData = await msgRes.json().catch(() => ({}))
     const taskData = await taskRes.json().catch(() => ({}))
     if (!msgRes.ok) return
-    // 打开对话首页已在后端清未读；本地同步去掉蓝徽标 / 「未读」区
+    // 选中对话时 pc-viewer 已 mark-read；本地同步去掉蓝徽标 / 「未读」区
     setAgents((list) => list.map((a) => (a.id === id && a.task_unread ? { ...a, task_unread: false } : a)))
     // 任务条是全局状态：只更新「当前正在看」的那位，避免 A 刷新写到 B 的进度区
-    if (viewRef.current.selectedId === id) {
+    if (viewRef.current.selectedId === id && gen === detailLoadGen.current) {
       setTasks(taskData.items || [])
     }
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
@@ -452,7 +520,7 @@ export default function ManagedAgentsPanel({
         convId: msgData.conversation_id || 0,
       })
     }
-    // 补齐挂起授权
+    // 补齐挂起授权（始终写回请求的 id，不跟当前选中走）
     const conv = msgData.conversation_id || local.convId
     if (conv) {
       fetch(`${API}/permissions/pending?conversation_id=${conv}`)
@@ -471,33 +539,37 @@ export default function ManagedAgentsPanel({
 
   async function loadOlder() {
     if (!selectedId || sess.loadingMore || !sess.hasMore || loading) return
+    const agentId = selectedId
     const oldestId = chatLog.find((m) => m.id)?.id
     if (!oldestId) return
     const el = boxRef.current
     const prevH = el ? el.scrollHeight : 0
-    patchAgentSession(selectedId, { loadingMore: true })
+    patchAgentSession(agentId, { loadingMore: true })
     try {
       const res = await fetch(
-        `${API}/admin/agents/${selectedId}/messages?before_id=${oldestId}&limit=${PAGE_SIZE}`,
+        `${API}/admin/agents/${agentId}/messages?before_id=${oldestId}&limit=${PAGE_SIZE}`,
         { headers: authHeaders() },
       )
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json()
       const older = mapMsgs(d.items)
-      setAgentChatLog(selectedId, (prev) => {
+      // 始终写回发起加载的 agentId，切换选中也不会串到别人会话
+      setAgentChatLog(agentId, (prev) => {
         const ids = new Set(prev.map((m) => m.id).filter(Boolean))
         const merged = [...older.filter((m) => !ids.has(m.id)), ...prev]
         return merged
       })
-      patchAgentSession(selectedId, {
+      patchAgentSession(agentId, {
         hasMore: !!d.has_more,
-        totalMessages: d.total || sess.totalMessages,
+        totalMessages: d.total || getAgentSession(agentId).totalMessages,
       })
-      requestAnimationFrame(() => {
-        if (el) el.scrollTop = el.scrollHeight - prevH
-      })
+      if (viewRef.current.selectedId === agentId) {
+        requestAnimationFrame(() => {
+          if (el) el.scrollTop = el.scrollHeight - prevH
+        })
+      }
     } finally {
-      patchAgentSession(selectedId, { loadingMore: false })
+      patchAgentSession(agentId, { loadingMore: false })
     }
   }
 
@@ -522,6 +594,22 @@ export default function ManagedAgentsPanel({
     onFocusConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusAgentId, openSettings])
+
+  // 灵动岛审批深链：等目标会话的待审批队列拉取完成后，将指定命令提到首位。
+  useEffect(() => {
+    if (!focusApprovalRequestId || !selectedId || selectedId !== focusAgentId && focusAgentId) return
+    const queue = getAgentSession(selectedId).permQueue || []
+    const index = queue.findIndex((item) => item.request_id === focusApprovalRequestId)
+    if (index < 0) return
+    if (index > 0) {
+      patchAgentSession(selectedId, {
+        permQueue: [queue[index], ...queue.slice(0, index), ...queue.slice(index + 1)],
+      })
+    }
+    requestAnimationFrame(() => boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' }))
+    onApprovalFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusApprovalRequestId, selectedId, permQueue.length])
 
   useEffect(() => {
     if (!openHire) return
@@ -857,6 +945,13 @@ export default function ManagedAgentsPanel({
 
   async function toggleAuto(v) {
     if (!selected || autoSaving) return
+    if (v) {
+      const ok = jevReady || (await loadJevReady())
+      if (!ok) {
+        patchAgentSession(selected.id, { error: '请先在「设置 · JEV」安装并开启 JEV' })
+        return
+      }
+    }
     setAutoSaving(true)
     try {
       let conv = getAgentSession(selected.id).convId || selected.conversation_id
@@ -888,6 +983,31 @@ export default function ManagedAgentsPanel({
       patchAgentSession(selected.id, { autoOn: false, error: String(e.message || e) })
     } finally { setAutoSaving(false) }
   }
+
+  /** 拉取 JEV 是否已开启（自动审核前置）；返回是否可用 */
+  async function loadJevReady() {
+    try {
+      const res = await fetch(`${API}/admin/jevos/settings?force=1`, { headers: authHeaders() })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return false
+      }
+      const d = await res.json().catch(() => ({}))
+      const ok = !!d.enabled && !!d.healthy
+      setJevReady(ok)
+      setJevHint(ok ? '' : (d.detail || '请先在「设置 · JEV」安装并开启'))
+      return ok
+    } catch {
+      setJevReady(false)
+      setJevHint('无法检测 JEV 状态')
+      return false
+    }
+  }
+
+  useEffect(() => {
+    if (approveSettingsOpen) void loadJevReady()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approveSettingsOpen])
 
   /** 开关「命令全部审批通过」并落库 */
   async function toggleApproveAll(v) {
@@ -1519,9 +1639,12 @@ export default function ManagedAgentsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
     [filteredAgents, sessVer],
   )
-  /** 任务完成未读（非忙碌）；系统分类「未读」 */
+  /** 任务完成未读（非忙碌）；按完成时间倒序：越早越靠后 */
   const unreadAgents = useMemo(
-    () => filteredAgents.filter((a) => !!a.task_unread && !isAgentBusy(a)),
+    () =>
+      filteredAgents
+        .filter((a) => !!a.task_unread && !isAgentBusy(a))
+        .sort((a, b) => unreadAtMs(b) - unreadAtMs(a)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
     [filteredAgents, sessVer],
   )
@@ -1661,24 +1784,7 @@ export default function ManagedAgentsPanel({
           ) : null}
           {filteredAgents.length === 0 && <p className="empty">暂无匹配的数字员工</p>}
 
-          {busyAgents.length > 0 && (
-            <div className="ma-folder-block ma-running-block">
-              <div className="ma-folder-head">
-                <div className="ma-folder-title">
-                  <span className="ma-folder-title-text">运行中</span>
-                  <span className="ma-folder-title-right">
-                    <span className="admin-badge ma-folder-badge" title="运行中">
-                      {busyAgents.length}
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <div className="ma-folder-agents">
-                {busyAgents.map(renderAgentItem)}
-              </div>
-            </div>
-          )}
-
+          {/* 未读置顶，优先级高于运行中；浅蓝边框；点进对话后已读移出 */}
           {unreadAgents.length > 0 && (
             <div className="ma-folder-block ma-unread-block">
               <div className="ma-folder-head">
@@ -1693,6 +1799,24 @@ export default function ManagedAgentsPanel({
               </div>
               <div className="ma-folder-agents">
                 {unreadAgents.map(renderAgentItem)}
+              </div>
+            </div>
+          )}
+
+          {busyAgents.length > 0 && (
+            <div className="ma-folder-block ma-running-block">
+              <div className="ma-folder-head">
+                <div className="ma-folder-title">
+                  <span className="ma-folder-title-text">运行中</span>
+                  <span className="ma-folder-title-right">
+                    <span className="admin-badge ma-folder-badge" title="运行中">
+                      {busyAgents.length}
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <div className="ma-folder-agents">
+                {busyAgents.map(renderAgentItem)}
               </div>
             </div>
           )}
@@ -1916,7 +2040,7 @@ export default function ManagedAgentsPanel({
                   <p className="empty-chat">给同事下达任务后，需授权的命令会在此确认</p>
                 )}
                 {chatLog.map((m, i) => (
-                  <div key={m.id || i} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
+                  <div key={`${selectedId}-${m.id || `i${i}`}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
                     <div className="msg-label">
                       <span>
                         {(m.role === 'assistant' || m.role === 'invoke_quote') && (
@@ -2171,9 +2295,13 @@ export default function ManagedAgentsPanel({
             />
             <CapsuleToggle
               label="自动审核"
-              hint="开启后由 AI 审核非常规命令（仍可能弹窗）"
+              hint={
+                jevReady
+                  ? '开启后由本地 JEV 审核非常规命令（仍可能弹窗）'
+                  : `需先开启 JEV：${jevHint || '请到「设置 · JEV」安装并打开胶囊'}`
+              }
               checked={autoOn}
-              disabled={autoSaving || approveAllOn || workflowBusy}
+              disabled={autoSaving || approveAllOn || workflowBusy || !jevReady}
               onChange={toggleAuto}
             />
             <div className="modal-actions">
@@ -2681,7 +2809,9 @@ function dedupPerm(list) {
 
 function remainSec(p) {
   if (!p?.deadline) return 999
-  return Math.max(0, Math.floor((new Date(p.deadline).getTime() - Date.now()) / 1000))
+  const ms = new Date(p.deadline).getTime()
+  if (!Number.isFinite(ms)) return 999
+  return Math.max(0, Math.floor((ms - Date.now()) / 1000))
 }
 
 function byLabel(by) {
@@ -2793,6 +2923,21 @@ function countFolderBusy(list) {
     else if (getAgentSession(a.id).loading || a.status === 'running') direct += 1
   }
   return { direct, wf }
+}
+
+/** 未读完成时间毫秒；越早完成排序越靠后（倒序用） */
+function unreadAtMs(a) {
+  const raw = a?.task_unread_at
+  if (raw == null || raw === '') return 0
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw < 1e12 ? Math.floor(raw * 1000) : Math.floor(raw)
+  }
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) {
+    return n < 1e12 ? Math.floor(n * 1000) : Math.floor(n)
+  }
+  const ms = Date.parse(String(raw))
+  return Number.isFinite(ms) ? ms : 0
 }
 
 /** 是否「忙」（与移动端 agentBusy 对齐，并含本地 loading/compressing） */

@@ -198,7 +198,7 @@ func newID() string {
 	return "perm_" + hex.EncodeToString(b[:])
 }
 
-// Register 登记一个新请求(分类器已判定为 ask),并广播给订阅者。
+// Register 登记一个新请求(分类器已判定为 ask)。调用方补齐 Meaning/Risk 后须 AnnounceRequest。
 func (h *Hub) Register(tool string, input map[string]interface{}, summary, note string, convID int64, clientIP string) *Request {
 	r := &Request{
 		ID:        newID(),
@@ -212,15 +212,22 @@ func (h *Hub) Register(tool string, input map[string]interface{}, summary, note 
 		ch:        make(chan Decision, 1),
 	}
 	r.Deadline = r.CreatedAt.Add(h.WaitTimeout())
-	p := r.public()
 
 	h.mu.Lock()
 	if len(h.m) < 500 {
 		h.m[r.ID] = r
 	}
 	h.mu.Unlock()
-	h.broadcast(Event{Kind: "request", Req: &p})
 	return r
+}
+
+// AnnounceRequest 在 Meaning/Risk 写好后广播，避免 PC 审批卡缺字段。
+func (h *Hub) AnnounceRequest(r *Request) {
+	if h == nil || r == nil {
+		return
+	}
+	p := r.public()
+	h.broadcast(Event{Kind: "request", Req: &p})
 }
 
 // AutoApprove 记录一次由 AI 审核直接放行的授权(不弹窗),仅用于前端展示轨迹。

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -30,6 +31,15 @@ func TestPCViewerMarksChatOpen(t *testing.T) {
 	if s.agentChatOpen(3) {
 		t.Fatal("expired heartbeat should not count as viewing")
 	}
+}
+
+func TestNotifyAgentTerminalNoPanicWhenViewing(t *testing.T) {
+	s := &Service{}
+	s.SetPCViewer(9)
+	// Store 为空时只跳过清未读，不应 panic
+	s.notifyAgentTerminal(context.Background(), 9)
+	s.ClearPCViewer()
+	s.notifyAgentTerminal(context.Background(), 9)
 }
 
 func TestBarkKindAllowed(t *testing.T) {

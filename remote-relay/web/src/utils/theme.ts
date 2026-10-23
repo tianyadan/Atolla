@@ -1,3 +1,5 @@
+import { restoreStatusBarForTheme } from '../nativeShell'
+
 export type ThemeMode = 'light' | 'dark'
 
 const STORAGE_KEY = 'relay_theme'
@@ -32,6 +34,8 @@ export function setTheme(mode: ThemeMode): void {
     /* ignore */
   }
   applyTheme(mode)
+  // 原生壳：亮色用深色状态栏图标，暗色用浅色图标
+  void restoreStatusBarForTheme()
 }
 
 /** Toggle light ↔ dark */

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 final class IslandViewModel: ObservableObject {
-  @Published var agents: [BusyAgent] = []
+  @Published var presentation: IslandPresentation = .empty
   @Published var errorText: String = ""
   @Published var hasConfig = false
 
@@ -17,6 +17,7 @@ final class IslandViewModel: ObservableObject {
 
   var expandedWidth: CGFloat { notchWidth + IslandMetrics.expandedExtraWidth }
   var expandedHeight: CGFloat { IslandMetrics.expandedHeight(notchH: notchHeight) }
+  var events: [IslandEvent] { presentation.items }
 
   func start() {
     reloadConfig()
@@ -46,30 +47,39 @@ final class IslandViewModel: ObservableObject {
   func refresh() async {
     reloadConfig()
     guard hasConfig else {
-      agents = []
+      presentation = .empty
       errorText = "请先登录管理台以同步凭证"
       return
     }
     do {
-      agents = try await api.fetchBusy(config: config)
+      presentation = try await api.fetchEvents(config: config)
       errorText = ""
     } catch {
       errorText = error.localizedDescription
     }
   }
 
-  func open(_ agent: BusyAgent) {
-    // 未读项：先标已读再打开，随后从岛上移除
-    if agent.isUnread {
-      let id = agent.id
+  func open(_ event: IslandEvent) {
+    // 终态点击即视为已读；审批只有裁决或过期后才由后端移除。
+    if event.kind == .completed || event.kind == .error {
+      let agentID = event.agent_id
       let cfg = config
-      agents.removeAll { $0.id == id }
+      let remaining = events.filter { $0.id != event.id }
+      presentation = IslandPresentation(
+        active_kind: remaining.isEmpty ? nil : presentation.active_kind,
+        count: max(0, presentation.count - 1),
+        items: remaining
+      )
       Task {
-        await api.markRead(config: cfg, id: id)
+        await api.markRead(config: cfg, id: agentID)
         await refresh()
       }
     }
-    api.openAgent(config: config, id: agent.id)
+    api.openAgent(
+      config: config,
+      id: event.agent_id,
+      approvalRequestID: event.kind == .approval ? event.request_id : nil
+    )
   }
 
   /// 点主岛：直接 morph 展开

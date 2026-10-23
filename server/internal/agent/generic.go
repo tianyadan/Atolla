@@ -20,13 +20,14 @@ func GenericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 
 // GenericAskMeta 同 GenericAsk，支持 Cursor --resume 与 session/usage 回调。
 // history 保留参数以兼容旧调用；v0.2.18 起调用方应传空，由引擎 resume 维护上下文。
-func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, false)
+// extraEnv：AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承，避免同工作区串台。
+func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, false, extraEnv)
 }
 
 // GenericAskMetaTrusted 在用户已确认工作区信任后，为 Cursor Agent 附加 --trust 再执行。
-func GenericAskMetaTrusted(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, true)
+func GenericAskMetaTrusted(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, true, extraEnv)
 }
 
 // IsCursorWorkspaceTrustRequired 判断 CLI 是否因工作区未信任而中止（无交互模式无法自行确认）。
@@ -55,7 +56,7 @@ func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
 	return append(args, prompt)
 }
 
-func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, trust bool) (string, int, error) {
+func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, trust bool, extraEnv []string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -82,7 +83,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 
 	start := time.Now()
 	// 先真流式读 stream-json：中途 assistant 行立刻 onChunk，避免命令已展示而思考压到收尾。
-	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta)
+	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta, extraEnv)
 	if streamErr != nil && IsCursorWorkspaceTrustRequired(streamErr.Error()) {
 		return "", int(time.Since(start).Milliseconds()), streamErr
 	}
@@ -97,7 +98,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 	var lastErr error
 	var out string
 	for _, mode := range []string{"json", "text", "bare"} {
-		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust))
+		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust), extraEnv)
 		if lastErr != nil && IsCursorWorkspaceTrustRequired(lastErr.Error()) {
 			return "", int(time.Since(start).Milliseconds()), lastErr
 		}
@@ -124,7 +125,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // runCursorStreamJSON 边读边推送 assistant；result 优先作为最终落库正文。
 func runCursorStreamJSON(
 	ctx context.Context, bin, dir string, args []string,
-	onChunk func(string), onMeta MetaFn,
+	onChunk func(string), onMeta MetaFn, extraEnv []string,
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	AttachKillable(cmd)
@@ -132,6 +133,9 @@ func runCursorStreamJSON(
 		cmd.Dir = dir
 	}
 	cmd.Env = CleanEnv(os.Environ())
+	if len(extraEnv) > 0 {
+		cmd.Env = append(cmd.Env, extraEnv...)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", RunMeta{}, err
@@ -174,6 +178,12 @@ func runCursorStreamJSON(
 			}
 			delta := cursorAssistDelta(lastAssist, piece)
 			if delta == "" {
+				lastAssist = piece
+				continue
+			}
+			// 跨多条 assistant：终稿已在前文出现过则不再整段重放
+			if cursorAlreadyStreamed(streamed.String(), piece) {
+				lastAssist = piece
 				continue
 			}
 			if lastAssist != "" && !strings.HasPrefix(piece, lastAssist) {
@@ -237,7 +247,72 @@ func cursorAssistDelta(prev, next string) string {
 	if prev != "" && strings.HasSuffix(next, prev) {
 		return ""
 	}
+	// 空白差异下的「过程 + 旧结论」
+	if prev != "" && cursorMostlyCovered(prev, next) {
+		return ""
+	}
 	return next
+}
+
+// cursorCollapseWS 压空白，便于跨换行/多空格比对同一段正文。
+func cursorCollapseWS(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range strings.TrimSpace(s) {
+		if r == ' ' || r == '\n' || r == '\t' || r == '\r' {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		prevSpace = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// cursorMostlyCovered 判断 needle 是否已基本出现在 haystack（含空白折叠、略去前缀/尾标点）。
+func cursorMostlyCovered(needle, haystack string) bool {
+	n, h := cursorCollapseWS(needle), cursorCollapseWS(haystack)
+	if n == "" || h == "" {
+		return false
+	}
+	if strings.Contains(h, n) {
+		return true
+	}
+	if len(n) < 32 {
+		return false
+	}
+	minKeep := len(n) * 3 / 4
+	if minKeep < 32 {
+		minKeep = 32
+	}
+	// 去掉少量前缀/尾部后再找（应对句末标点不一致）
+	for cut := 0; len(n)-cut >= minKeep; cut++ {
+		if strings.Contains(h, n[cut:]) {
+			return true
+		}
+	}
+	for trim := 1; len(n)-trim >= minKeep && trim <= 8; trim++ {
+		if strings.Contains(h, n[:len(n)-trim]) {
+			return true
+		}
+	}
+	return false
+}
+
+// cursorAlreadyStreamed 本段 assistant 终稿是否已在流式正文里出现过。
+func cursorAlreadyStreamed(streamed, piece string) bool {
+	piece = strings.TrimSpace(piece)
+	if piece == "" || strings.TrimSpace(streamed) == "" {
+		return false
+	}
+	if len(piece) >= 32 && strings.Contains(streamed, piece) {
+		return true
+	}
+	return cursorMostlyCovered(piece, streamed)
 }
 
 // cursorResultAppend 计算 result 相对已流式正文还需补推的内容。
@@ -265,6 +340,10 @@ func cursorResultAppend(prev, final string) string {
 	}
 	// 流式末尾已带上 result
 	if strings.HasSuffix(prev, final) {
+		return ""
+	}
+	// 空白/标点不一致时的「过程说明 + 近似结论」→ 勿整段补推
+	if cursorMostlyCovered(prev, final) {
 		return ""
 	}
 	return "\n" + final
@@ -454,13 +533,16 @@ func stripCursorJSONParseNoise(s string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-func runOnce(ctx context.Context, bin, dir string, args []string) (string, error) {
+func runOnce(ctx context.Context, bin, dir string, args []string, extraEnv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	cmd.Env = CleanEnv(os.Environ())
+	if len(extraEnv) > 0 {
+		cmd.Env = append(cmd.Env, extraEnv...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

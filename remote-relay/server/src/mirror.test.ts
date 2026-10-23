@@ -327,4 +327,59 @@ describe('mirror snapshot ingest and site read', () => {
       .set('X-Instance-Unlock', unlock)
     expect(unknown.status).toBe(404)
   })
+
+  it('mark-read clears task_unread in agents mirror immediately', async () => {
+    // 注册含 agent.mark_read，模拟 Mac 已上报该动作
+    await request(app)
+      .post('/api/device/register')
+      .send({
+        instance_id: INSTANCE_ID,
+        display_name: DISPLAY_NAME,
+        password: PASSWORD,
+        registry_version: 1,
+        actions: [...ACTIONS, 'agent.mark_read'],
+      })
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+
+    await devicePost('/api/device/snapshot/agents', {
+      agents: [
+        {
+          agent_id: AGENT_ID,
+          display_name: 'Alpha',
+          status: 'idle',
+          payload: {
+            task_unread: true,
+            task_unread_kind: 'completed',
+            task_unread_at: 1_700_000_000,
+            task_unread_duration_ms: 1200,
+            task_unread_summary: 'done',
+          },
+        },
+      ],
+    })
+
+    const before = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(before.status).toBe(200)
+    expect(before.body.agents[0].payload.task_unread).toBe(true)
+
+    const mark = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/${AGENT_ID}/mark-read`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+      .send({})
+    expect(mark.status).toBe(202)
+
+    const after = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/agents`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(after.status).toBe(200)
+    expect(after.body.agents[0].payload.task_unread).toBe(false)
+    expect(after.body.agents[0].payload.task_unread_kind).toBe('')
+    expect(after.body.agents[0].payload.task_unread_at).toBeNull()
+  })
 })

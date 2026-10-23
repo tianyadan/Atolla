@@ -57,6 +57,29 @@ func (s *Service) PushAgentsMirrorNow() {
 	go s.RemoteBridge.PushAgentsSnapshotNow()
 }
 
+// setManagedAgentStatus 写状态；用户正看着该对话时终态不写未读（从源头避免闪烁）。
+func (s *Service) setManagedAgentStatus(ctx context.Context, id int64, status, lastErr string, runMs int, convID int64) error {
+	if s == nil || s.Store == nil {
+		return nil
+	}
+	markUnread := true
+	if status == "idle" || status == "error" {
+		markUnread = !s.agentChatOpen(id)
+	}
+	return s.Store.SetManagedAgentStatusUnread(ctx, id, status, lastErr, runMs, convID, markUnread)
+}
+
+// notifyAgentTerminal 任务终态后立刻推镜像；写状态已按 viewer 跳过未读，这里再兜底清一次。
+func (s *Service) notifyAgentTerminal(ctx context.Context, agentID int64) {
+	if s == nil || agentID <= 0 {
+		return
+	}
+	if s.agentChatOpen(agentID) && s.Store != nil {
+		_ = s.Store.ClearManagedAgentTaskUnread(ctx, agentID)
+	}
+	s.PushAgentsMirrorNow()
+}
+
 // SaveChatImageFromBytes implements remotebridge.AgentRuntime for mobile upload RPC.
 func (s *Service) SaveChatImageFromBytes(ctx context.Context, raw []byte, filename string) (*remotebridge.ChatAtt, error) {
 	att, err := s.SaveChatImage(ctx, raw, filename)
@@ -274,7 +297,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	}
 
 	if !opts.holdStatus {
-		_ = s.Store.SetManagedAgentStatus(runCtx, agentID, "running", "", 0, statusConvID(opts.bindMainConv, convID))
+		_ = s.setManagedAgentStatus(runCtx, agentID, "running", "", 0, statusConvID(opts.bindMainConv, convID))
 		// 状态已是 running，马上推镜像。等回合结束再推时，状态已经变回 idle，手机全程显示空闲。
 		s.PushAgentsMirrorNow()
 	}
@@ -326,7 +349,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		userMsgID, uerr := s.Store.InsertMessage(runCtx, userMsg)
 		if uerr != nil {
 			log.Printf("ask: insert user message failed: %v", uerr)
-			_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "error", uerr.Error(), 0, convID)
+			_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "error", uerr.Error(), 0, convID)
 			return nil, uerr
 		}
 		if opts.visitorAudit != nil {
@@ -539,7 +562,8 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 		}
 	}
 	if !opts.holdStatus {
-		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))
+		_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))
+		s.notifyAgentTerminal(context.WithoutCancel(ctx), agentID)
 	}
 	return msg, nil
 }
@@ -701,13 +725,19 @@ func (s *Service) StopManaged(agentID int64) bool {
 	if a != nil {
 		convID = a.ConversationID
 	}
-	_ = s.Store.SetManagedAgentStatus(context.Background(), agentID, "idle", "stopped by user", 0, convID)
+	_ = s.setManagedAgentStatus(context.Background(), agentID, "idle", "stopped by user", 0, convID)
+	s.notifyAgentTerminal(context.Background(), agentID)
 	s.ReleaseOccupancy(context.Background(), agentID)
 	return true
 }
 
 // SetAutoReview persists AI auto-review and updates the live Hub for the agent conversation.
 func (s *Service) SetAutoReview(ctx context.Context, agentID int64, enabled bool) error {
+	if enabled {
+		if err := s.RequireJevosEnabled(); err != nil {
+			return err
+		}
+	}
 	if err := s.Store.SetManagedAgentAutoReview(ctx, agentID, enabled); err != nil {
 		return err
 	}

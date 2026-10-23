@@ -178,20 +178,37 @@ export function agentTaskUnread(payload: Record<string, unknown> | undefined): b
   return v === true || v === 1 || v === '1'
 }
 
-/** 任务完成未读列表（非忙碌；供系统分类「未读」） */
+/** 完成时间毫秒（镜像多为 unix 秒）；无效则 0 */
+export function agentTaskUnreadAtMs(payload: Record<string, unknown> | undefined): number {
+  const raw = payload?.task_unread_at
+  if (raw == null || raw === '') return 0
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw < 1e12 ? Math.floor(raw * 1000) : Math.floor(raw)
+  }
+  const n = Number(raw)
+  if (Number.isFinite(n) && n > 0) {
+    return n < 1e12 ? Math.floor(n * 1000) : Math.floor(n)
+  }
+  const ms = Date.parse(String(raw))
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/** 任务完成未读列表（非忙碌）；按完成时间倒序：越早完成越靠后 */
 export function listUnreadAgents(
   agents: import('../api').PublicMirrorAgent[],
   query = '',
 ): import('../api').PublicMirrorAgent[] {
   const q = query.trim().toLowerCase()
-  return agents.filter((a) => {
-    if (agentBusy(a.status)) return false
-    if (!agentTaskUnread(a.payload)) return false
-    if (!q) return true
-    const name = String(a.display_name || '').toLowerCase()
-    const id = String(a.agent_id || '').toLowerCase()
-    return name.includes(q) || id.includes(q)
-  })
+  return agents
+    .filter((a) => {
+      if (agentBusy(a.status)) return false
+      if (!agentTaskUnread(a.payload)) return false
+      if (!q) return true
+      const name = String(a.display_name || '').toLowerCase()
+      const id = String(a.agent_id || '').toLowerCase()
+      return name.includes(q) || id.includes(q)
+    })
+    .sort((a, b) => agentTaskUnreadAtMs(b.payload) - agentTaskUnreadAtMs(a.payload))
 }
 
 /** Read run start unix seconds from mirror payload */

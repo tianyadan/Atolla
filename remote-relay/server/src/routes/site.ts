@@ -18,6 +18,7 @@ import {
 import { enqueueAndWait, enqueueCommand } from '../commands.js'
 import { clearMobileViewer, setMobileViewer } from '../viewer.js'
 import {
+  clearAgentTaskUnreadMirror,
   deletePermissionsMirror,
   listAgentsMirror,
   listInstancePermissionsMirror,
@@ -596,6 +597,29 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     },
   )
 
+  /** 手机主动进入对话：清未读（与 viewer 心跳分离） */
+  router.post(
+    '/instances/:id/agents/:agentId/mark-read',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const result = enqueueCommand(db, instanceId, 'agent.mark_read', { agent_id: agentId })
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      // 立刻清镜像，避免列表轮询在 Mac 处理前仍显示「未读」（PC 直连库无此延迟）
+      clearAgentTaskUnreadMirror(db, instanceId, agentId)
+      res.status(202).json({ ok: true, command: result.command })
+    },
+  )
+
   /** Enqueue permission.decide */
   router.post(
     '/instances/:id/agents/:agentId/permissions/decide',
@@ -648,8 +672,9 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     instanceId: string,
     action: string,
     payload: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<void> {
-    const result = await enqueueAndWait(db, instanceId, action, payload)
+    const result = await enqueueAndWait(db, instanceId, action, payload, timeoutMs)
     if (!result.ok) {
       res.status(result.httpStatus).json({ error: result.error })
       return
@@ -878,6 +903,59 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
       const freshRaw = String(req.query.fresh ?? '')
       const fresh = freshRaw === '1' || freshRaw === 'true' || freshRaw === 'yes'
       await respondRpc(res, instanceId, 'engines.usage.get', { fresh })
+    },
+  )
+
+  /** 读取该电脑 JEV（jevos）安装/启停状态 */
+  router.get(
+    '/instances/:id/jevos/settings',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const forceRaw = String(req.query.force ?? '')
+      const force = forceRaw === '1' || forceRaw === 'true'
+      await respondRpc(res, instanceId, 'jevos.settings.get', { force })
+    },
+  )
+
+  /** 从 GitHub Release 安装 JEV（长耗时） */
+  router.post(
+    '/instances/:id/jevos/settings/install',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const packageId = String((req.body as { package_id?: string })?.package_id || '').trim()
+      if (!packageId) {
+        res.status(400).json({ error: 'package_id required' })
+        return
+      }
+      await respondRpc(res, instanceId, 'jevos.settings.install', { package_id: packageId }, 2_700_000)
+    },
+  )
+
+  /** JEV 胶囊开关 */
+  router.put(
+    '/instances/:id/jevos/settings',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const enabled = !!(req.body as { enabled?: boolean })?.enabled
+      await respondRpc(res, instanceId, 'jevos.settings.set', { enabled }, 120_000)
     },
   )
 

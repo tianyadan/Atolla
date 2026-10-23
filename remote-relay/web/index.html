@@ -12,6 +12,13 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
     <title>Atolla</title>
+    <!-- 冷启动首帧白底，承接原生 LaunchScreen，避免 WebView 露深色 -->
+    <style>
+      html,
+      body {
+        background: #ffffff;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

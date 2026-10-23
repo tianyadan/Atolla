@@ -200,7 +200,9 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			// 只打标，等回复落库后再 Sync，避免 loadDetail 读到被清空的库
 			s.markCompactPending(metaConv)
 		}
-		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact)
+		// 进程级 AVATAR_CONV_ID：与 Claude 一致，避免同工作区 hook 文件被后写者覆盖导致串台
+		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
+		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact, hookEnv...)
 		// thread 在本机已无 rollout：清掉粘着的 session，拼平台历史后无 resume 重试
 		if err != nil && resume != "" && agent.IsCodexResumeGone(err.Error()) {
 			_ = s.Store.ClearConversationEngineMeta(context.WithoutCancel(ctx), metaConv)
@@ -212,7 +214,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				"type":    "system_note",
 				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
 			})
-			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact)
+			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact, hookEnv...)
 		}
 		return out, ms, err
 	default:
@@ -220,11 +222,12 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
 			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
+		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
 		ask := agent.GenericAskMeta
 		if s.workspaceTrusted(dir) {
 			ask = agent.GenericAskMetaTrusted
 		}
-		out, ms, err := ask(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume)
+		out, ms, err := ask(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, hookEnv...)
 		if err == nil || !agent.IsCursorWorkspaceTrustRequired(err.Error()) || s.workspaceTrusted(dir) {
 			return out, ms, err
 		}
@@ -237,7 +240,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			return "", ms, fmt.Errorf("工作区信任未确认（%s）: %s", reason, dir)
 		}
 		s.rememberWorkspaceTrust(dir)
-		return agent.GenericAskMetaTrusted(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume)
+		return agent.GenericAskMetaTrusted(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, hookEnv...)
 	}
 }
 
@@ -291,6 +294,7 @@ func (s *Service) confirmCursorWorkspaceTrust(ctx context.Context, convID int64,
 	req := s.Perms.Register("WorkspaceTrust", input, dir, note, convID, owner)
 	req.Meaning = "信任该目录后，Cursor Agent 可以在其中读取文件并执行代码"
 	req.Risk = "high"
+	s.Perms.AnnounceRequest(req)
 	s.notifyPermissionPending(agentID, req.ID)
 	out := s.Perms.Wait(ctx, req.ID)
 	if out.Behavior == permission.Allow {
@@ -311,7 +315,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 	var waitingOnce sync.Once
 	runCtx, slot, err := s.acquireAgentRun(ctx, m.ID, func() {
 		waitingOnce.Do(func() {
-			_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(ctx), m.ID, "waiting", "", 0, 0)
+			_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), m.ID, "waiting", "", 0, 0)
 			emitAsk(sink, map[string]any{
 				"type": "invoke_status", "callee_id": m.ID, "callee_name": m.Name, "status": "waiting",
 			})
@@ -344,7 +348,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 			a.ConversationID = cid
 		}
 	}
-	_ = s.Store.SetManagedAgentStatus(runCtx, a.ID, "running", "", 0, a.ConversationID)
+	_ = s.setManagedAgentStatus(runCtx, a.ID, "running", "", 0, a.ConversationID)
 	emitAsk(sink, map[string]any{
 		"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "running",
 	})
@@ -365,12 +369,14 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 		if out == "" {
 			out = "❌ " + res.Err
 		}
-		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "error", res.Err, ms, a.ConversationID)
+		_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "error", res.Err, ms, a.ConversationID)
+		s.notifyAgentTerminal(context.WithoutCancel(runCtx), a.ID)
 		emitAsk(sink, map[string]any{
 			"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "error", "message": res.Err,
 		})
 	} else {
-		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "idle", "", ms, a.ConversationID)
+		_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), a.ID, "idle", "", ms, a.ConversationID)
+		s.notifyAgentTerminal(context.WithoutCancel(runCtx), a.ID)
 		emitAsk(sink, map[string]any{
 			"type": "invoke_status", "callee_id": a.ID, "callee_name": a.Name, "status": "done",
 		})

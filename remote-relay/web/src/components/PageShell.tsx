@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 
 type PageShellProps = {
@@ -10,17 +10,24 @@ type PageShellProps = {
   bodyClassName?: string
 }
 
-/** Mobile page frame with optional back link */
+/** Mobile page frame with optional back control（button+navigate，避免 WebView 里 Link 偶发无响应） */
 export function PageShell({ title, backTo, children, right, bodyClassName }: PageShellProps) {
+  const navigate = useNavigate()
   const isChat = bodyClassName?.includes('page-body-chat')
+
   return (
     <div className={`page${isChat ? ' page-fill' : ''}`}>
       <header className="page-header">
         <div className="page-header-left">
           {backTo ? (
-            <Link to={backTo} className="back-link">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="返回"
+              onClick={() => navigate(backTo)}
+            >
               ←
-            </Link>
+            </button>
           ) : (
             <span className="back-spacer" />
           )}

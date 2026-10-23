@@ -13,6 +13,21 @@ export function AgentsHubIcon({ size = 28 }: { size?: number }) {
   )
 }
 
+/** 实例内设置（齿轮） */
+export function SettingsHubIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.75" />
+      <path
+        d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6.2 6.2l1.6 1.6M16.2 16.2l1.6 1.6M17.8 6.2l-1.6 1.6M7.8 16.2l-1.6 1.6"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 /** Group chat SVG */
 export function GroupChatHubIcon({ size = 28 }: { size?: number }) {
   return (

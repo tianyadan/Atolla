@@ -1,30 +1,33 @@
 import AppKit
 import Foundation
 
-struct BusyAgent: Identifiable, Codable, Equatable {
-  let id: Int64
-  let name: String
-  let engine: String
+enum IslandEventKind: String, Codable {
+  case error
+  case approval
+  case running
+  case completed
+}
+
+struct IslandEvent: Identifiable, Codable, Equatable {
+  let id: String
+  let kind: IslandEventKind
+  let agent_id: Int64
+  let agent_name: String
   let status: String
   let jelly_color: String?
-  let reason: String?
-  /// 工作组名（后端空时已归一为「未分组」）
   let group_name: String?
-  /// 本轮运行开始时间 RFC3339
-  let run_started_at: String?
-  /// 任务完成未读（非忙碌，蓝呼吸灯）
-  let unread: Bool?
-
-  var isUnread: Bool { unread == true || reason == "unread" }
+  let occurred_at: String
+  let duration_ms: Int?
+  let summary: String?
+  let request_id: String?
 
   var displayStatus: String {
-    if isUnread { return "任务完成" }
-    let s = status.lowercased()
-    if reason == "workflow" { return "协作中" }
-    if s == "waiting" { return "等待中" }
-    if s == "compressing" { return "压缩中" }
-    if s == "initializing" { return "初始化" }
-    return "运行中"
+    switch kind {
+    case .error: return "任务报错"
+    case .approval: return "待命令审批"
+    case .completed: return "任务完成"
+    case .running: return "运行中"
+    }
   }
 
   var displayGroup: String {
@@ -32,11 +35,8 @@ struct BusyAgent: Identifiable, Codable, Equatable {
     return g.isEmpty ? "未分组" : g
   }
 
-  /// 解析运行起点；无则 nil
-  var runStartedDate: Date? {
-    guard let raw = run_started_at?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
-      return nil
-    }
+  var occurredDate: Date? {
+    let raw = occurred_at.trimmingCharacters(in: .whitespacesAndNewlines)
     let iso = ISO8601DateFormatter()
     iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     if let d = iso.date(from: raw) { return d }
@@ -44,21 +44,36 @@ struct BusyAgent: Identifiable, Codable, Equatable {
     return iso.date(from: raw)
   }
 
-  /// 副标题：组名 · 运行时长 / 未读提示
   func subtitle(now: Date = Date()) -> String {
-    let group = displayGroup
-    if isUnread {
-      return "\(group) · 点击查看结果"
+    switch kind {
+    case .running:
+      if let start = occurredDate {
+        return "\(displayGroup) · \(Self.formatDuration(seconds: Int(now.timeIntervalSince(start))))"
+      }
+      return "\(displayGroup) · 运行中"
+    case .approval:
+      let text = (summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      return text.isEmpty ? "\(displayGroup) · 点击审批" : "\(displayGroup) · \(text)"
+    case .completed:
+      let duration = Self.formatDuration(milliseconds: duration_ms ?? 0)
+      if let date = occurredDate {
+        return "\(displayGroup) · \(duration) · \(Self.clock.string(from: date))"
+      }
+      return "\(displayGroup) · \(duration)"
+    case .error:
+      let duration = Self.formatDuration(milliseconds: duration_ms ?? 0)
+      let reason = (summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      let time = occurredDate.map { Self.clock.string(from: $0) } ?? ""
+      return [displayGroup, duration, time, reason].filter { !$0.isEmpty }.joined(separator: " · ")
     }
-    if let start = runStartedDate {
-      return "\(group) · \(Self.formatDuration(from: start, to: now))"
-    }
-    return "\(group) · \(displayStatus)"
   }
 
-  /// 将时长格式化为 12秒 / 3分12秒 / 1小时05分
-  static func formatDuration(from start: Date, to now: Date) -> String {
-    let sec = max(0, Int(now.timeIntervalSince(start)))
+  static func formatDuration(milliseconds: Int) -> String {
+    formatDuration(seconds: max(0, milliseconds / 1000))
+  }
+
+  static func formatDuration(seconds: Int) -> String {
+    let sec = max(0, seconds)
     if sec < 60 { return "\(sec)秒" }
     let m = sec / 60
     let s = sec % 60
@@ -67,11 +82,20 @@ struct BusyAgent: Identifiable, Codable, Equatable {
     let rm = m % 60
     return String(format: "%d小时%02d分", h, rm)
   }
+
+  private static let clock: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm"
+    return formatter
+  }()
 }
 
-struct BusyResponse: Codable {
-  let items: [BusyAgent]
-  let count: Int?
+struct IslandPresentation: Codable, Equatable {
+  let active_kind: IslandEventKind?
+  let count: Int
+  let items: [IslandEvent]
+
+  static let empty = IslandPresentation(active_kind: nil, count: 0, items: [])
 }
 
 enum AgentAPIError: LocalizedError {
@@ -88,13 +112,13 @@ enum AgentAPIError: LocalizedError {
   }
 }
 
-/// 轮询忙碌 / 未读数字人。
+/// 轮询当前最高优先级的灵动岛事件。
 final class AgentAPI {
-  func fetchBusy(config: IslandConfig) async throws -> [BusyAgent] {
+  func fetchEvents(config: IslandConfig) async throws -> IslandPresentation {
     let token = config.token.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !token.isEmpty else { throw AgentAPIError.noToken }
     let base = config.api_base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    guard let url = URL(string: "\(base)/api/admin/island/busy") else { throw AgentAPIError.decode }
+    guard let url = URL(string: "\(base)/api/admin/island/events") else { throw AgentAPIError.decode }
     var req = URLRequest(url: url, timeoutInterval: 8)
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     let (data, resp) = try await URLSession.shared.data(for: req)
@@ -104,8 +128,7 @@ final class AgentAPI {
       let msg = String(data: data, encoding: .utf8) ?? ""
       throw AgentAPIError.http(code, msg)
     }
-    let decoded = try JSONDecoder().decode(BusyResponse.self, from: data)
-    return decoded.items
+    return try JSONDecoder().decode(IslandPresentation.self, from: data)
   }
 
   /// 标记任务完成已读（从岛上移除未读项）
@@ -123,10 +146,16 @@ final class AgentAPI {
   }
 
   /// 打开管理台并定位数字人：优先复用已有标签，没有再新建。
-  func openAgent(config: IslandConfig, id: Int64) {
+  func openAgent(config: IslandConfig, id: Int64, approvalRequestID: String? = nil) {
     let web = config.web_base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    let raw = "\(web)/?agent=\(id)#agent=\(id)"
-    guard let url = URL(string: raw) else { return }
+    guard var components = URLComponents(string: "\(web)/") else { return }
+    var query = [URLQueryItem(name: "agent", value: "\(id)")]
+    if let approvalRequestID, !approvalRequestID.isEmpty {
+      query.append(URLQueryItem(name: "approval_request_id", value: approvalRequestID))
+    }
+    components.queryItems = query
+    components.fragment = "agent=\(id)"
+    guard let url = components.url else { return }
     if BrowserReuse.activateOrNavigate(webBase: web, agentId: id, targetURL: url) {
       return
     }

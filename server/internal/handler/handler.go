@@ -146,9 +146,14 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.POST("/admin/island/sync", h.AdminIslandSync)
 			adm.GET("/admin/island/busy", h.AdminIslandBusy)
+			adm.GET("/admin/island/events", h.AdminIslandEvents)
 			adm.GET("/admin/island/settings", h.AdminIslandSettingsGet)
 			adm.POST("/admin/island/settings/install", h.AdminIslandSettingsInstall)
 			adm.PUT("/admin/island/settings", h.AdminIslandSettingsPut)
+
+			adm.GET("/admin/jevos/settings", h.AdminJevosSettingsGet)
+			adm.POST("/admin/jevos/settings/install", h.AdminJevosSettingsInstall)
+			adm.PUT("/admin/jevos/settings", h.AdminJevosSettingsPut)
 
 			adm.GET("/admin/network-allowlist", h.AdminNetworkAllowlistGet)
 			adm.PUT("/admin/network-allowlist", h.AdminNetworkAllowlistPut)
@@ -634,6 +639,13 @@ func (h *Handler) PermissionAuto(c *gin.Context) {
 	if err != nil || !store.CanControlAuto(owner, h.clientIP(c)) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "conversation not accessible"})
 		return
+	}
+	// AI 自动审核前置：设置页 JEV 胶囊已开启且健康
+	if body.Enabled {
+		if err := h.svc.RequireJevosEnabled(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	h.svc.Perms.SetAuto(body.ConversationID, body.Enabled)
 	// 管理台数字员工:持久化到 managed_agents,刷新/重启后仍生效

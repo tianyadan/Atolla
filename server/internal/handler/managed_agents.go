@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -374,10 +375,8 @@ func (h *Handler) AdminAgentsMessages(c *gin.Context) {
 		return
 	}
 	beforeID, _ := strconv.ParseInt(c.DefaultQuery("before_id", "0"), 10, 64)
-	// 打开对话首页视为已读，清除任务完成未读
-	if beforeID == 0 && a.TaskUnread {
-		_ = h.svc.MarkAgentTaskRead(c.Request.Context(), id)
-	}
+	// 未读只在用户主动点进对话时清除（PC/手机 mark-read、灵动岛点击），
+	// 禁止 messages 轮询 / pc-viewer·viewer 心跳误清。
 	if a.ConversationID == 0 {
 		c.JSON(http.StatusOK, gin.H{"items": []store.Message{}, "conversation_id": 0, "total": 0, "has_more": false})
 		return
@@ -490,7 +489,8 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 			case ev := <-sub:
 				var payload map[string]interface{}
 				if (ev.Kind == "request" || ev.Kind == "auto") && ev.Req != nil {
-					if ev.Req.ConvID != convID {
+					// 会话重建后 hook 可能用新 ConvID；同属本数字人仍应展示审批卡。
+					if !h.permEventForAgent(c.Request.Context(), ev.Req.ConvID, convID, id) {
 						continue
 					}
 					typ := "permission_request"
@@ -504,7 +504,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 					}
 				} else if ev.Kind == "command" && ev.Req != nil {
 					// 必须按会话隔离：ConvID 缺失或与本轮不符时丢弃，避免串到其他数字人窗口。
-					if ev.Req.ConvID == 0 || ev.Req.ConvID != convID {
+					if !h.permEventForAgent(c.Request.Context(), ev.Req.ConvID, convID, id) {
 						continue
 					}
 					payload = map[string]interface{}{
@@ -660,7 +660,20 @@ func (h *Handler) AdminAgentsCommandAudits(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// AdminPCViewer 电脑端对话页心跳。agent_id≤0 表示离开。
+// permEventForAgent 授权/命令事件是否属于当前 Ask：精确 ConvID 命中，或会话重建后仍归属同一数字人。
+func (h *Handler) permEventForAgent(ctx context.Context, evConvID, askConvID, agentID int64) bool {
+	if evConvID > 0 && evConvID == askConvID {
+		return true
+	}
+	if evConvID <= 0 || agentID <= 0 || h.svc == nil || h.svc.Store == nil {
+		return false
+	}
+	aid, err := h.svc.Store.ConversationAgentID(ctx, evConvID)
+	return err == nil && aid == agentID
+}
+
+// AdminPCViewer 电脑端对话页心跳（存在感：Bark 抑制 + 终态时跳过写入未读）。
+// 本接口本身不清未读；历史未读仍须 mark-read / 主动点进。
 func (h *Handler) AdminPCViewer(c *gin.Context) {
 	var body struct {
 		AgentID int64 `json:"agent_id"`

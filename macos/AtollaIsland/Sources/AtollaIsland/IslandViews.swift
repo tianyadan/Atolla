@@ -4,7 +4,7 @@ import SwiftUI
 enum IslandMetrics {
   static let expandedExtraWidth: CGFloat = 120
   static let rowHeight: CGFloat = 34
-  static let maxVisibleRows: CGFloat = 4
+  static let maxVisibleRows: CGFloat = 3
   static let listBottomPad: CGFloat = 6
   static let badgeSize: CGFloat = 22
   static let badgeGap: CGFloat = 14
@@ -38,9 +38,9 @@ struct IslandRootView: View {
   private var collapsedW: CGFloat { notch.width }
   private var collapsedH: CGFloat { notch.height }
   private var expandedW: CGFloat { notch.width + IslandMetrics.expandedExtraWidth }
-  private var busyCount: Int { model.agents.count }
+  private var eventCount: Int { model.presentation.count }
   private var showSecondary: Bool {
-    busyCount > 0 && morph.secondaryInLayout && morph.contentProgress < 0.35
+    eventCount > 0 && morph.secondaryInLayout && morph.contentProgress < 0.35
   }
 
   /// 收起态（含 merge）：统一用「有活动」布局，主岛宽固定为刘海宽，不再因无角标换成另一种宽度
@@ -155,11 +155,22 @@ struct IslandRootView: View {
       Circle()
         .fill(Color.black)
         .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-      Text(busyCount > 99 ? "99+" : "\(busyCount)")
-        .font(.system(size: busyCount > 9 ? 10 : 12, weight: .bold, design: .rounded))
-        .foregroundStyle(IslandMetrics.purpleCount)
-        .minimumScaleFactor(0.7)
-        .opacity(morph.secondaryTextOpacity)
+      HStack(spacing: 1) {
+        if model.presentation.active_kind == .running {
+          JellyAvatarView(
+            color: model.events.first?.jelly_color ?? "blue",
+            size: 10,
+            state: .working
+          )
+        } else {
+          IslandStatusSymbol(kind: model.presentation.active_kind, size: 10)
+        }
+        Text(eventCount > 99 ? "99+" : "\(eventCount)")
+          .font(.system(size: eventCount > 9 ? 6 : 7, weight: .bold, design: .rounded))
+          .foregroundStyle(statusColor)
+          .minimumScaleFactor(0.6)
+      }
+      .opacity(morph.secondaryTextOpacity)
     }
     .frame(width: size, height: size)
     .position(x: secondaryCenterX, y: secondaryCenterY)
@@ -168,7 +179,7 @@ struct IslandRootView: View {
       model.requestMergeThenExpand(travel: mergeTravel)
     }
     .allowsHitTesting(morph.phase == .collapsed && !morph.blocksSecondaryTap)
-    .help("\(busyCount) 个数字人运行中")
+    .help("\(eventCount) 个\(statusLabel)事件")
   }
 
   /// 主岛右缘与副岛之间的液态桥（Capsule 几何连接）
@@ -219,13 +230,13 @@ struct IslandRootView: View {
               .frame(maxWidth: .infinity, alignment: .leading)
           }
 
-          if model.agents.isEmpty {
+          if model.events.isEmpty {
             // 空态：紧凑居中，避免撑出滚动条
             VStack(spacing: 5) {
               IslandEmptyBusyIcon()
                 .frame(width: 18, height: 18)
                 .foregroundStyle(.white.opacity(0.28))
-              Text(model.hasConfig ? "暂无忙碌数字人" : "请先登录管理台同步凭证")
+              Text(model.hasConfig ? "暂无数字人事件" : "请先登录管理台同步凭证")
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.4))
                 .multilineTextAlignment(.center)
@@ -234,42 +245,34 @@ struct IslandRootView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
           } else {
-            ForEach(Array(model.agents.enumerated()), id: \.element.id) { index, a in
-              Button { model.open(a) } label: {
+            ForEach(Array(model.events.prefix(Int(IslandMetrics.maxVisibleRows)).enumerated()), id: \.element.id) { index, event in
+              Button { model.open(event) } label: {
                 HStack(spacing: 8) {
-                  JellyAvatarView(
-                    color: a.jelly_color ?? "blue",
-                    size: 20,
-                    state: .from(agentStatus: a.status, reason: a.reason)
-                  )
+                  if event.kind == .running {
+                    JellyAvatarView(
+                      color: event.jelly_color ?? "blue",
+                      size: 20,
+                      state: .from(agentStatus: event.status, reason: nil)
+                    )
+                  } else {
+                    IslandStatusSymbol(kind: event.kind, size: 20)
+                  }
                   VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
-                      Text(a.name)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                      if a.isUnread {
-                        IslandUnreadPulse()
-                      }
-                    }
-                    // 每秒刷新运行时长；组名 + 时长
+                    Text(event.agent_name)
+                      .font(.system(size: 12, weight: .medium))
+                      .foregroundStyle(.white)
+                      .lineLimit(1)
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                      Text(a.subtitle(now: context.date))
+                      Text(event.subtitle(now: context.date))
                         .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                     }
                   }
                   Spacer(minLength: 0)
-                  if a.isUnread {
-                    Text("未读")
-                      .font(.system(size: 9, weight: .semibold))
-                      .foregroundStyle(Color(red: 0.35, green: 0.62, blue: 1.0).opacity(0.9))
-                  } else {
-                    Image(systemName: "arrow.up.right")
-                      .font(.system(size: 9, weight: .semibold))
-                      .foregroundStyle(.white.opacity(0.35))
-                  }
+                  Text(event.displayStatus)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(statusColor(for: event.kind).opacity(0.9))
                 }
                 .padding(.horizontal, 10)
                 .frame(height: IslandMetrics.rowHeight)
@@ -277,6 +280,13 @@ struct IslandRootView: View {
               }
               .buttonStyle(IslandPressStyle())
               .opacity(Double(min(1, max(0, morph.contentProgress * 1.35 - CGFloat(index) * 0.08))))
+            }
+            if model.presentation.count > Int(IslandMetrics.maxVisibleRows) {
+              Text("还有 \(model.presentation.count - Int(IslandMetrics.maxVisibleRows)) 项")
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.38))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
             }
           }
         }
@@ -286,6 +296,52 @@ struct IslandRootView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     .frame(width: width, alignment: .top)
+  }
+
+  private var statusColor: Color { statusColor(for: model.presentation.active_kind) }
+
+  private var statusLabel: String {
+    switch model.presentation.active_kind {
+    case .error: return "报错"
+    case .approval: return "待审批"
+    case .running: return "运行中"
+    case .completed: return "已完成"
+    case nil: return ""
+    }
+  }
+
+  private func statusColor(for kind: IslandEventKind?) -> Color {
+    switch kind {
+    case .error: return Color(red: 1.0, green: 0.48, blue: 0.48)
+    case .approval: return Color(red: 1.0, green: 0.82, blue: 0.38)
+    case .completed: return Color(red: 0.32, green: 0.86, blue: 0.48)
+    case .running: return IslandMetrics.purpleCount
+    case nil: return .white.opacity(0.4)
+    }
+  }
+}
+
+private struct IslandStatusSymbol: View {
+  let kind: IslandEventKind?
+  let size: CGFloat
+
+  var body: some View {
+    Group {
+      switch kind {
+      case .error:
+        Image(systemName: "xmark.circle.fill").foregroundStyle(Color(red: 1.0, green: 0.48, blue: 0.48))
+      case .approval:
+        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.38))
+      case .completed:
+        Image(systemName: "checkmark.circle.fill").foregroundStyle(Color(red: 0.32, green: 0.86, blue: 0.48))
+      case .running:
+        Image(systemName: "waveform.circle.fill").foregroundStyle(IslandMetrics.purpleCount)
+      case nil:
+        EmptyView()
+      }
+    }
+    .font(.system(size: size, weight: .semibold))
+    .frame(width: size, height: size)
   }
 }
 

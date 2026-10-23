@@ -101,7 +101,7 @@ func (s *Service) markClonesInterruptedBySource(ctx context.Context, srcID int64
 	}
 	for _, a := range items {
 		if a.ClonedFromID == srcID && a.Status == AgentStatusInitializing {
-			_ = s.Store.SetManagedAgentStatus(ctx, a.ID, "error", "源被协作接管，总结中断", 0, a.ConversationID)
+			_ = s.setManagedAgentStatus(ctx, a.ID, "error", "源被协作接管，总结中断", 0, a.ConversationID)
 			s.cancelCloneJob(a.ID)
 		}
 	}
