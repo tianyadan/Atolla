@@ -19,7 +19,8 @@ import (
 func TestPermissionPendingAdminSeesAdminOwner(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	hub := permission.NewHub(60)
-	hub.Register("Bash", map[string]interface{}{"command": "ls"}, "ls", "", 42, "admin")
+	pending := hub.Register("Bash", map[string]interface{}{"command": "ls"}, "ls", "", 42, "admin")
+	hub.AnnounceRequest(pending)
 
 	h := &Handler{svc: &service.Service{
 		Cfg:   config.Config{JWTSecret: "test-jwt-secret", AdminUser: "tianhaowen", AdminPass: "12345678"},

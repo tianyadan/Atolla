@@ -1,22 +1,28 @@
 import { Capacitor } from '@capacitor/core'
-import { useState, type FormEvent } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { useEffect, useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { clearToken, getToken, hasUnlockToken, login } from '../api'
 import { getApiBase, setApiBase } from '../utils/apiBase'
 import {
-  clearPendingDeepLink,
-  deepLinkTargetPath,
   loadPendingDeepLink,
+  navigateToDeepLinkChat,
 } from '../utils/deepLink'
 
-function destinationAfterLogin(): string {
+/** 已登录时的落地：有待处理深链则进对话（带列表返回栈），否则进实例列表 */
+function resumeAfterAuth(navigate: ReturnType<typeof useNavigate>): void {
   const target = loadPendingDeepLink()
-  if (!target) return '/instances'
-  if (!hasUnlockToken(target.instanceId)) {
-    return `/instances?unlock=${encodeURIComponent(target.instanceId)}`
+  if (!target) {
+    navigate('/instances', { replace: true })
+    return
   }
-  clearPendingDeepLink()
-  return deepLinkTargetPath(target)
+  if (!hasUnlockToken(target.instanceId)) {
+    navigate(`/instances?unlock=${encodeURIComponent(target.instanceId)}`, { replace: true })
+    return
+  }
+  navigateToDeepLinkChat(navigate, target, {
+    pathname: window.location.pathname,
+    search: window.location.search,
+  })
 }
 
 /** Site gate — branded home / sign-in */
@@ -28,10 +34,11 @@ export function LoginPage() {
   const native = Capacitor.isNativePlatform()
   const [apiBaseDraft, setApiBaseDraft] = useState(() => getApiBase())
   const showApiField = native || !!getApiBase() || !!import.meta.env.VITE_API_BASE
+  const authed = !!getToken()
 
-  if (getToken()) {
-    return <Navigate to={destinationAfterLogin()} replace />
-  }
+  useEffect(() => {
+    if (authed) resumeAfterAuth(navigate)
+  }, [authed, navigate])
 
   /** Submit site password */
   async function onSubmit(e: FormEvent) {
@@ -47,7 +54,7 @@ export function LoginPage() {
     setLoading(true)
     try {
       await login(password.trim())
-      navigate(destinationAfterLogin(), { replace: true })
+      resumeAfterAuth(navigate)
     } catch (err) {
       clearToken()
       const raw = err instanceof Error ? err.message : 'Sign-in failed'
@@ -62,37 +69,36 @@ export function LoginPage() {
     }
   }
 
+  if (authed) return null
+
   return (
     <div className="page page-center login-home">
       <div className="login-brand">
-        <div className="login-logo-wrap" aria-hidden>
-          <img
-            className="login-logo"
-            src="/brand-jellyfish-white.png"
-            alt=""
-            width={88}
-            height={88}
-          />
-        </div>
+        {/* 暗色登录页用白色透明水母，无圆角底框 */}
+        <img
+          className="login-logo"
+          src="/brand-jellyfish-white.png"
+          alt=""
+          width={88}
+          height={88}
+          draggable={false}
+        />
         <h1 className="login-product">Atolla</h1>
         <p className="login-tagline">Remote Relay</p>
         <p className="login-desc">Sign in with your site password to access Mac instances.</p>
       </div>
 
-      <form className="login-form" onSubmit={onSubmit}>
+      <form className="card login-card" onSubmit={onSubmit}>
         {showApiField ? (
           <label className="field">
-            <span>Relay API URL</span>
+            <span>Relay API</span>
             <input
               type="url"
               inputMode="url"
-              autoCapitalize="off"
-              autoCorrect="off"
               autoComplete="url"
+              placeholder="https://relay.example.com"
               value={apiBaseDraft}
               onChange={(e) => setApiBaseDraft(e.target.value)}
-              placeholder="https://your-relay.example.com"
-              required={native}
             />
           </label>
         ) : null}
@@ -103,13 +109,12 @@ export function LoginPage() {
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter password"
-            required
+            placeholder="••••••••"
           />
         </label>
-        {error ? <p className="error-banner">{error}</p> : null}
-        <button type="submit" className="btn primary" disabled={loading || !password.trim()}>
-          {loading ? 'Signing in…' : 'Continue'}
+        {error ? <p className="error">{error}</p> : null}
+        <button type="submit" className="primary-btn" disabled={loading || !password.trim()}>
+          {loading ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
     </div>

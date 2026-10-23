@@ -107,12 +107,21 @@ func (h HookSpec) Environ() []string {
 	if h.Bin == "" {
 		return nil
 	}
-	env := []string{"AVATAR_CONV_ID=" + itoa64(h.ConvID)}
-	if h.Backend != "" {
-		env = append(env, "AVATAR_BACKEND_URL="+h.Backend)
+	return ConvRoutingEnv(h.ConvID, h.Backend, h.PolicyAgentID)
+}
+
+// ConvRoutingEnv 授权/命令路由环境变量；Codex/Cursor 与 Claude 一样挂到引擎进程，
+// 避免同工作区共享 avatar-pretool.sh 时后写者覆盖导致串台。
+func ConvRoutingEnv(convID int64, backend string, policyAgentID int64) []string {
+	if convID <= 0 {
+		return nil
 	}
-	if h.PolicyAgentID > 0 {
-		env = append(env, "AVATAR_POLICY_AGENT_ID="+itoa64(h.PolicyAgentID))
+	env := []string{"AVATAR_CONV_ID=" + itoa64(convID)}
+	if backend != "" {
+		env = append(env, "AVATAR_BACKEND_URL="+backend)
+	}
+	if policyAgentID > 0 {
+		env = append(env, "AVATAR_POLICY_AGENT_ID="+itoa64(policyAgentID))
 	}
 	return env
 }

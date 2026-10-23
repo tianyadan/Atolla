@@ -21,6 +21,7 @@ import {
   listBusyAgents,
   listUnreadAgents,
 } from '../utils/agentStatus'
+import { tapHaptic } from '../haptics'
 import { syncIslandFromAgents } from '../islandLiveActivity'
 import { loadCollapsedFolders, saveCollapsedFolders } from '../utils/folderCollapse'
 
@@ -132,7 +133,30 @@ export function AgentsPage() {
           <button
             type="button"
             className="agent-card-btn"
-            onClick={() => navigate(`${chatBase}/${encodeURIComponent(a.agent_id)}/chat`)}
+            onClick={() => {
+              tapHaptic()
+              // 乐观清未读：与 PC 选中即消徽标一致，不依赖 Mac 命令往返
+              if (agentTaskUnread(a.payload)) {
+                setAgents((list) =>
+                  list.map((row) =>
+                    row.agent_id === a.agent_id
+                      ? {
+                          ...row,
+                          payload: {
+                            ...row.payload,
+                            task_unread: false,
+                            task_unread_kind: '',
+                            task_unread_at: null,
+                            task_unread_duration_ms: 0,
+                            task_unread_summary: '',
+                          },
+                        }
+                      : row,
+                  ),
+                )
+              }
+              navigate(`${chatBase}/${encodeURIComponent(a.agent_id)}/chat`)
+            }}
           >
             <JellyAvatar
               className="agent-avatar"
@@ -269,6 +293,19 @@ export function AgentsPage() {
       {!loading && agents.length > 0 && hasActiveQuery && visibleGroups.length === 0 ? (
         <p className="muted">无匹配数字人</p>
       ) : null}
+      {/* 未读优先于运行中，置顶；小蓝呼吸灯标识 */}
+      {!loading && unreadVisible.length > 0 ? (
+        <section className="agent-folder agent-unread-block">
+          <div className="agent-folder-toggle" aria-hidden>
+            <span className="unread-breath-dot" title="有未读" aria-hidden />
+            <span className="agent-folder-title">未读</span>
+            <span className="unread-count-badge folder-unread-badge" title={`未读 ${unreadVisible.length}`}>
+              {unreadVisible.length}
+            </span>
+          </div>
+          <ul className="list">{unreadVisible.map(renderAgentCard)}</ul>
+        </section>
+      ) : null}
       {!loading && busyVisible.length > 0 ? (
         <section className="agent-folder agent-running-block">
           <div className="agent-folder-toggle" aria-hidden>
@@ -278,17 +315,6 @@ export function AgentsPage() {
             </span>
           </div>
           <ul className="list">{busyVisible.map(renderAgentCard)}</ul>
-        </section>
-      ) : null}
-      {!loading && unreadVisible.length > 0 ? (
-        <section className="agent-folder agent-unread-block">
-          <div className="agent-folder-toggle" aria-hidden>
-            <span className="agent-folder-title">未读</span>
-            <span className="unread-count-badge folder-unread-badge" title={`未读 ${unreadVisible.length}`}>
-              {unreadVisible.length}
-            </span>
-          </div>
-          <ul className="list">{unreadVisible.map(renderAgentCard)}</ul>
         </section>
       ) : null}
       {visibleGroups.map((g) => {

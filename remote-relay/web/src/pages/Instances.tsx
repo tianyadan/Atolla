@@ -9,12 +9,10 @@ import {
   type PublicInstance,
 } from '../api'
 import {
-  IconChevronDown,
   IconChevronRight,
   IconChip,
   IconClock,
   IconDisk,
-  IconEmptyMonitor,
   IconEnter,
   IconInfo,
   IconMemory,
@@ -28,11 +26,11 @@ import {
 } from '../components/InstanceIcons'
 import { Modal } from '../components/Modal'
 import { SettingsIcon } from '../components/SettingsIcon'
+import { tapHaptic } from '../haptics'
 import { getStoredTheme, toggleTheme, type ThemeMode } from '../utils/theme'
 import {
-  clearPendingDeepLink,
-  deepLinkTargetPath,
   loadPendingDeepLink,
+  navigateToDeepLinkChat,
 } from '../utils/deepLink'
 import {
   formatPct,
@@ -42,7 +40,7 @@ import {
   tempBarPct,
 } from '../utils/instance'
 
-type StatusFilter = 'all' | 'online' | 'offline'
+type StatusFilter = 'online' | 'offline'
 
 /** Dark instances management — matches prototype, wired to real APIs */
 export function InstancesPage() {
@@ -55,7 +53,8 @@ export function InstancesPage() {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  /** 底部胶囊：默认看在线实例 */
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('online')
   const [menuId, setMenuId] = useState<string | null>(null)
   const [detailTarget, setDetailTarget] = useState<PublicInstance | null>(null)
 
@@ -104,8 +103,10 @@ export function InstancesPage() {
       return
     }
     if (hasUnlockToken(unlockTargetId)) {
-      clearPendingDeepLink()
-      navigate(deepLinkTargetPath(target), { replace: true })
+      navigateToDeepLinkChat(navigate, target, {
+        pathname: window.location.pathname,
+        search: window.location.search,
+      })
       return
     }
     if (enterTarget?.instance_id !== instance.instance_id) {
@@ -128,6 +129,24 @@ export function InstancesPage() {
       )
     })
   }, [items, query, statusFilter, now])
+
+  /** 在线 / 离线数量（底部胶囊角标） */
+  const statusCounts = useMemo(() => {
+    let online = 0
+    let offline = 0
+    for (const inst of items) {
+      if (isInstanceOnline(inst.last_heartbeat_at, now)) online += 1
+      else offline += 1
+    }
+    return { online, offline }
+  }, [items, now])
+
+  /** 切换在线/离线 Tab，原生壳轻触震动 */
+  function onStatusTab(next: StatusFilter) {
+    if (next === statusFilter) return
+    tapHaptic()
+    setStatusFilter(next)
+  }
 
   /** Enter instance hub (unlock if needed) */
   function onEnterClick(inst: PublicInstance) {
@@ -154,8 +173,10 @@ export function InstancesPage() {
       setEnterPassword('')
       const pending = loadPendingDeepLink()
       if (pending?.instanceId === id) {
-        clearPendingDeepLink()
-        navigate(deepLinkTargetPath(pending), { replace: true })
+        navigateToDeepLinkChat(navigate, pending, {
+          pathname: window.location.pathname,
+          search: window.location.search,
+        })
       } else {
         navigate(`/instances/${encodeURIComponent(id)}`)
       }
@@ -237,17 +258,6 @@ export function InstancesPage() {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="搜索实例名称..."
             />
-          </label>
-          <label className="inst-filter">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            >
-              <option value="all">全部状态</option>
-              <option value="online">在线</option>
-              <option value="offline">离线</option>
-            </select>
-            <IconChevronDown size={14} />
           </label>
         </div>
 
@@ -423,26 +433,51 @@ export function InstancesPage() {
 
         {!loading && filtered.length === 0 ? (
           <div className="inst-empty">
-            <IconEmptyMonitor size={72} />
             <p className="inst-empty-title">
-              {items.length === 0 ? '暂无实例' : '暂无更多实例'}
+              {items.length === 0
+                ? '暂无实例'
+                : statusFilter === 'online'
+                  ? '暂无在线实例'
+                  : '暂无离线实例'}
             </p>
             <p className="inst-empty-sub">
               {items.length === 0
                 ? '请先在 Mac 管理台启用远程中继并完成注册'
-                : '当前没有其他可用的实例'}
+                : statusFilter === 'online'
+                  ? '可切换到「离线」查看其它设备'
+                  : '可切换到「在线」查看当前可用设备'}
             </p>
           </div>
         ) : null}
-
-        {!loading && filtered.length > 0 ? (
-          <div className="inst-empty inst-empty-footer">
-            <IconEmptyMonitor size={56} />
-            <p className="inst-empty-title">暂无更多实例</p>
-            <p className="inst-empty-sub">当前没有其他可用的实例</p>
-          </div>
-        ) : null}
       </main>
+
+      {/* 底部居中椭圆胶囊：在线 / 离线 */}
+      <nav className="inst-status-dock" aria-label="实例状态筛选">
+        <div className="inst-status-capsule" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'online'}
+            className={`inst-status-tab${statusFilter === 'online' ? ' is-active' : ''}`}
+            onClick={() => onStatusTab('online')}
+          >
+            <span className="inst-status-dot on" aria-hidden />
+            在线
+            <span className="inst-status-count">{statusCounts.online}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'offline'}
+            className={`inst-status-tab${statusFilter === 'offline' ? ' is-active' : ''}`}
+            onClick={() => onStatusTab('offline')}
+          >
+            <span className="inst-status-dot off" aria-hidden />
+            离线
+            <span className="inst-status-count">{statusCounts.offline}</span>
+          </button>
+        </div>
+      </nav>
 
       <Modal
         open={!!detailTarget}

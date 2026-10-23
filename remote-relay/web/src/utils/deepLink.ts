@@ -59,6 +59,51 @@ export function deepLinkTargetPath(target: AtollaDeepLinkTarget): string {
     : base
 }
 
+/** 对话页左上角返回目标：实例下的数字人列表 */
+export function deepLinkAgentsPath(target: Pick<AtollaDeepLinkTarget, 'instanceId'>): string {
+  return `/instances/${encodeURIComponent(target.instanceId)}/agents`
+}
+
+/** 当前路由是否已是该深链目标（避免重复 navigate 把返回栈打坏） */
+export function isDeepLinkPathActive(
+  target: AtollaDeepLinkTarget,
+  pathname: string,
+  search = '',
+): boolean {
+  const want = deepLinkTargetPath(target)
+  const [wantPath, wantQuery = ''] = want.split('?')
+  if (pathname !== wantPath) return false
+  if (!wantQuery) return true
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  const wantParams = new URLSearchParams(wantQuery)
+  for (const [key, value] of wantParams.entries()) {
+    if (params.get(key) !== value) return false
+  }
+  return true
+}
+
+type NavigateFn = {
+  (to: string, options?: { replace?: boolean }): void
+}
+
+/**
+ * 打开对话深链：先落到数字人列表再 push 对话，保证 ← / 系统返回有稳定上一页。
+ * 已在目标页则 no-op。
+ */
+export function navigateToDeepLinkChat(
+  navigate: NavigateFn,
+  target: AtollaDeepLinkTarget,
+  current: { pathname: string; search: string },
+): void {
+  if (isDeepLinkPathActive(target, current.pathname, current.search)) {
+    clearPendingDeepLink()
+    return
+  }
+  clearPendingDeepLink()
+  navigate(deepLinkAgentsPath(target), { replace: true })
+  navigate(deepLinkTargetPath(target))
+}
+
 function defaultStorage(): StorageLike | null {
   return typeof localStorage === 'undefined' ? null : localStorage
 }

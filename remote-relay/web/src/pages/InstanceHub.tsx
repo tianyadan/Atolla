@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { clearToken, fetchAgents, logoutUnlockSession } from '../api'
-import { AgentsHubIcon, GroupChatHubIcon } from '../components/HubIcons'
+import { AgentsHubIcon, GroupChatHubIcon, SettingsHubIcon } from '../components/HubIcons'
 import { PageShell } from '../components/PageShell'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import { syncIslandFromAgents } from '../islandLiveActivity'
@@ -91,10 +91,16 @@ export function InstanceHubPage() {
           </span>
           <span className="hub-label">群聊</span>
         </button>
-        <div className="hub-cell hub-cell-empty" aria-hidden>
-          <span className="hub-icon muted">+</span>
-          <span className="hub-label muted">敬请期待</span>
-        </div>
+        <button
+          type="button"
+          className="hub-cell"
+          onClick={() => navigate(`${base}/settings`)}
+        >
+          <span className="hub-icon">
+            <SettingsHubIcon />
+          </span>
+          <span className="hub-label">设置</span>
+        </button>
         <div className="hub-cell hub-cell-empty" aria-hidden>
           <span className="hub-icon muted">+</span>
           <span className="hub-label muted">敬请期待</span>

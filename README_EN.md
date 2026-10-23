@@ -4,7 +4,7 @@
 
 Run a fleet of digital colleagues on your own machine. Each colleague is a local Claude, Codex, or Cursor Agent. They work inside workspaces you allow, and they ask before doing anything risky.
 
-Current release: **v0.5.9**.
+Current release: **v0.5.11**.
 
 ![Atolla architecture](docs/architecture/atolla-architecture.png)
 

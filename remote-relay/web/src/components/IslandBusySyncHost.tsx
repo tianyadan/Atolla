@@ -8,6 +8,7 @@ import { resetIslandSyncKey, syncIslandPresentation } from '../islandLiveActivit
 import { subscribeIslandSyncInvalidation } from '../islandSyncInvalidation'
 
 const POLL_MS = 3_000
+
 /**
  * 全局轮询忙碌数字人并上岛。
  * 必须挂在已登录布局里；聊天页 / 切后台也要同步（不能只靠 Agents 列表页）。
@@ -24,7 +25,13 @@ export function IslandBusySyncHost() {
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'ios') return
-    if (!instanceId || !getUnlockToken(instanceId)) return
+
+    // 离开实例或未解锁：立刻下岛，避免停轮询后锁屏残留
+    if (!instanceId || !getUnlockToken(instanceId)) {
+      resetIslandSyncKey()
+      void syncIslandPresentation({ activeKind: null, count: 0, items: [] })
+      return
+    }
 
     resetIslandSyncKey()
     let cancelled = false
@@ -53,7 +60,7 @@ export function IslandBusySyncHost() {
     const invalidate = () => void tick()
     const unsubscribeInvalidation = subscribeIslandSyncInvalidation(invalidate)
 
-    // 前后台切换都立即校准；挂起后仍只保证回前台时恢复。
+    // 前后台切换都立即校准；挂起后由原生延迟 dismiss，回前台再重建。
     let appHandle: { remove: () => Promise<void> } | undefined
     void App.addListener('appStateChange', () => {
       resetIslandSyncKey()
@@ -62,7 +69,7 @@ export function IslandBusySyncHost() {
       appHandle = h
     })
 
-    // 页面被系统挂起前再推一次
+    // 挂起前再推一次，供原生写入最新态后预约下岛
     const onHide = () => {
       resetIslandSyncKey()
       void tick()
@@ -77,6 +84,7 @@ export function IslandBusySyncHost() {
       void appHandle?.remove()
       document.removeEventListener('visibilitychange', onHide)
       window.removeEventListener('pagehide', onHide)
+      void syncIslandPresentation({ activeKind: null, count: 0, items: [] })
     }
   }, [instanceId])
 

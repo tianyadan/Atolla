@@ -508,6 +508,14 @@ export async function clearViewerPresence(instanceId: string, agentId: string): 
   )
 }
 
+/** 主动进入对话时清未读（勿与 viewer 心跳混用） */
+export async function markAgentTaskRead(instanceId: string, agentId: string): Promise<void> {
+  await request<{ ok: boolean }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/mark-read`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
 export type PublicMirrorPermission = {
   request_id: string
   agent_id: string
@@ -649,6 +657,70 @@ export async function updateNotifyPrefs(
     {
       method: 'PUT',
       body: JSON.stringify(prefs),
+    },
+  )
+}
+
+/** JEV 安装包项 */
+export type JevosPackage = {
+  id: string
+  name: string
+  os?: string
+  arch?: string
+  runtime_url?: string
+  model_url?: string
+  recommended?: boolean
+  size_hint?: string
+}
+
+/** 该电脑 JEV 状态（与 PC 设置同源） */
+export type JevosSettings = {
+  installed: boolean
+  enabled: boolean
+  healthy: boolean
+  detail?: string
+  packages?: JevosPackage[]
+  release_url?: string
+  release_tag?: string
+  cached?: boolean
+  checked_at?: string
+}
+
+/** 读取该电脑 JEV 状态 */
+export async function fetchJevosSettings(
+  instanceId: string,
+  opts?: { force?: boolean },
+): Promise<JevosSettings> {
+  const qs = opts?.force ? '?force=1' : ''
+  return request<JevosSettings>(
+    `/api/instances/${encodeURIComponent(instanceId)}/jevos/settings${qs}`,
+  )
+}
+
+/** 从 GitHub Release 安装 JEV（耗时长） */
+export async function installJevos(
+  instanceId: string,
+  packageId: string,
+): Promise<JevosSettings> {
+  return request<JevosSettings>(
+    `/api/instances/${encodeURIComponent(instanceId)}/jevos/settings/install`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ package_id: packageId }),
+    },
+  )
+}
+
+/** JEV 胶囊开关 */
+export async function setJevosEnabled(
+  instanceId: string,
+  enabled: boolean,
+): Promise<JevosSettings> {
+  return request<JevosSettings>(
+    `/api/instances/${encodeURIComponent(instanceId)}/jevos/settings`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     },
   )
 }

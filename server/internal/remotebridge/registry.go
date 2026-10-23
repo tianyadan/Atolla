@@ -41,6 +41,7 @@ func RegisteredActions() []string {
 		"permission.decide",
 		"viewer.set",
 		"viewer.clear",
+		"agent.mark_read",
 		"agent.create",
 		"agent.settings.get",
 		"agent.settings.update",
@@ -53,6 +54,9 @@ func RegisteredActions() []string {
 		"notify.prefs.get",
 		"notify.prefs.update",
 		"engines.usage.get",
+		"jevos.settings.get",
+		"jevos.settings.install",
+		"jevos.settings.set",
 	}
 }
 
@@ -70,6 +74,7 @@ var Handlers = map[string]Handler{
 	"permission.decide":          handlePermissionDecide,
 	"viewer.set":                 handleViewerSet,
 	"viewer.clear":               handleViewerClear,
+	"agent.mark_read":            handleAgentMarkRead,
 	"agent.create":               handleAgentCreate,
 	"agent.settings.get":         handleAgentSettingsGet,
 	"agent.settings.update":      handleAgentSettingsUpdate,
@@ -82,4 +87,7 @@ var Handlers = map[string]Handler{
 	"notify.prefs.get":           handleNotifyPrefsGet,
 	"notify.prefs.update":        handleNotifyPrefsUpdate,
 	"engines.usage.get":          handleEnginesUsageGet,
+	"jevos.settings.get":         handleJevosSettingsGet,
+	"jevos.settings.install":     handleJevosSettingsInstall,
+	"jevos.settings.set":         handleJevosSettingsSet,
 }

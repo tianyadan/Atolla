@@ -112,6 +112,29 @@ func TestManagedAgentStartDoesNotClearUnread(t *testing.T) {
 	}
 }
 
+func TestManagedAgentTerminalSkipsUnreadWhenMarkUnreadFalse(t *testing.T) {
+	st := openTestStore(t)
+	id := createTestAgent(t, st, "terminal-no-unread-while-viewing")
+	ctx := context.Background()
+
+	if err := st.SetManagedAgentStatus(ctx, id, "running", "", 0, 0); err != nil {
+		t.Fatalf("set running: %v", err)
+	}
+	if err := st.SetManagedAgentStatusUnread(ctx, id, "idle", "", 1200, 0, false); err != nil {
+		t.Fatalf("set idle no-unread: %v", err)
+	}
+	a, err := st.GetManagedAgent(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if a.TaskUnread || a.TaskUnreadKind != "" || a.TaskUnreadAt != nil {
+		t.Fatalf("want no unread, got unread=%v kind=%q at=%v", a.TaskUnread, a.TaskUnreadKind, a.TaskUnreadAt)
+	}
+	if a.Status != "idle" || a.LastRunMs != 1200 {
+		t.Fatalf("status=%q last_run_ms=%d", a.Status, a.LastRunMs)
+	}
+}
+
 func TestClearManagedAgentTaskUnreadClearsSnapshot(t *testing.T) {
 	st := openTestStore(t)
 	id := createTestAgent(t, st, "terminal-unread-clear")

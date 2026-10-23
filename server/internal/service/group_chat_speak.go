@@ -99,7 +99,7 @@ func (s *Service) SpeakInGroup(ctx context.Context, groupID, speakerAgentID int6
 		cancel()
 	}()
 
-	_ = s.Store.SetManagedAgentStatus(runCtx, speakerAgentID, "running", "", 0, 0)
+	_ = s.setManagedAgentStatus(runCtx, speakerAgentID, "running", "", 0, 0)
 	s.PushAgentsMirrorNow()
 
 	emitAsk(onEvent, map[string]any{
@@ -155,7 +155,8 @@ func (s *Service) SpeakInGroup(ctx context.Context, groupID, speakerAgentID int6
 			msg.ID = id
 		}
 	}
-	_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(runCtx), speakerAgentID, agentStatus, lastErr, ms, 0)
+	_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), speakerAgentID, agentStatus, lastErr, ms, 0)
+	s.notifyAgentTerminal(context.WithoutCancel(runCtx), speakerAgentID)
 
 	emitAsk(onEvent, map[string]any{
 		"type":             "done",

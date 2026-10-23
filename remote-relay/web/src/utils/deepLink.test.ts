@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearPendingDeepLink,
+  deepLinkAgentsPath,
   deepLinkTargetPath,
+  isDeepLinkPathActive,
   loadPendingDeepLink,
+  navigateToDeepLinkChat,
   parseAtollaDeepLink,
   savePendingDeepLink,
   type StorageLike,
@@ -56,5 +59,44 @@ describe('Atolla deep links', () => {
     const storage = memoryStorage()
     storage.setItem('atolla.pendingDeepLink', '{bad json')
     expect(loadPendingDeepLink(storage)).toBeNull()
+  })
+
+  it('builds agents list path and detects active chat route', () => {
+    expect(deepLinkAgentsPath({ instanceId: 'mac 1' })).toBe('/instances/mac%201/agents')
+    const target = { kind: 'agent' as const, instanceId: 'mac', agentId: 'a' }
+    expect(isDeepLinkPathActive(target, '/instances/mac/agents/a/chat')).toBe(true)
+    expect(isDeepLinkPathActive(target, '/instances/mac/agents')).toBe(false)
+    const approval = {
+      kind: 'approval' as const, instanceId: 'mac', agentId: 'a', requestId: 'r1',
+    }
+    expect(
+      isDeepLinkPathActive(approval, '/instances/mac/agents/a/chat', '?approval_request_id=r1'),
+    ).toBe(true)
+  })
+
+  it('seeds agents list then chat so back has a stable previous page', () => {
+    const calls: Array<{ to: string; replace?: boolean }> = []
+    const navigate = (to: string, options?: { replace?: boolean }) => {
+      calls.push({ to, replace: options?.replace })
+    }
+    const target = { kind: 'agent' as const, instanceId: 'mac', agentId: 'a' }
+    navigateToDeepLinkChat(navigate, target, { pathname: '/instances', search: '' })
+    expect(calls).toEqual([
+      { to: '/instances/mac/agents', replace: true },
+      { to: '/instances/mac/agents/a/chat', replace: undefined },
+    ])
+  })
+
+  it('skips navigation when already on the deep-link chat', () => {
+    const calls: string[] = []
+    const navigate = (to: string) => {
+      calls.push(to)
+    }
+    const target = { kind: 'agent' as const, instanceId: 'mac', agentId: 'a' }
+    navigateToDeepLinkChat(navigate, target, {
+      pathname: '/instances/mac/agents/a/chat',
+      search: '',
+    })
+    expect(calls).toEqual([])
   })
 })

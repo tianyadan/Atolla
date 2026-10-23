@@ -2,6 +2,7 @@
   color-scheme: light;
   --bg: #f4f4f5;
   --surface: #ffffff;
+  --surface-2: #f4f4f5;
   --text: #18181b;
   --text-h: #09090b;
   --muted: #71717a;
@@ -20,6 +21,7 @@ html:not(.theme-light):not(.theme-dark) {
   color-scheme: dark;
   --bg: #09090b;
   --surface: #18181b;
+  --surface-2: #27272a;
   --text: #fafafa;
   --text-h: #fafafa;
   --muted: #a1a1aa;
@@ -33,6 +35,7 @@ html:not(.theme-light):not(.theme-dark) {
     color-scheme: light;
     --bg: #f4f4f5;
     --surface: #ffffff;
+    --surface-2: #f4f4f5;
     --text: #18181b;
     --text-h: #09090b;
     --muted: #71717a;
@@ -46,6 +49,7 @@ html.theme-light {
   color-scheme: light;
   --bg: #f4f4f5;
   --surface: #ffffff;
+  --surface-2: #f4f4f5;
   --text: #18181b;
   --text-h: #09090b;
   --muted: #71717a;
@@ -169,6 +173,24 @@ a {
   line-height: 1;
 }
 
+button.back-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/** 对话页顶栏盖过 sticky 内容，保证 ← 可点 */
+.page.page-fill .page-header {
+  z-index: 10;
+}
+
 .page-body {
   flex: 1;
   padding: 0.75rem 1rem 1.5rem;
@@ -202,25 +224,106 @@ html.native-app .login-home {
   text-align: center;
 }
 
-.login-logo-wrap {
-  width: 7.25rem;
-  height: 7.25rem;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(circle at 35% 30%, #3f3f46 0%, #18181b 55%, #09090b 100%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
-    0 18px 40px color-mix(in srgb, #000 28%, transparent);
+/* 暗色登录：白水母直出，无圆角卡片/描边/阴影 */
+.login-logo {
+  width: 5.5rem;
+  height: 5.5rem;
+  object-fit: contain;
+  display: block;
   margin-bottom: 1.1rem;
 }
 
-.login-logo {
-  width: 4.25rem;
-  height: 4.25rem;
+/* —— 冷启动白底 SplashOverlay（仅原生壳） —— */
+.splash-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  background: #ffffff;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+
+.splash-overlay--out {
+  opacity: 0;
+}
+
+.splash-logo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 120px;
+  height: 120px;
+  margin-left: -60px;
+  margin-top: -60px;
+}
+
+.splash-logo img {
+  width: 120px;
+  height: 120px;
   object-fit: contain;
   display: block;
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 400ms ease-out,
+    transform 400ms ease-out;
+}
+
+.splash-logo.is-in img {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.splash-copy {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 76px);
+  transform: translate(-50%, 16px);
+  opacity: 0;
+  text-align: center;
+  transition:
+    opacity 400ms ease-out,
+    transform 400ms ease-out;
+}
+
+.splash-copy.is-in {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.splash-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #09090b;
+  line-height: 1.15;
+}
+
+.splash-tagline {
+  margin: 0.4rem 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: #71717a;
+  line-height: 1.3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-overlay,
+  .splash-logo img,
+  .splash-copy {
+    transition-duration: 1ms !important;
+  }
+
+  .splash-logo img {
+    transform: none;
+  }
+
+  .splash-copy {
+    transform: translate(-50%, 0);
+  }
 }
 
 .login-product {
@@ -620,13 +723,25 @@ html.native-app .login-home {
   box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55);
   animation: unread-pulse 1.4s ease-in-out infinite;
 }
+/* 未读分组标题左侧小蓝呼吸灯 */
+.unread-breath-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #3b82f6;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55);
+  animation: unread-pulse 1.4s ease-in-out infinite;
+}
 @keyframes unread-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45); opacity: 1; }
   50% { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); opacity: 0.85; }
 }
 .status-pill.unread {
-  background: color-mix(in srgb, #2563eb 22%, transparent);
-  color: #93c5fd;
+  background: color-mix(in srgb, #2563eb 16%, var(--surface));
+  color: #2563eb;
+  border-color: color-mix(in srgb, #2563eb 40%, var(--border));
 }
 
 .hub-busy-badge {
@@ -1189,7 +1304,7 @@ html.native-app .login-home {
 .settings-switch span {
   position: absolute;
   inset: 0;
-  background: #3a3a3a;
+  background: color-mix(in srgb, var(--text) 22%, var(--border));
   border-radius: 999px;
   transition: background 0.2s;
 }
@@ -1202,12 +1317,13 @@ html.native-app .login-home {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #cfcfcf;
+  background: var(--surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 25%, transparent);
   transition: transform 0.2s;
 }
 
 .settings-switch input:checked + span {
-  background: #555;
+  background: var(--primary);
 }
 
 .settings-switch input:checked + span::after {
@@ -1472,9 +1588,10 @@ html.native-app .login-home {
   font-size: 0.68rem;
   font-weight: 600;
   line-height: 1.2;
-  border: 1px solid color-mix(in srgb, var(--eng, #8a8a8a) 55%, #141414);
-  background: color-mix(in srgb, var(--eng, #8a8a8a) 22%, #111111);
-  color: var(--eng, #f5f5f5);
+  /* 用主题 surface/border 混色，避免亮色模式仍是黑底黑标 */
+  border: 1px solid color-mix(in srgb, var(--eng, #8a8a8a) 45%, var(--border));
+  background: color-mix(in srgb, var(--eng, #8a8a8a) 16%, var(--surface));
+  color: var(--eng, var(--text));
 }
 
 /* 对话顶栏：引擎标签旁 CLI 用量小条 */
@@ -1485,9 +1602,9 @@ html.native-app .login-home {
   max-width: 7.2rem;
   padding: 0.1rem 0.35rem;
   border-radius: 6px;
-  border: 1px solid var(--border, #2a2a2a);
-  background: color-mix(in srgb, var(--surface-2, #141414) 88%, #000);
-  color: inherit;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
   font: inherit;
   font-size: 0.62rem;
   font-weight: 600;
@@ -1515,7 +1632,7 @@ html.native-app .login-home {
   min-width: 2rem;
   height: 0.28rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--border, #2a2a2a) 70%, #000);
+  background: color-mix(in srgb, var(--border) 80%, var(--surface));
   overflow: hidden;
 }
 
@@ -1568,7 +1685,7 @@ html.native-app .login-home {
 .engine-usage-detail-bar {
   height: 0.4rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--border, #2a2a2a) 70%, #000);
+  background: color-mix(in srgb, var(--border) 80%, var(--surface));
   overflow: hidden;
 }
 
@@ -1604,9 +1721,9 @@ html.native-app .login-home {
   margin-top: 0.35rem;
   padding: 0.55rem 0.65rem;
   border-radius: 10px;
-  border: 1px solid var(--border, #2a2a2a);
-  background: var(--surface-2, #141414);
-  color: inherit;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
   font-size: 0.95rem;
 }
 
@@ -2054,6 +2171,7 @@ html.native-app .login-home {
   background: var(--inst-bg);
   color: var(--inst-text);
   max-width: 480px;
+  position: relative;
 }
 
 .instances-dark .inst-topbar {
@@ -2126,7 +2244,8 @@ html.native-app .login-home {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0.85rem 1rem 1.5rem;
+  /* 底部留给椭圆状态胶囊 + Home 指示条 */
+  padding: 0.85rem 1rem calc(5.5rem + env(safe-area-inset-bottom, 0px));
 }
 
 .inst-toolbar {
@@ -2156,34 +2275,92 @@ html.native-app .login-home {
   font-size: 0.9rem;
 }
 
-.inst-filter {
-  position: relative;
-  display: flex;
-  align-items: center;
-  background: var(--inst-surface);
-  border: 1px solid var(--inst-border);
-  border-radius: 10px;
-  padding: 0 0.55rem 0 0.65rem;
-  color: var(--inst-muted);
-  min-width: 6.5rem;
-}
-
-.inst-filter select {
-  appearance: none;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--inst-text);
-  font-size: 0.85rem;
-  padding: 0.55rem 1.1rem 0.55rem 0;
-  width: 100%;
-  cursor: pointer;
-}
-
-.inst-filter svg {
+/* 底部居中：在线 / 离线椭圆胶囊 */
+.inst-status-dock {
   position: absolute;
-  right: 0.45rem;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  justify-content: center;
   pointer-events: none;
+  padding: 0 1rem calc(0.85rem + env(safe-area-inset-bottom, 0px));
+}
+
+.inst-status-capsule {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.28rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--inst-surface) 92%, transparent);
+  border: 1px solid var(--inst-border);
+  box-shadow:
+    0 8px 28px color-mix(in srgb, #000 28%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--inst-text) 4%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.inst-status-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--inst-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.inst-status-tab.is-active {
+  background: color-mix(in srgb, var(--inst-blue) 18%, var(--inst-surface-2));
+  color: var(--inst-text);
+}
+
+.inst-status-tab.is-active .inst-status-dot.on {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--inst-green) 28%, transparent);
+}
+
+.inst-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.inst-status-dot.on {
+  background: var(--inst-green);
+}
+
+.inst-status-dot.off {
+  background: var(--inst-muted);
+}
+
+.inst-status-count {
+  min-width: 1.1rem;
+  padding: 0.12rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  background: color-mix(in srgb, var(--inst-text) 8%, transparent);
+  color: inherit;
+  text-align: center;
+}
+
+.inst-status-tab.is-active .inst-status-count {
+  background: color-mix(in srgb, var(--inst-blue) 22%, transparent);
 }
 
 .inst-muted {
@@ -2474,17 +2651,12 @@ html.native-app .login-home {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 1.75rem 1rem 0.5rem;
+  padding: 2.5rem 1rem 1rem;
   color: var(--inst-muted);
 }
 
-.inst-empty-footer {
-  opacity: 0.85;
-  padding-top: 1.25rem;
-}
-
 .inst-empty-title {
-  margin: 0.75rem 0 0.25rem;
+  margin: 0 0 0.35rem;
   font-size: 0.95rem;
   color: var(--inst-text);
   font-weight: 550;
@@ -2553,8 +2725,11 @@ html.force-light .instances-dark {
   align-items: center;
   gap: 0.5rem;
   padding: 0.65rem 0.75rem;
+  /* 全面屏：避开状态栏 / Dynamic Island（设置页顶栏此前被挡） */
+  padding-top: calc(0.65rem + env(safe-area-inset-top, 0px));
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  background: var(--bg, #0b0b0c);
 }
 
 .settings-sheet-title {
@@ -2596,7 +2771,7 @@ html.force-light .instances-dark {
 
 .settings-tabs button.active,
 .settings-subtabs button.active {
-  background: var(--surface-2, #1c1c1e);
+  background: var(--surface-2);
   color: var(--text);
   font-weight: 600;
 }
@@ -2604,7 +2779,7 @@ html.force-light .instances-dark {
 .settings-sheet-body {
   flex: 1;
   overflow-y: auto;
-  padding: 0.85rem 0.9rem 1.5rem;
+  padding: 0.85rem 0.9rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
   -webkit-overflow-scrolling: touch;
 }
 
@@ -2773,7 +2948,7 @@ html.force-light .instances-dark {
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--border);
-  background: var(--surface-2, #1c1c1e);
+  background: var(--surface-2);
 }
 
 .chat-attach-thumb img {
@@ -2954,18 +3129,18 @@ html.force-light .instances-dark {
   height: 44px;
   padding: 0;
   border-radius: 10px;
-  border: 1px solid var(--border, #2a2a2a);
-  background: var(--surface-2, #141414);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
   cursor: pointer;
 }
 
 .jelly-color-swatch:hover:not(:disabled) {
-  border-color: #525252;
+  border-color: color-mix(in srgb, var(--text) 35%, var(--border));
 }
 
 .jelly-color-swatch.is-selected {
-  border-color: #e5e5e5;
-  box-shadow: 0 0 0 1px #e5e5e5;
+  border-color: var(--text-h);
+  box-shadow: 0 0 0 1px var(--text-h);
 }
 
 .jelly-color-swatch:disabled {

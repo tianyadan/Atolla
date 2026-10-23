@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { filterAgentGroupsByQuery, listBusyAgents, type AgentFolderGroup } from './agentStatus'
+import {
+  filterAgentGroupsByQuery,
+  listBusyAgents,
+  listUnreadAgents,
+  type AgentFolderGroup,
+} from './agentStatus'
 import type { PublicMirrorAgent } from '../api'
 
 /** Build a minimal mirror agent for filter tests */
@@ -71,5 +76,37 @@ describe('listBusyAgents', () => {
 
   it('returns empty when no busy match', () => {
     expect(listBusyAgents(pool, '张')).toEqual([])
+  })
+})
+
+describe('listUnreadAgents', () => {
+  it('sorts by task_unread_at desc (earlier completion further back)', () => {
+    const pool: PublicMirrorAgent[] = [
+      {
+        agent_id: 'old',
+        display_name: '早完成',
+        engine: 'claude',
+        status: 'idle',
+        payload: { task_unread: true, task_unread_at: 1000 },
+        synced_at: 1,
+      },
+      {
+        agent_id: 'new',
+        display_name: '晚完成',
+        engine: 'claude',
+        status: 'idle',
+        payload: { task_unread: true, task_unread_at: 2000 },
+        synced_at: 1,
+      },
+      {
+        agent_id: 'busy',
+        display_name: '仍在忙',
+        engine: 'claude',
+        status: 'running',
+        payload: { task_unread: true, task_unread_at: 3000 },
+        synced_at: 1,
+      },
+    ]
+    expect(listUnreadAgents(pool).map((a) => a.agent_id)).toEqual(['new', 'old'])
   })
 })

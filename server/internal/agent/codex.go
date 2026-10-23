@@ -188,7 +188,8 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 }
 
 // CodexAskMetaEx 增加 onCompact：JSONL 出现压缩事件时回调（用于平台清库同步）。
-func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func()) (string, int, error) {
+// extraEnv：授权路由 AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承。
+func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), extraEnv ...string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -230,7 +231,7 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 		args = CodexArgs(dir, prompt, true)
 	}
 
-	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand, onCompact)
+	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand, onCompact, extraEnv)
 	if err == nil {
 		return text, int(time.Since(start).Milliseconds()), nil
 	}
@@ -252,6 +253,9 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 		cmd.Dir = dir
 	}
 	cmd.Env = CleanEnv(os.Environ())
+	if len(extraEnv) > 0 {
+		cmd.Env = append(cmd.Env, extraEnv...)
+	}
 	cmd.Stdin = bytes.NewReader(nil)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -281,6 +285,7 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 func runCodexJSONStream(
 	ctx context.Context, bin, dir string, args []string,
 	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onCommand CodexCommandFn, onCompact func(),
+	extraEnv []string,
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	AttachKillable(cmd)
@@ -288,6 +293,9 @@ func runCodexJSONStream(
 		cmd.Dir = dir
 	}
 	cmd.Env = CleanEnv(os.Environ())
+	if len(extraEnv) > 0 {
+		cmd.Env = append(cmd.Env, extraEnv...)
+	}
 	// 避免 CLI 再从 stdin 读「Reading additional input」
 	cmd.Stdin = bytes.NewReader(nil)
 	stdout, err := cmd.StdoutPipe()

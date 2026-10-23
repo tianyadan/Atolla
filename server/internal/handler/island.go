@@ -42,6 +42,16 @@ func (h *Handler) AdminIslandBusy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items, "count": len(items)})
 }
 
+// AdminIslandEvents GET /api/admin/island/events — 返回当前最高优先级的灵动岛事件。
+func (h *Handler) AdminIslandEvents(c *gin.Context) {
+	presentation, err := h.svc.ListIslandEvents(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, presentation)
+}
+
 // AdminIslandSettingsGet GET /api/admin/island/settings?force=1 — 灵动岛安装/启用状态（默认读缓存）。
 func (h *Handler) AdminIslandSettingsGet(c *gin.Context) {
 	force := c.Query("force") == "1" || c.Query("force") == "true"

@@ -313,7 +313,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureGroupChatSchema(ctx); err != nil {
 		return err
 	}
-	// 24) 任务完成未读（灵动岛 / PC / 移动端共用）
+	// 24) v0.5.11 任务完成未读快照（灵动岛 / PC / 移动端共用）
 	if err := s.EnsureTaskUnreadSchema(ctx); err != nil {
 		return err
 	}

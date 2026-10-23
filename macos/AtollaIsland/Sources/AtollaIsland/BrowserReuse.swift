@@ -7,8 +7,11 @@ enum BrowserReuse {
   static func activateOrNavigate(webBase: String, agentId: Int64, targetURL: URL) -> Bool {
     let hostKeys = hostMatchKeys(webBase: webBase)
     guard !hostKeys.isEmpty else { return false }
-    let agentNeedle = "agent=\(agentId)"
     let target = targetURL.absoluteString
+    // 审批深链必须重新导航，不能只激活同一数字人的旧标签。
+    let approvalNeedle = URLComponents(url: targetURL, resolvingAgainstBaseURL: false)?
+      .queryItems?.first(where: { $0.name == "approval_request_id" })?.value
+    let agentNeedle = approvalNeedle.map { "approval_request_id=\($0)" } ?? "agent=\(agentId)"
 
     // 1) 精确：同 host 且 URL 含 agent=id → 仅前置
     // 2) 回退：同 host 任意管理台标签 → 导航到目标深链（不新建窗口）

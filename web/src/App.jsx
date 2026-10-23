@@ -21,6 +21,7 @@ import EngineOnboarding from './EngineOnboarding.jsx'
 import EngineSettings from './EngineSettings.jsx'
 import WatchdogSettings from './WatchdogSettings.jsx'
 import IslandSettings from './IslandSettings.jsx'
+import JevSettings from './JevSettings.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -59,6 +60,7 @@ export default function App() {
   const [adminMenu, setAdminMenu] = useState('agents')
   const [digitalOpen, setDigitalOpen] = useState(true)
   const [focusAgentId, setFocusAgentId] = useState(0)
+  const [focusApprovalRequestId, setFocusApprovalRequestId] = useState('')
   const [focusGroupId, setFocusGroupId] = useState(0)
   const [openAgentSettings, setOpenAgentSettings] = useState(false)
   const [openHire, setOpenHire] = useState(false)
@@ -143,7 +145,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** 灵动岛深链：?agent= / #agent=；保留 hash 便于岛复用已开标签。 */
+  /** 灵动岛深链：可同时定位数字人与具体命令审批；保留 hash 便于岛复用已开标签。 */
   function consumeAgentDeepLink() {
     try {
       const q = new URLSearchParams(window.location.search || '')
@@ -152,11 +154,13 @@ export default function App() {
       if (!aid && hm) aid = Number(hm[1])
       if (aid > 0) {
         setFocusAgentId(aid)
+        setFocusApprovalRequestId(q.get('approval_request_id') || '')
         setAdminMenu('agents')
         setDigitalOpen(true)
         setView('admin')
         const url = new URL(window.location.href)
         url.searchParams.delete('agent')
+        url.searchParams.delete('approval_request_id')
         url.hash = `agent=${aid}`
         window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
       }
@@ -993,8 +997,10 @@ export default function App() {
                 onUnauthorized={() => clearAuth('登录已过期')}
                 active={adminMenu === 'agents'}
                 focusAgentId={focusAgentId}
+                focusApprovalRequestId={focusApprovalRequestId}
                 openSettings={openAgentSettings}
                 onFocusConsumed={() => { setFocusAgentId(0); setOpenAgentSettings(false) }}
+                onApprovalFocusConsumed={() => setFocusApprovalRequestId('')}
                 openHire={openHire}
                 onHireConsumed={() => setOpenHire(false)}
                 onOpenWorkflowRun={(runId) => {
@@ -1062,6 +1068,11 @@ export default function App() {
                   onUnauthorized={() => clearAuth('登录已过期')}
                   active={adminMenu === 'settings'}
                 />
+                <JevSettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
                 <EngineSettings
                   authHeaders={authHeaders}
                   onUnauthorized={() => clearAuth('登录已过期')}
@@ -1121,12 +1132,11 @@ export default function App() {
             {error && <pre className="error">{error}</pre>}
           </main>
         </div>
-        {adminMenu !== 'agents' && adminMenu !== 'agents-manage' && (
-          <ManagedAgentPermOverlay
-            authHeaders={authHeaders}
-            onUnauthorized={() => clearAuth('登录已过期')}
-          />
-        )}
+        {/* 始终挂载：数字人页内 sticky 审批卡可能被滚出/会话错位；浮层兜底保证 PC 可见可裁决 */}
+        <ManagedAgentPermOverlay
+          authHeaders={authHeaders}
+          onUnauthorized={() => clearAuth('登录已过期')}
+        />
         {authToken && (
           <WorkflowPermOverlay
             authHeaders={authHeaders}

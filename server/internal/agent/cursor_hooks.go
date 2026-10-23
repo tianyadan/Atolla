@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+// hookWrapperScript 生成工作区 hook 包装脚本。
+// 优先沿用引擎进程继承的 AVATAR_*（每轮 Ask 隔离）；仅在未设置时回落到写入时的会话 id。
+// 避免同工作区多数字人互相覆盖 avatar-pretool.sh 导致命令串台。
+func hookWrapperScript(hookBin, backend string, convID int64) string {
+	return "#!/bin/sh\n" +
+		"# Prefer env inherited from the engine process (per-run isolation).\n" +
+		"if [ -z \"$AVATAR_CONV_ID\" ]; then export AVATAR_CONV_ID=" + strconv.FormatInt(convID, 10) + "; fi\n" +
+		"if [ -z \"$AVATAR_BACKEND_URL\" ]; then export AVATAR_BACKEND_URL=" + shellSingleQuote(backend) + "; fi\n" +
+		"exec " + shellSingleQuote(hookBin) + "\n"
+}
+
 // EnsureCursorCompactHook 在工作区写入/合并 preCompact → avatar-hook，便于自动压缩同步。
 func EnsureCursorCompactHook(dir, hookBin, backend string, convID int64) {
 	dir = strings.TrimSpace(dir)
@@ -29,11 +40,7 @@ func EnsureCursorCompactHook(dir, hookBin, backend string, convID int64) {
 		root["hooks"] = hooks
 	}
 	wrapper := filepath.Join(hookDir, "avatar-precompact.sh")
-	script := "#!/bin/sh\n" +
-		"export AVATAR_CONV_ID=" + strconv.FormatInt(convID, 10) + "\n" +
-		"export AVATAR_BACKEND_URL=" + shellSingleQuote(backend) + "\n" +
-		"exec " + shellSingleQuote(hookBin) + "\n"
-	_ = os.WriteFile(wrapper, []byte(script), 0o755)
+	_ = os.WriteFile(wrapper, []byte(hookWrapperScript(hookBin, backend, convID)), 0o755)
 
 	list, _ := hooks["preCompact"].([]interface{})
 	found := false
@@ -51,11 +58,7 @@ func EnsureCursorCompactHook(dir, hookBin, backend string, convID int64) {
 	// Cursor 若支持 preToolUse，走同一 avatar-hook → Gateway（执行前拦截）。
 	// 不支持时引擎仍会自行执行，平台不伪装已授权。
 	permWrapper := filepath.Join(hookDir, "avatar-pretool.sh")
-	permScript := "#!/bin/sh\n" +
-		"export AVATAR_CONV_ID=" + strconv.FormatInt(convID, 10) + "\n" +
-		"export AVATAR_BACKEND_URL=" + shellSingleQuote(backend) + "\n" +
-		"exec " + shellSingleQuote(hookBin) + "\n"
-	_ = os.WriteFile(permWrapper, []byte(permScript), 0o755)
+	_ = os.WriteFile(permWrapper, []byte(hookWrapperScript(hookBin, backend, convID)), 0o755)
 	mergeHookList(hooks, "preToolUse", permWrapper, 150)
 	root["version"] = 1
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -75,11 +78,7 @@ func EnsureCodexCompactHooks(dir, hookBin, backend string, convID int64) {
 	hookDir := filepath.Join(dir, ".codex")
 	_ = os.MkdirAll(hookDir, 0o755)
 	wrapper := filepath.Join(hookDir, "avatar-compact.sh")
-	script := "#!/bin/sh\n" +
-		"export AVATAR_CONV_ID=" + strconv.FormatInt(convID, 10) + "\n" +
-		"export AVATAR_BACKEND_URL=" + shellSingleQuote(backend) + "\n" +
-		"exec " + shellSingleQuote(hookBin) + "\n"
-	_ = os.WriteFile(wrapper, []byte(script), 0o755)
+	_ = os.WriteFile(wrapper, []byte(hookWrapperScript(hookBin, backend, convID)), 0o755)
 
 	path := filepath.Join(hookDir, "hooks.json")
 	doc := map[string]interface{}{
@@ -130,11 +129,7 @@ func EnsureCodexPermissionHook(dir, hookBin, backend string, convID int64) {
 	hookDir := filepath.Join(dir, ".codex")
 	_ = os.MkdirAll(hookDir, 0o755)
 	wrapper := filepath.Join(hookDir, "avatar-pretool.sh")
-	script := "#!/bin/sh\n" +
-		"export AVATAR_CONV_ID=" + strconv.FormatInt(convID, 10) + "\n" +
-		"export AVATAR_BACKEND_URL=" + shellSingleQuote(backend) + "\n" +
-		"exec " + shellSingleQuote(hookBin) + "\n"
-	_ = os.WriteFile(wrapper, []byte(script), 0o755)
+	_ = os.WriteFile(wrapper, []byte(hookWrapperScript(hookBin, backend, convID)), 0o755)
 	path := filepath.Join(hookDir, "hooks.json")
 	root := map[string]interface{}{"hooks": map[string]interface{}{}}
 	if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {

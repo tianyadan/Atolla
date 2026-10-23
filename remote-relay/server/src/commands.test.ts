@@ -289,6 +289,19 @@ describe('command queue and long-poll', () => {
     expect(r.status).toBe(400)
   })
 
+  it('allows agent.mark_read even when instance actions list is stale', async () => {
+    await register({ actions: ['ping'] })
+    const token = await siteToken()
+    const u = await unlock(token)
+    const r = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/agents/1/mark-read`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', u)
+      .send({})
+    expect(r.status).toBe(202)
+    expect(r.body.ok).toBe(true)
+  })
+
   it('rejects unlock for unknown instance', async () => {
     const token = await siteToken()
     const r = await request(app)

@@ -368,6 +368,38 @@ function parsePayload(json: string): Record<string, unknown> {
   }
 }
 
+/**
+ * 手机 mark-read：立刻清镜像未读（与 permission.decide 同款），
+ * 不等 Mac 长轮询处理完，否则返回列表仍显示「未读」。
+ */
+export function clearAgentTaskUnreadMirror(
+  db: RelayDatabase,
+  instanceId: string,
+  agentId: string,
+): boolean {
+  const id = String(agentId || '').trim()
+  if (!instanceId || !id) return false
+  const row = db
+    .prepare(
+      `SELECT payload_json FROM agents_mirror
+       WHERE instance_id = ? AND agent_id = ?`,
+    )
+    .get(instanceId, id) as { payload_json: string } | undefined
+  if (!row) return false
+  const payload = parsePayload(row.payload_json)
+  payload.task_unread = false
+  payload.task_unread_kind = ''
+  payload.task_unread_at = null
+  payload.task_unread_duration_ms = 0
+  payload.task_unread_summary = ''
+  db.prepare(
+    `UPDATE agents_mirror
+     SET payload_json = ?, synced_at = ?
+     WHERE instance_id = ? AND agent_id = ?`,
+  ).run(JSON.stringify(payload), Date.now(), instanceId, id)
+  return true
+}
+
 /** List mirrored agents for an instance (404 if instance missing) */
 export function listAgentsMirror(
   db: RelayDatabase,
