@@ -533,6 +533,16 @@ export async function fetchPendingPermissions(
   return data.items ?? []
 }
 
+/** Pending permission cards across one unlocked instance */
+export async function fetchPendingInstancePermissions(
+  instanceId: string,
+): Promise<PublicMirrorPermission[]> {
+  const data = await request<{ items: PublicMirrorPermission[] }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/permissions/pending`,
+  )
+  return data.items ?? []
+}
+
 /** Enqueue permission.decide */
 export async function decidePermission(
   instanceId: string,
