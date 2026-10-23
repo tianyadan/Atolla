@@ -1,8 +1,23 @@
 import { Capacitor } from '@capacitor/core'
 import { useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { clearToken, getToken, login } from '../api'
+import { clearToken, getToken, hasUnlockToken, login } from '../api'
 import { getApiBase, setApiBase } from '../utils/apiBase'
+import {
+  clearPendingDeepLink,
+  deepLinkTargetPath,
+  loadPendingDeepLink,
+} from '../utils/deepLink'
+
+function destinationAfterLogin(): string {
+  const target = loadPendingDeepLink()
+  if (!target) return '/instances'
+  if (!hasUnlockToken(target.instanceId)) {
+    return `/instances?unlock=${encodeURIComponent(target.instanceId)}`
+  }
+  clearPendingDeepLink()
+  return deepLinkTargetPath(target)
+}
 
 /** Site gate — branded home / sign-in */
 export function LoginPage() {
@@ -15,7 +30,7 @@ export function LoginPage() {
   const showApiField = native || !!getApiBase() || !!import.meta.env.VITE_API_BASE
 
   if (getToken()) {
-    return <Navigate to="/instances" replace />
+    return <Navigate to={destinationAfterLogin()} replace />
   }
 
   /** Submit site password */
@@ -32,7 +47,7 @@ export function LoginPage() {
     setLoading(true)
     try {
       await login(password.trim())
-      navigate('/instances', { replace: true })
+      navigate(destinationAfterLogin(), { replace: true })
     } catch (err) {
       clearToken()
       const raw = err instanceof Error ? err.message : 'Sign-in failed'

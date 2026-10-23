@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './components/RequireAuth'
+import { NativeDeepLinkHost } from './components/NativeDeepLinkHost'
 import { AgentsPage } from './pages/Agents'
 import { ChangelogPage } from './pages/Changelog'
 import { ChatHistoryPage } from './pages/ChatHistory'
@@ -12,6 +13,7 @@ import { SettingsPage } from './pages/Settings'
 export default function App() {
   return (
     <BrowserRouter>
+      <NativeDeepLinkHost />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route element={<RequireAuth />}>

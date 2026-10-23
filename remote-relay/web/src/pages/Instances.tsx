@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   clearToken,
   fetchInstances,
@@ -30,6 +30,11 @@ import { Modal } from '../components/Modal'
 import { SettingsIcon } from '../components/SettingsIcon'
 import { getStoredTheme, toggleTheme, type ThemeMode } from '../utils/theme'
 import {
+  clearPendingDeepLink,
+  deepLinkTargetPath,
+  loadPendingDeepLink,
+} from '../utils/deepLink'
+import {
   formatPct,
   formatTempC,
   formatUptime,
@@ -42,6 +47,8 @@ type StatusFilter = 'all' | 'online' | 'offline'
 /** Dark instances management — matches prototype, wired to real APIs */
 export function InstancesPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const unlockTargetId = searchParams.get('unlock') || ''
   const [items, setItems] = useState<PublicInstance[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -86,6 +93,28 @@ export function InstancesPage() {
     }
   }, [load])
 
+  /** 灵动岛深链恢复：实例存在则直达或自动打开密码框。 */
+  useEffect(() => {
+    if (loading || !unlockTargetId) return
+    const target = loadPendingDeepLink()
+    if (!target || target.instanceId !== unlockTargetId) return
+    const instance = items.find((item) => item.instance_id === unlockTargetId)
+    if (!instance) {
+      setError('目标实例不存在或已被移除')
+      return
+    }
+    if (hasUnlockToken(unlockTargetId)) {
+      clearPendingDeepLink()
+      navigate(deepLinkTargetPath(target), { replace: true })
+      return
+    }
+    if (enterTarget?.instance_id !== instance.instance_id) {
+      setEnterTarget(instance)
+      setEnterPassword('')
+      setEnterError(null)
+    }
+  }, [enterTarget?.instance_id, items, loading, navigate, unlockTargetId])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return items.filter((inst) => {
@@ -123,7 +152,13 @@ export function InstancesPage() {
       const id = enterTarget.instance_id
       setEnterTarget(null)
       setEnterPassword('')
-      navigate(`/instances/${encodeURIComponent(id)}`)
+      const pending = loadPendingDeepLink()
+      if (pending?.instanceId === id) {
+        clearPendingDeepLink()
+        navigate(deepLinkTargetPath(pending), { replace: true })
+      } else {
+        navigate(`/instances/${encodeURIComponent(id)}`)
+      }
     } catch (err) {
       setEnterError(err instanceof Error ? err.message : '验证失败')
     } finally {
@@ -456,7 +491,11 @@ export function InstancesPage() {
       <Modal
         open={!!enterTarget}
         title="输入实例密码"
-        onClose={() => !enterBusy && setEnterTarget(null)}
+        onClose={() => {
+          if (enterBusy) return
+          setEnterTarget(null)
+          if (unlockTargetId) navigate('/instances', { replace: true })
+        }}
         footer={
           <>
             <button
