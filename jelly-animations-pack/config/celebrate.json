@@ -1,0 +1,14 @@
+{
+  "id": "celebrate",
+  "name": "庆祝",
+  "row": 6,
+  "frames": 8,
+  "fps": 12,
+  "durationMs": 667,
+  "loop": false,
+  "trigger": "task success | hire success",
+  "cssHint": {
+    "translateY": "optional hop"
+  },
+  "notes": "转圈感靠触手甩 + 星星；播完回 idle"
+}
