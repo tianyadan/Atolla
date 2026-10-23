@@ -2,6 +2,13 @@ package config
 
 import "testing"
 
+func TestLoadBarkIconURL(t *testing.T) {
+	t.Setenv("ATOLLA_BARK_ICON_URL", " https://cdn.example/atolla.png ")
+	if got := Load().BarkIconURL; got != "https://cdn.example/atolla.png" {
+		t.Fatalf("BarkIconURL=%q", got)
+	}
+}
+
 func TestContextWindowForEngine(t *testing.T) {
 	c := Config{
 		ContextWindowClaude: 100000,
@@ -42,9 +49,9 @@ func TestOSSConfigured(t *testing.T) {
 		t.Fatal("empty should be false")
 	}
 	c = Config{
-		OSSEndpoint: "oss-cn-qingdao.aliyuncs.com",
+		OSSEndpoint:    "oss-cn-qingdao.aliyuncs.com",
 		OSSAccessKeyID: "id", OSSAccessKeySecret: "sec",
-		OSSBucket: "digital-employee-qd",
+		OSSBucket:     "digital-employee-qd",
 		OSSPublicBase: "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com",
 	}
 	if !c.OSSConfigured() {

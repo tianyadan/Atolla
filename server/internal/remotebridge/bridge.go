@@ -226,9 +226,10 @@ func (b *Bridge) run(ctx context.Context, gen uint64, register bool) {
 		case <-heartbeatTicker.C:
 			cfg = b.Config.Get()
 			client = b.newClient(cfg)
-			hb, err := client.Heartbeat(ctx, actions)
+			smtpOk := cfg.SmtpConfigured() && cfg.SmtpOk
+			hb, err := client.Heartbeat(ctx, actions, smtpOk)
 			if err != nil {
-				if adopted, hb2, ok := b.adoptStagedPassword(ctx, cfg, actions, err); ok {
+				if adopted, hb2, ok := b.adoptStagedPassword(ctx, cfg, actions, smtpOk, err); ok {
 					cfg = adopted
 					client = b.newClient(cfg)
 					hb = hb2
@@ -252,7 +253,7 @@ func (b *Bridge) run(ctx context.Context, gen uint64, register bool) {
 		case <-snapshotTicker.C:
 			cfg = b.Config.Get()
 			client = b.newClient(cfg)
-			ec := &ExecContext{Context: ctx, Store: b.Store, Client: client, Runtime: b.Runtime}
+			ec := &ExecContext{Context: ctx, Store: b.Store, Client: client, Runtime: b.Runtime, Config: b.Config}
 			if err := PushAgentsTasksSnapshots(ec); err != nil {
 				b.setErr(err.Error())
 			} else {
@@ -263,7 +264,7 @@ func (b *Bridge) run(ctx context.Context, gen uint64, register bool) {
 }
 
 // adoptStagedPassword 在当前密码被拒时，用注册前已落盘的待定密码再心跳一次。成功就把待定密码升成正式密码。
-func (b *Bridge) adoptStagedPassword(ctx context.Context, cfg Config, actions []string, authErr error) (Config, *HeartbeatResult, bool) {
+func (b *Bridge) adoptStagedPassword(ctx context.Context, cfg Config, actions []string, smtpOk bool, authErr error) (Config, *HeartbeatResult, bool) {
 	if !IsUnauthorized(authErr) {
 		return cfg, nil, false
 	}
@@ -273,7 +274,7 @@ func (b *Bridge) adoptStagedPassword(ctx context.Context, cfg Config, actions []
 	}
 	alt := cfg
 	alt.Password = pending
-	hb, err := b.newClient(alt).Heartbeat(ctx, actions)
+	hb, err := b.newClient(alt).Heartbeat(ctx, actions, smtpOk)
 	if err != nil {
 		return cfg, nil, false
 	}
@@ -301,7 +302,7 @@ func (b *Bridge) PushAgentsSnapshotNow() {
 	client := b.newClient(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ec := &ExecContext{Context: ctx, Store: b.Store, Client: client, Runtime: b.Runtime}
+	ec := &ExecContext{Context: ctx, Store: b.Store, Client: client, Runtime: b.Runtime, Config: b.Config}
 	if err := PushAgentsTasksSnapshots(ec); err != nil {
 		log.Printf("remotebridge push agents after delete: %v", err)
 		b.setErr(err.Error())
@@ -324,6 +325,7 @@ func (b *Bridge) PushAgentMessagesSnapshot(agentID int64) {
 		Store:   b.Store,
 		Client:  client,
 		Runtime: b.Runtime,
+		Config:  b.Config,
 		Payload: map[string]any{
 			"agent_id": strconv.FormatInt(agentID, 10),
 			"limit":    40,
@@ -382,6 +384,7 @@ func (b *Bridge) handleCommand(ctx context.Context, client *RelayClient, cmd Dev
 		Payload: cmd.Payload,
 		Runtime: b.Runtime,
 		Viewer:  b,
+		Config:  b.Config,
 	}
 	body, err := h(ec)
 	if err != nil {

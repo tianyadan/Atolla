@@ -40,7 +40,7 @@ func TestAdoptStagedPasswordPromotesAcceptedSecret(t *testing.T) {
 	}
 
 	b := NewBridge(cs, &store.Store{})
-	cfg, hb, ok := b.adoptStagedPassword(context.Background(), cs.Get(), []string{"ping"}, errString("relay 401 Unauthorized: Unauthorized"))
+	cfg, hb, ok := b.adoptStagedPassword(context.Background(), cs.Get(), []string{"ping"}, false, errString("relay 401 Unauthorized: Unauthorized"))
 	if !ok || hb == nil || !hb.OK {
 		t.Fatalf("adopt ok=%v hb=%v", ok, hb)
 	}

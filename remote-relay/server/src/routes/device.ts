@@ -53,6 +53,7 @@ const heartbeatBodySchema = z.object({
   registry_version: z.number().int().positive().optional(),
   actions: z.array(z.string()).optional(),
   host: hostMetaSchema,
+  unlock_otp_smtp_ok: z.boolean().optional(),
 })
 
 const commandResultBodySchema = z.object({
@@ -176,6 +177,7 @@ export function createDeviceRouter(
       registry_version: parsed.data.registry_version,
       actions: parsed.data.actions,
       host: parsed.data.host ?? null,
+      unlock_otp_smtp_ok: parsed.data.unlock_otp_smtp_ok,
     })
     // Return phone viewing presence so Mac PC admin can show mobile_viewing icon.
     const viewing = getMobileViewerAgentId(db, auth.instanceId)

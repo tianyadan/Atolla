@@ -11,6 +11,14 @@ import {
   type UnlockRequest,
 } from '../auth/unlock.js'
 import {
+  getSiteReceiveEmail,
+  getUnlockOtpStatus,
+  isValidReceiveEmail,
+  maskEmail,
+  sendUnlockOtp,
+  setSiteReceiveEmail,
+} from '../auth/unlockOtp.js'
+import {
   listDeviceSessions,
   revokeDeviceSession,
   touchDeviceSession,
@@ -47,6 +55,10 @@ const syncMessagesBodySchema = z.object({
 const unlockBodySchema = z.object({
   password: z.string().min(1),
   device_label: z.string().max(64).optional(),
+})
+
+const receiveEmailBodySchema = z.object({
+  email: z.string().max(200),
 })
 
 const askBodySchema = z.object({
@@ -126,8 +138,53 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
   const guard = requireSiteAuth(db)
   const needUnlock = createRequireInstanceUnlock(db, 'id')
 
-  router.get('/instances', guard, (_req: Request, res: Response) => {
-    res.json({ instances: listInstancesPublic(db) })
+  router.get('/instances', guard, (req: Request, res: Response) => {
+    const receive = getSiteReceiveEmail(db)
+    const receiveSet = receive.length > 0
+    const instances = listInstancesPublic(db).map((inst) => ({
+      ...inst,
+      unlock_otp_ready: !!inst.unlock_otp_smtp_ok && receiveSet,
+    }))
+    res.json({
+      instances,
+      receive_email_set: receiveSet,
+      receive_email_masked: maskEmail(receive),
+    })
+  })
+
+  /** 站点接收邮箱（验证码登录收件地址） */
+  router.get('/site/receive-email', guard, (_req: Request, res: Response) => {
+    const email = getSiteReceiveEmail(db)
+    res.json({
+      email,
+      email_masked: maskEmail(email),
+      set: email.length > 0,
+    })
+  })
+
+  router.put('/site/receive-email', guard, (req: Request, res: Response) => {
+    const parsed = receiveEmailBodySchema.safeParse(req.body ?? {})
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid email payload' })
+      return
+    }
+    const email = parsed.data.email.trim()
+    if (email && !isValidReceiveEmail(email)) {
+      res.status(400).json({ error: '邮箱格式无效' })
+      return
+    }
+    try {
+      setSiteReceiveEmail(db, email)
+    } catch {
+      res.status(400).json({ error: '请先完成站点密码初始化' })
+      return
+    }
+    res.json({
+      ok: true,
+      email,
+      email_masked: maskEmail(email),
+      set: email.length > 0,
+    })
   })
 
   /** Enter instance: verify 6-char Mac password → unlock_token bound to device session (7d) */
@@ -163,6 +220,35 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
       unlock_token: result.unlock_token,
       expires_in: result.expires_in,
       session_id: result.session_id,
+    })
+  })
+
+  /** 验证码登录能力查询（解锁弹窗按钮灰/亮） */
+  router.get('/instances/:id/unlock-otp/status', guard, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    if (!instanceId || !getInstanceRow(db, instanceId)) {
+      res.status(404).json({ error: 'Instance not found' })
+      return
+    }
+    res.json(getUnlockOtpStatus(db, instanceId))
+  })
+
+  /** 发送一次性解锁验证码（等 Mac SMTP 真正发出后再返回） */
+  router.post('/instances/:id/unlock-otp/send', guard, async (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    if (!instanceId) {
+      res.status(400).json({ error: 'Invalid instance id' })
+      return
+    }
+    const result = await sendUnlockOtp(db, instanceId)
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error })
+      return
+    }
+    res.status(200).json({
+      ok: true,
+      expires_in: result.expires_in,
+      receive_email_masked: maskEmail(getSiteReceiveEmail(db)),
     })
   })
 

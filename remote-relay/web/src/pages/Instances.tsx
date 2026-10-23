@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   clearToken,
   fetchInstances,
+  fetchUnlockOtpStatus,
   hasUnlockToken,
   revokeInstancePassword,
+  saveReceiveEmail,
+  sendUnlockOtp,
   unlockInstance,
   type PublicInstance,
+  type UnlockOtpStatus,
 } from '../api'
+import { confirmSendUnlockOtp } from '../utils/biometricConfirm'
 import {
   IconChevronRight,
   IconChip,
@@ -62,6 +67,12 @@ export function InstancesPage() {
   const [enterPassword, setEnterPassword] = useState('')
   const [enterError, setEnterError] = useState<string | null>(null)
   const [enterBusy, setEnterBusy] = useState(false)
+  const [otpStatus, setOtpStatus] = useState<UnlockOtpStatus | null>(null)
+  const [otpSending, setOtpSending] = useState(false)
+  const [otpHint, setOtpHint] = useState<string | null>(null)
+  const [otpUnsupported, setOtpUnsupported] = useState(false)
+  const [receiveDraft, setReceiveDraft] = useState('')
+  const [receiveBusy, setReceiveBusy] = useState(false)
   const [revokeTarget, setRevokeTarget] = useState<PublicInstance | null>(null)
 
   /** Load instance list from API */
@@ -148,6 +159,41 @@ export function InstancesPage() {
     setStatusFilter(next)
   }
 
+  /** 打开解锁弹窗时拉验证码能力 */
+  useEffect(() => {
+    if (!enterTarget) {
+      setOtpStatus(null)
+      setOtpHint(null)
+      setOtpUnsupported(false)
+      setReceiveDraft('')
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const st = await fetchUnlockOtpStatus(enterTarget.instance_id)
+        if (!cancelled) {
+          setOtpUnsupported(false)
+          setOtpStatus(st)
+        }
+      } catch (err) {
+        if (cancelled) return
+        const status = (err as { status?: number })?.status
+        // 404 = 旧中继包未含验证码 API
+        setOtpUnsupported(status === 404)
+        setOtpStatus({
+          ready: !!enterTarget.unlock_otp_ready,
+          smtp_ok: !!enterTarget.unlock_otp_smtp_ok,
+          receive_email_set: false,
+          receive_email_masked: '',
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [enterTarget])
+
   /** Enter instance hub (unlock if needed) */
   function onEnterClick(inst: PublicInstance) {
     setMenuId(null)
@@ -158,6 +204,66 @@ export function InstancesPage() {
     setEnterTarget(inst)
     setEnterPassword('')
     setEnterError(null)
+    setOtpHint(null)
+    setReceiveDraft('')
+  }
+
+  /** 弹窗内保存接收邮箱后刷新 OTP 状态 */
+  async function onSaveReceiveInModal() {
+    if (!enterTarget || receiveBusy) return
+    const email = receiveDraft.trim()
+    if (!email) {
+      setEnterError('请填写接收邮箱')
+      return
+    }
+    setReceiveBusy(true)
+    setEnterError(null)
+    try {
+      await saveReceiveEmail(email)
+      const st = await fetchUnlockOtpStatus(enterTarget.instance_id)
+      setOtpStatus(st)
+      setOtpHint(st.ready ? '接收邮箱已保存，可点「验证码登录」发码。' : null)
+    } catch (err) {
+      setEnterError(err instanceof Error ? err.message : '保存接收邮箱失败')
+    } finally {
+      setReceiveBusy(false)
+    }
+  }
+
+  /** 验证码登录：Face ID/确认后发码；未就绪时给出明确原因 */
+  async function onSendUnlockOtp() {
+    if (!enterTarget || otpSending || enterBusy) return
+    setEnterError(null)
+    setOtpHint(null)
+    if (otpUnsupported) {
+      setEnterError('当前中继未支持验证码登录，请确认已部署最新 remote-relay 包并重启。')
+      return
+    }
+    if (!otpStatus?.smtp_ok) {
+      setEnterError('Mac「远程中继」尚未配置或校验通过发送邮箱 SMTP，校验成功后再试。')
+      return
+    }
+    if (!otpStatus?.receive_email_set) {
+      setEnterError('请先填写下方接收邮箱并保存（也可在右上角 ⚙ 设置里填写）。')
+      return
+    }
+    if (!otpStatus.ready) {
+      setEnterError('验证码登录尚未就绪')
+      return
+    }
+    const ok = await confirmSendUnlockOtp(otpStatus.receive_email_masked || '')
+    if (!ok) return
+    setOtpSending(true)
+    try {
+      const res = await sendUnlockOtp(enterTarget.instance_id)
+      setOtpHint(
+        `验证码已发送至 ${res.receive_email_masked || '接收邮箱'}，请查收后填入下方（一次性）。`,
+      )
+    } catch (err) {
+      setEnterError(err instanceof Error ? err.message : '发送失败')
+    } finally {
+      setOtpSending(false)
+    }
   }
 
   /** Submit 6-digit instance password */
@@ -527,7 +633,7 @@ export function InstancesPage() {
         open={!!enterTarget}
         title="输入实例密码"
         onClose={() => {
-          if (enterBusy) return
+          if (enterBusy || otpSending) return
           setEnterTarget(null)
           if (unlockTargetId) navigate('/instances', { replace: true })
         }}
@@ -536,15 +642,23 @@ export function InstancesPage() {
             <button
               type="button"
               className="btn"
-              disabled={enterBusy}
+              disabled={enterBusy || otpSending || receiveBusy}
               onClick={() => setEnterTarget(null)}
             >
               取消
             </button>
             <button
               type="button"
+              className="btn"
+              disabled={enterBusy || otpSending || receiveBusy}
+              onClick={() => void onSendUnlockOtp()}
+            >
+              {otpSending ? '发送中…' : '验证码登录'}
+            </button>
+            <button
+              type="button"
               className="btn primary"
-              disabled={enterBusy || enterPassword.trim().length !== 6}
+              disabled={enterBusy || otpSending || receiveBusy || enterPassword.trim().length !== 6}
               onClick={() => void submitEnter()}
             >
               {enterBusy ? '验证中…' : '进入'}
@@ -553,12 +667,59 @@ export function InstancesPage() {
         }
       >
         <p className="muted modal-hint">
-          请输入 Mac「{enterTarget?.display_name}」上的 6 位实例密码。连续错误 5 次将锁定 5 分钟。
+          请输入 Mac「{enterTarget?.display_name}」上的 6 位实例密码，或点「验证码登录」收邮箱验证码。连续错误
+          5 次将锁定 5 分钟。
         </p>
+        {otpUnsupported ? (
+          <p className="error-banner">中继未包含验证码接口，请升级并重启 remote-relay 后再试。</p>
+        ) : null}
+        {!otpUnsupported && otpStatus && !otpStatus.ready ? (
+          <p className="muted modal-hint">
+            {!otpStatus.smtp_ok ? (
+              <>验证码登录未就绪：Mac「远程中继」需先配置并校验 SMTP。</>
+            ) : (
+              <>
+                验证码登录未就绪：请填写接收邮箱（下方或 <Link to="/settings">设置</Link>）。
+              </>
+            )}
+          </p>
+        ) : null}
+        {!otpUnsupported && otpStatus?.ready ? (
+          <p className="muted modal-hint">
+            验证码将发至 {otpStatus.receive_email_masked || '已配置邮箱'}。接收邮箱可在{' '}
+            <Link to="/settings">设置</Link> 修改。
+          </p>
+        ) : null}
         {enterError ? <p className="error-banner">{enterError}</p> : null}
+        {otpHint ? <p className="muted modal-hint">{otpHint}</p> : null}
+        {!otpUnsupported && otpStatus && !otpStatus.receive_email_set ? (
+          <div className="field" style={{ marginBottom: '0.75rem' }}>
+            <label>
+              接收邮箱（验证码发到这里）
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={receiveDraft}
+                onChange={(e) => setReceiveDraft(e.target.value)}
+                disabled={receiveBusy || enterBusy}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn"
+              style={{ marginTop: 8 }}
+              disabled={receiveBusy || enterBusy || !receiveDraft.trim()}
+              onClick={() => void onSaveReceiveInModal()}
+            >
+              {receiveBusy ? '保存中…' : '保存接收邮箱'}
+            </button>
+          </div>
+        ) : null}
         <form onSubmit={(e) => void submitEnter(e)}>
           <label className="field">
-            实例密码
+            实例密码 / 验证码
             <input
               type="password"
               inputMode="text"
@@ -566,7 +727,7 @@ export function InstancesPage() {
               maxLength={6}
               value={enterPassword}
               onChange={(e) => setEnterPassword(e.target.value)}
-              placeholder="6 位数字与字母"
+              placeholder="6 位密码或验证码"
               autoFocus
             />
           </label>

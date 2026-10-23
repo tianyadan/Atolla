@@ -244,7 +244,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	req.Risk = risk
 	req.Action = action
 	s.Perms.AnnounceRequest(req)
-	s.notifyPermissionPending(lookupID, req.ID)
+	s.notifyPermissionPending(lookupID, req.ID, req.Summary, req.Risk)
 	out := s.Perms.Wait(ctx, req.ID)
 	hby := "human"
 	decision := "allow"

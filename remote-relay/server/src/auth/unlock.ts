@@ -13,6 +13,7 @@ import {
   verifyDeviceSession,
   type DeviceSessionRow,
 } from './deviceSession.js'
+import { consumeUnlockOtp } from './unlockOtp.js'
 
 /** Unlock JWT lifetime (aligned with device session, 7d) */
 export const UNLOCK_TTL_SECONDS = DEVICE_SESSION_TTL_SECONDS
@@ -105,34 +106,24 @@ export function unlockInstance(
     return { ok: false, status: 429, error: UNLOCK_LOCK_MESSAGE }
   }
 
-  if (!isValidInstancePassword(password)) {
-    const locked = failLock.recordFailure(lockKey, now)
-    return {
-      ok: false,
-      status: locked ? 429 : 401,
-      error: locked ? UNLOCK_LOCK_MESSAGE : AUTH_ERROR_MESSAGE,
-    }
-  }
-
   const row = getInstanceRow(db, instanceId)
-  if (!row?.password_hash) {
-    const locked = failLock.recordFailure(lockKey, now)
-    return {
-      ok: false,
-      status: locked ? 429 : 401,
-      error: locked ? UNLOCK_LOCK_MESSAGE : AUTH_ERROR_MESSAGE,
-    }
-  }
-  if (row.password_expires_at != null && row.password_expires_at <= now) {
-    const locked = failLock.recordFailure(lockKey, now)
-    return {
-      ok: false,
-      status: locked ? 429 : 401,
-      error: locked ? UNLOCK_LOCK_MESSAGE : AUTH_ERROR_MESSAGE,
+  let authed = false
+
+  // 1) 固定 6 位实例密码
+  if (isValidInstancePassword(password) && row?.password_hash) {
+    const expired =
+      row.password_expires_at != null && row.password_expires_at <= now
+    if (!expired && bcrypt.compareSync(password, row.password_hash)) {
+      authed = true
     }
   }
 
-  if (!bcrypt.compareSync(password, row.password_hash)) {
+  // 2) 邮箱一次性验证码（6 位数字，用过即废，最长 7 天）
+  if (!authed && consumeUnlockOtp(db, instanceId, password, now)) {
+    authed = true
+  }
+
+  if (!authed) {
     const locked = failLock.recordFailure(lockKey, now)
     return {
       ok: false,

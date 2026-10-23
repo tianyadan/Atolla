@@ -22,11 +22,16 @@ import EngineSettings from './EngineSettings.jsx'
 import WatchdogSettings from './WatchdogSettings.jsx'
 import IslandSettings from './IslandSettings.jsx'
 import JevSettings from './JevSettings.jsx'
+import ModernWorkspace from './ModernWorkspace.jsx'
+import { ModernIcon } from './modernWorkspaceIcons.jsx'
+import { normalizeUIStyle } from './modernWorkspaceModel.js'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
 const ONBOARD_KEY = 'atolla_onboard_v1'
 const CHANGELOG_PAGE_SIZE = 5
+const UI_STYLE_KEY = 'atolla_ui_style_v1'
+const MODERN_SIDEBAR_KEY = 'atolla_modern_sidebar_collapsed_v1'
 marked.setOptions({ breaks: true, gfm: true })
 
 const ADMIN_MENUS = [
@@ -58,6 +63,7 @@ export default function App() {
   const [username, setUsername] = useState('')
   const [view, setView] = useState('chat') // chat | admin
   const [adminMenu, setAdminMenu] = useState('agents')
+  const [uiStyle, setUIStyle] = useState(() => normalizeUIStyle(localStorage.getItem(UI_STYLE_KEY)))
   const [digitalOpen, setDigitalOpen] = useState(true)
   const [focusAgentId, setFocusAgentId] = useState(0)
   const [focusApprovalRequestId, setFocusApprovalRequestId] = useState('')
@@ -77,6 +83,7 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(!!localStorage.getItem(AUTH_TOKEN_KEY))
   const [clPage, setClPage] = useState(1) // 版本变更记录分页
   const [adminCollapsed, setAdminCollapsed] = useState(false)
+  const [modernSidebarCollapsed, setModernSidebarCollapsed] = useState(() => localStorage.getItem(MODERN_SIDEBAR_KEY) === '1')
   const [runningCount, setRunningCount] = useState(0)
   const [workflowBusyCount, setWorkflowBusyCount] = useState(0)
   const [pendingPermCount, setPendingPermCount] = useState(0)
@@ -841,6 +848,18 @@ export default function App() {
     if (id === 'changelog') setClPage(1)
   }
 
+  function switchUIStyle(style) {
+    const next = normalizeUIStyle(style)
+    localStorage.setItem(UI_STYLE_KEY, next)
+    setUIStyle(next)
+    setAdminMenu('agents')
+  }
+
+  function setModernSidebar(next) {
+    setModernSidebarCollapsed(next)
+    localStorage.setItem(MODERN_SIDEBAR_KEY, next ? '1' : '0')
+  }
+
   function menuLabel(id) {
     for (const m of ADMIN_MENUS) {
       if (m.id === id) return m.label
@@ -881,21 +900,33 @@ export default function App() {
   // 管理台布局
   if (view === 'admin') {
     return (
-      <div className="app app-admin">
+      <div className={`app app-admin${uiStyle === 'modern' ? ' app-admin-modern' : ''}`}>
         <header className="topbar admin-topbar">
           <h1>
             <img className="brand-logo" src="/brand-jellyfish-white.png" alt="" width="28" height="28" />
             <span className="brand-name">Atolla</span>
-            {username ? <span className="admin-user">@{username}</span> : null}
+            {uiStyle === 'classic' && username ? <span className="admin-user">@{username}</span> : null}
             <span className="admin-ver">{CURRENT_VERSION}</span>
           </h1>
           <div className="topbar-actions">
-            <button type="button" className="ghost" onClick={() => setView('chat')}>返回对话</button>
-            <button type="button" className="danger" onClick={doLogout}>退出</button>
+            {uiStyle === 'classic' && <button type="button" className="ghost" onClick={() => switchUIStyle('modern')}>现代风格</button>}
+            <button type="button" className="ghost" onClick={() => setView('chat')}>前台对话</button>
+            {uiStyle === 'modern' && (
+              <button
+                type="button"
+                className="ghost ui-style-switch"
+                onClick={() => switchUIStyle('classic')}
+                title="切换到经典风格"
+                aria-label="切换到经典风格"
+              >
+                <ModernIcon name="layout-switch" size={17} />
+              </button>
+            )}
+            {uiStyle === 'classic' && <button type="button" className="danger" onClick={doLogout}>退出</button>}
           </div>
         </header>
         <div className={`admin-layout ${adminCollapsed ? 'collapsed' : ''}`}>
-          <aside className="admin-side">
+          {uiStyle === 'classic' && <aside className="admin-side">
             <button
               type="button"
               className="admin-collapse-btn"
@@ -974,8 +1005,15 @@ export default function App() {
                 </button>
               )
             })}
-          </aside>
-          <main className="admin-main">
+          </aside>}
+          <main className={`admin-main${uiStyle === 'modern' && adminMenu !== 'agents' ? ` modern-module-open${modernSidebarCollapsed ? ' sidebar-collapsed' : ''}` : ''}`}>
+            {uiStyle === 'modern' && adminMenu !== 'agents' && (
+              <div className="modern-module-bar">
+                <button type="button" onClick={() => switchAdminMenu('agents')}>← 返回对话</button>
+                <strong>{menuLabel(adminMenu)}</strong>
+                <button type="button" onClick={() => switchUIStyle('classic')}>经典风格</button>
+              </div>
+            )}
             {adminMenu === 'audit' && (
               <VisitorAskAudit
                 authHeaders={authHeaders}
@@ -991,7 +1029,7 @@ export default function App() {
               />
             )}
             {/* 切菜单只隐藏,避免中断后台 SSE */}
-            <div style={{ display: adminMenu === 'agents' ? 'block' : 'none' }}>
+            {uiStyle === 'classic' && <div style={{ display: adminMenu === 'agents' ? 'block' : 'none' }}>
               <ManagedAgentsPanel
                 authHeaders={authHeaders}
                 onUnauthorized={() => clearAuth('登录已过期')}
@@ -1013,7 +1051,29 @@ export default function App() {
                   setDigitalOpen(true)
                 }}
               />
-            </div>
+            </div>}
+            {uiStyle === 'modern' && (
+              <div className={`modern-workspace-host${adminMenu === 'agents' ? '' : ' is-sidebar-only'}${modernSidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+                <ModernWorkspace
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  username={username}
+                  showChat={adminMenu === 'agents'}
+                  sidebarCollapsed={modernSidebarCollapsed}
+                  onSidebarCollapsedChange={setModernSidebar}
+                  focusAgentId={focusAgentId}
+                  focusApprovalRequestId={focusApprovalRequestId}
+                  onFocusConsumed={() => { setFocusAgentId(0); setOpenAgentSettings(false) }}
+                  onApprovalFocusConsumed={() => setFocusApprovalRequestId('')}
+                  onUseClassic={() => switchUIStyle('classic')}
+                  onLogout={doLogout}
+                  onOpenFrontend={() => setView('chat')}
+                  onOpenMenu={switchAdminMenu}
+                  onOpenWorkflowRun={(runId) => { setJumpWorkflowRunId(runId); switchAdminMenu('plans') }}
+                  onOpenGroupChat={(groupId) => { setFocusGroupId(Number(groupId) || 0); switchAdminMenu('group-chats') }}
+                />
+              </div>
+            )}
             {adminMenu === 'group-chats' && (
               <GroupChats
                 authHeaders={authHeaders}

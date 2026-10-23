@@ -22,6 +22,12 @@ type RemoteRelayConfigUpdate struct {
 	InstanceID  string `json:"instance_id"`
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password,omitempty"`
+
+	SmtpHost     string `json:"smtp_host,omitempty"`
+	SmtpPort     int    `json:"smtp_port,omitempty"`
+	SmtpUser     string `json:"smtp_user,omitempty"`
+	SmtpPassword string `json:"smtp_password,omitempty"`
+	SmtpFrom     string `json:"smtp_from,omitempty"`
 }
 
 // startRemoteBridge loads config and runs the outbound loop under a service-scoped context.
@@ -80,17 +86,38 @@ func (s *Service) UpdateRemoteRelayConfig(ctx context.Context, patch RemoteRelay
 		return remotebridge.PublicConfig{}, fmt.Errorf("remote bridge not initialized")
 	}
 	_, err := s.RemoteBridge.Config.Update(remotebridge.Config{
-		Enabled:     patch.Enabled,
-		BaseURL:     patch.BaseURL,
-		InstanceID:  patch.InstanceID,
-		DisplayName: patch.DisplayName,
-		Password:    patch.Password,
+		Enabled:      patch.Enabled,
+		BaseURL:      patch.BaseURL,
+		InstanceID:   patch.InstanceID,
+		DisplayName:  patch.DisplayName,
+		Password:     patch.Password,
+		SmtpHost:     patch.SmtpHost,
+		SmtpPort:     patch.SmtpPort,
+		SmtpUser:     patch.SmtpUser,
+		SmtpPassword: patch.SmtpPassword,
+		SmtpFrom:     patch.SmtpFrom,
 	})
 	if err != nil {
 		return remotebridge.PublicConfig{}, err
 	}
 	// 保存连接配置只重载出站循环，不再次注册，避免把中继每分钟 5 次的限额打满。
 	s.RemoteBridge.ReloadWithoutRegister(s.remoteBridgeContext())
+	return s.RemoteBridge.Config.Public(), nil
+}
+
+/** TestRemoteRelaySMTP 校验 SMTP 并可选择落盘 smtp_ok */
+func (s *Service) TestRemoteRelaySMTP(ctx context.Context) (RemoteRelayPublicConfig, error) {
+	if s.RemoteBridge == nil || s.RemoteBridge.Config == nil {
+		return remotebridge.PublicConfig{}, fmt.Errorf("remote bridge not initialized")
+	}
+	cfg := s.RemoteBridge.Config.Get()
+	if err := remotebridge.TestSMTP(cfg); err != nil {
+		_ = s.RemoteBridge.Config.SetSmtpOk(false)
+		return s.RemoteBridge.Config.Public(), err
+	}
+	if err := s.RemoteBridge.Config.SetSmtpOk(true); err != nil {
+		return remotebridge.PublicConfig{}, err
+	}
 	return s.RemoteBridge.Config.Public(), nil
 }
 

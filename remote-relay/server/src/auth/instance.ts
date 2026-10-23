@@ -328,11 +328,18 @@ export function recordHeartbeat(
     registry_version?: number
     actions?: string[]
     host?: InstanceHostMeta | null
+    unlock_otp_smtp_ok?: boolean
   },
   now = Date.now(),
 ): void {
   const hostJson =
     opts.host && typeof opts.host === 'object' ? JSON.stringify(opts.host) : null
+  const smtpOk =
+    typeof opts.unlock_otp_smtp_ok === 'boolean'
+      ? opts.unlock_otp_smtp_ok
+        ? 1
+        : 0
+      : null
 
   if (opts.actions != null) {
     if (hostJson) {
@@ -340,13 +347,16 @@ export function recordHeartbeat(
         `UPDATE instances
          SET last_heartbeat_at = ?, status = 'healthy', actions_json = ?,
              registry_version = COALESCE(?, registry_version),
-             host_meta_json = ?, updated_at = ?
+             host_meta_json = ?,
+             unlock_otp_smtp_ok = COALESCE(?, unlock_otp_smtp_ok),
+             updated_at = ?
          WHERE instance_id = ?`,
       ).run(
         now,
         JSON.stringify(opts.actions),
         opts.registry_version ?? null,
         hostJson,
+        smtpOk,
         now,
         instanceId,
       )
@@ -355,12 +365,15 @@ export function recordHeartbeat(
     db.prepare(
       `UPDATE instances
        SET last_heartbeat_at = ?, status = 'healthy', actions_json = ?,
-           registry_version = COALESCE(?, registry_version), updated_at = ?
+           registry_version = COALESCE(?, registry_version),
+           unlock_otp_smtp_ok = COALESCE(?, unlock_otp_smtp_ok),
+           updated_at = ?
        WHERE instance_id = ?`,
     ).run(
       now,
       JSON.stringify(opts.actions),
       opts.registry_version ?? null,
+      smtpOk,
       now,
       instanceId,
     )
@@ -372,18 +385,22 @@ export function recordHeartbeat(
       `UPDATE instances
        SET last_heartbeat_at = ?, status = 'healthy',
            registry_version = COALESCE(?, registry_version),
-           host_meta_json = ?, updated_at = ?
+           host_meta_json = ?,
+           unlock_otp_smtp_ok = COALESCE(?, unlock_otp_smtp_ok),
+           updated_at = ?
        WHERE instance_id = ?`,
-    ).run(now, opts.registry_version ?? null, hostJson, now, instanceId)
+    ).run(now, opts.registry_version ?? null, hostJson, smtpOk, now, instanceId)
     return
   }
 
   db.prepare(
     `UPDATE instances
      SET last_heartbeat_at = ?, status = 'healthy',
-         registry_version = COALESCE(?, registry_version), updated_at = ?
+         registry_version = COALESCE(?, registry_version),
+         unlock_otp_smtp_ok = COALESCE(?, unlock_otp_smtp_ok),
+         updated_at = ?
      WHERE instance_id = ?`,
-  ).run(now, opts.registry_version ?? null, now, instanceId)
+  ).run(now, opts.registry_version ?? null, smtpOk, now, instanceId)
 }
 
 /** Revoke instance password (clear hash so auth fails immediately) */
@@ -421,12 +438,14 @@ export function listInstancesPublic(db: RelayDatabase): Array<{
   password_expires_at: number | null
   has_password: boolean
   host: InstanceHostMeta
+  unlock_otp_smtp_ok: boolean
 }> {
   const rows = db
     .prepare(
       `SELECT instance_id, display_name, last_heartbeat_at, status,
               registry_version, actions_json, password_expires_at, password_hash,
-              IFNULL(host_meta_json, '{}') AS host_meta_json
+              IFNULL(host_meta_json, '{}') AS host_meta_json,
+              IFNULL(unlock_otp_smtp_ok, 0) AS unlock_otp_smtp_ok
        FROM instances ORDER BY display_name COLLATE NOCASE`,
     )
     .all() as Array<
@@ -441,7 +460,7 @@ export function listInstancesPublic(db: RelayDatabase): Array<{
       | 'password_expires_at'
       | 'password_hash'
       | 'host_meta_json'
-    >
+    > & { unlock_otp_smtp_ok: number }
   >
 
   return rows.map((row) => {
@@ -461,6 +480,7 @@ export function listInstancesPublic(db: RelayDatabase): Array<{
       password_expires_at: row.password_expires_at,
       has_password: row.password_hash != null,
       host,
+      unlock_otp_smtp_ok: Number(row.unlock_otp_smtp_ok) === 1,
     }
   })
 }

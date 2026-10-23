@@ -165,6 +165,37 @@ function applySchema(db: RelayDatabase): void {
   } catch {
     /* column already exists */
   }
+
+  // Mac SMTP 校验通过后由心跳上报；用于「验证码登录」按钮是否可点
+  try {
+    db.exec(
+      `ALTER TABLE instances ADD COLUMN unlock_otp_smtp_ok INTEGER NOT NULL DEFAULT 0`,
+    )
+  } catch {
+    /* column already exists */
+  }
+
+  try {
+    db.exec(
+      `ALTER TABLE site_auth ADD COLUMN receive_email TEXT NOT NULL DEFAULT ''`,
+    )
+  } catch {
+    /* column already exists */
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS instance_unlock_otps (
+      id TEXT PRIMARY KEY,
+      instance_id TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (instance_id) REFERENCES instances(instance_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_unlock_otps_instance
+      ON instance_unlock_otps(instance_id, used_at, expires_at);
+  `)
 }
 
 /** Bootstrap / sync site gate password from SITE_PASSWORD */

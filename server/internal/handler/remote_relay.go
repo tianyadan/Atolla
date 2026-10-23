@@ -32,6 +32,16 @@ func (h *Handler) AdminRemoteRelayConfigPut(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// AdminRemoteRelaySMTPTest POST /api/admin/remote-relay/smtp/test
+func (h *Handler) AdminRemoteRelaySMTPTest(c *gin.Context) {
+	out, err := h.svc.TestRemoteRelaySMTP(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "config": out})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "config": out})
+}
+
 // AdminRemoteRelayPasswordRotate POST /api/admin/remote-relay/password/rotate
 func (h *Handler) AdminRemoteRelayPasswordRotate(c *gin.Context) {
 	plain, err := h.svc.RotateRemoteRelayPassword(c.Request.Context())

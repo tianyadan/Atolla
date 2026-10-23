@@ -130,6 +130,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		{"engine_total_tokens", `ALTER TABLE conversations ADD COLUMN engine_total_tokens BIGINT NOT NULL DEFAULT 0`},
 		{"engine_context_source", `ALTER TABLE conversations ADD COLUMN engine_context_source VARCHAR(64) NOT NULL DEFAULT ''`},
 		{"engine_context_updated_at", `ALTER TABLE conversations ADD COLUMN engine_context_updated_at DATETIME NULL`},
+		{"title", `ALTER TABLE conversations ADD COLUMN title VARCHAR(255) NOT NULL DEFAULT ''`},
+		{"pinned", `ALTER TABLE conversations ADD COLUMN pinned TINYINT NOT NULL DEFAULT 0`},
+		{"archived", `ALTER TABLE conversations ADD COLUMN archived TINYINT NOT NULL DEFAULT 0`},
 	} {
 		var n int
 		if err := s.db.QueryRowContext(ctx,

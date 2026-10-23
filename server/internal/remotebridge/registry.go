@@ -24,6 +24,7 @@ type ExecContext struct {
 	Payload map[string]interface{}
 	Runtime AgentRuntime
 	Viewer  MobileViewer
+	Config  *ConfigStore
 }
 
 // RegisteredActions lists actions advertised at register/heartbeat.
@@ -57,6 +58,7 @@ func RegisteredActions() []string {
 		"jevos.settings.get",
 		"jevos.settings.install",
 		"jevos.settings.set",
+		"instance.send_unlock_otp",
 	}
 }
 
@@ -90,4 +92,5 @@ var Handlers = map[string]Handler{
 	"jevos.settings.get":         handleJevosSettingsGet,
 	"jevos.settings.install":     handleJevosSettingsInstall,
 	"jevos.settings.set":         handleJevosSettingsSet,
+	"instance.send_unlock_otp":   handleInstanceSendUnlockOtp,
 }
