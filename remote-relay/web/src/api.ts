@@ -40,6 +40,17 @@ export type PublicInstance = {
   password_expires_at: number | null
   has_password: boolean
   host?: InstanceHostMeta
+  /** Mac 已上报 SMTP 可用 */
+  unlock_otp_smtp_ok?: boolean
+  /** SMTP + 站点收件邮箱均就绪 */
+  unlock_otp_ready?: boolean
+}
+
+export type UnlockOtpStatus = {
+  ready: boolean
+  smtp_ok: boolean
+  receive_email_set: boolean
+  receive_email_masked: string
 }
 
 export type PublicMirrorAgent = {
@@ -296,7 +307,7 @@ export async function revokeInstancePassword(instanceId: string): Promise<void> 
   clearUnlockToken(instanceId)
 }
 
-/** 进入实例：校验 6 位密码，拿到 unlock_token（服务端设备会话） */
+/** 进入实例：校验 6 位密码或邮箱验证码，拿到 unlock_token（服务端设备会话） */
 export async function unlockInstance(
   instanceId: string,
   password: string,
@@ -311,6 +322,45 @@ export async function unlockInstance(
   })
   setUnlockToken(instanceId, data.unlock_token)
   return data
+}
+
+/** 验证码登录能力（解锁弹窗按钮灰/亮） */
+export async function fetchUnlockOtpStatus(instanceId: string): Promise<UnlockOtpStatus> {
+  return request<UnlockOtpStatus>(
+    `/api/instances/${encodeURIComponent(instanceId)}/unlock-otp/status`,
+  )
+}
+
+/** 发送一次性解锁验证码到站点接收邮箱 */
+export async function sendUnlockOtp(
+  instanceId: string,
+): Promise<{ ok: boolean; expires_in: number; receive_email_masked: string }> {
+  return request(`/api/instances/${encodeURIComponent(instanceId)}/unlock-otp/send`, {
+    method: 'POST',
+    body: '{}',
+  })
+}
+
+/** 读取站点接收邮箱 */
+export async function fetchReceiveEmail(): Promise<{
+  email: string
+  email_masked: string
+  set: boolean
+}> {
+  return request('/api/site/receive-email')
+}
+
+/** 保存站点接收邮箱（空字符串清除） */
+export async function saveReceiveEmail(email: string): Promise<{
+  ok: boolean
+  email: string
+  email_masked: string
+  set: boolean
+}> {
+  return request('/api/site/receive-email', {
+    method: 'PUT',
+    body: JSON.stringify({ email }),
+  })
 }
 
 /** Keep device session online while browsing an instance */

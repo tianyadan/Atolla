@@ -23,6 +23,7 @@ type Config struct {
 	BackendURL        string // hook 回调的后端地址(供 CLI 子进程使用)
 	NotifyScript      string // 待授权 Bark 脚本(scripts/notify-permission.sh)
 	BarkNotify        bool   // 是否推送 Bark(默认 true;AVATAR_BARK_NOTIFY=0 关闭)
+	BarkIconURL       string // Bark 固定使用的 Atolla App 公网图标；为空时从中继地址推导
 
 	SecretKey                string // 测试服务器密码 AES 密钥
 	SSHInsecureIgnoreHostKey bool   // 开发环境忽略 SSH host key
@@ -78,6 +79,7 @@ func Load() Config {
 		BackendURL:        getenv("AVATAR_BACKEND_URL", "http://127.0.0.1:8080"),
 		NotifyScript:      getenv("AVATAR_NOTIFY_SCRIPT", ""),
 		BarkNotify:        getenv("AVATAR_BARK_NOTIFY", "1") != "0",
+		BarkIconURL:       strings.TrimSpace(getenv("ATOLLA_BARK_ICON_URL", "")),
 
 		SecretKey:                getenv("AVATAR_SECRET_KEY", "atolla-dev-secret-change-me"),
 		SSHInsecureIgnoreHostKey: getenv("AVATAR_SSH_INSECURE_IGNORE_HOSTKEY", "1") != "0",

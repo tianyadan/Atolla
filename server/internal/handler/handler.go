@@ -85,6 +85,10 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/agents", h.AdminAgentsList)
 			adm.POST("/admin/agents", h.AdminAgentsCreate)
+			adm.GET("/admin/agent-conversations", h.AdminAgentConversationsList)
+			adm.PATCH("/admin/agent-conversations/:id", h.AdminAgentConversationUpdate)
+			adm.POST("/admin/agents/:id/conversations", h.AdminAgentConversationCreate)
+			adm.POST("/admin/agents/:id/conversations/:conversationId/activate", h.AdminAgentConversationActivate)
 			adm.GET("/admin/talent-market", h.AdminTalentMarketList)
 			adm.GET("/admin/talent-market/:id", h.AdminTalentMarketGet)
 			adm.POST("/admin/talent-market/hire", h.AdminTalentMarketHire)
@@ -161,6 +165,7 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/remote-relay/config", h.AdminRemoteRelayConfigGet)
 			adm.PUT("/admin/remote-relay/config", h.AdminRemoteRelayConfigPut)
+			adm.POST("/admin/remote-relay/smtp/test", h.AdminRemoteRelaySMTPTest)
 			adm.POST("/admin/remote-relay/password/rotate", h.AdminRemoteRelayPasswordRotate)
 			adm.GET("/admin/remote-relay/status", h.AdminRemoteRelayStatus)
 			adm.GET("/admin/remote-relay/mobile-sessions", h.AdminRemoteRelayMobileSessionsGet)

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# 数字人 Bark 卡片：标题 + 一行正文 + 可选头像，不附带项目/命令 JSON。
+# Atolla Bark 卡片：品牌标题 + 摘要 + App 图标 + 可选应用深链。
 #
 # 用法:
-#   scripts/notify-bark-card.sh "员工名" "有一条命令待审批" "https://.../a.jpg"
+#   scripts/notify-bark-card.sh "标题" "正文" "https://.../app.png" "Atolla" "atolla://..." "alarm" "timeSensitive"
 set -euo pipefail
 
-TITLE="${1:-数字员工}"
-BODY="${2:-有一条命令待审批}"
+TITLE="${1:-Atolla}"
+BODY="${2:-有一条通知}"
 ICON="${3:-}"
+GROUP="${4:-Atolla}"
+URL="${5:-}"
+SOUND="${6:-}"
+LEVEL="${7:-active}"
 NOTIFY_URL="https://api.day.app/push"
 
 if [[ -z "${BARK_KEY:-}" ]]; then
@@ -27,22 +31,20 @@ if [[ -z "${BARK_KEY:-}" ]]; then
   exit 1
 fi
 
-if [[ -n "$ICON" ]]; then
-  PAYLOAD=$(jq -n \
-    --arg key "$BARK_KEY" \
-    --arg title "$TITLE" \
-    --arg body "$BODY" \
-    --arg icon "$ICON" \
-    --arg group "$TITLE" \
-    '{device_key:$key, title:$title, body:$body, icon:$icon, group:$group}')
-else
-  PAYLOAD=$(jq -n \
-    --arg key "$BARK_KEY" \
-    --arg title "$TITLE" \
-    --arg body "$BODY" \
-    --arg group "$TITLE" \
-    '{device_key:$key, title:$title, body:$body, group:$group}')
-fi
+PAYLOAD=$(jq -n \
+  --arg key "$BARK_KEY" \
+  --arg title "$TITLE" \
+  --arg body "$BODY" \
+  --arg icon "$ICON" \
+  --arg group "$GROUP" \
+  --arg url "$URL" \
+  --arg sound "$SOUND" \
+  --arg level "$LEVEL" \
+  '{device_key:$key, title:$title, body:$body, group:$group}
+   + (if $icon == "" then {} else {icon:$icon} end)
+   + (if $url == "" then {} else {url:$url} end)
+   + (if $sound == "" then {} else {sound:$sound} end)
+   + (if $level == "" then {} else {level:$level} end)')
 
 RESPONSE=$(curl -s -X POST "$NOTIFY_URL" \
   -H "Content-Type: application/json; charset=utf-8" \

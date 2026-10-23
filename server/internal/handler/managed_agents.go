@@ -12,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"atolla/server/internal/notify"
 	"atolla/server/internal/service"
 	"atolla/server/internal/store"
 )
@@ -687,18 +686,20 @@ func (h *Handler) AdminPCViewer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// AdminNotifyPermission 未停留在该数字人对话时，推送待审批卡片（名称 + 头像 + 固定文案）。
+// AdminNotifyPermission 未停留在该数字人对话时，推送待审批卡片。
 func (h *Handler) AdminNotifyPermission(c *gin.Context) {
 	var body struct {
 		RequestID string `json:"request_id"`
 		AgentID   int64  `json:"agent_id"`
 		AgentName string `json:"agent_name"`
+		Summary   string `json:"summary"`
+		Risk      string `json:"risk"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.RequestID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request_id required"})
 		return
 	}
-	sent := h.svc.PushBarkIfAllowed(body.AgentID, "perm:"+body.RequestID, notify.PermissionPendingText)
+	sent := h.svc.PushPermissionBarkIfAllowed(body.AgentID, body.RequestID, body.Summary, body.Risk)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "sent": sent})
 }
 
@@ -714,7 +715,7 @@ func (h *Handler) AdminNotifyTaskDone(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "dedupe_key required"})
 		return
 	}
-	sent := h.svc.PushBarkIfAllowed(body.AgentID, "done:"+strings.TrimSpace(body.DedupeKey), notify.TaskDoneText(body.Task))
+	sent := h.svc.PushTaskDoneBarkIfAllowed(body.AgentID, body.DedupeKey, body.Task)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "sent": sent})
 }
 

@@ -123,6 +123,18 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
   })
   const [passwordVisible, setPasswordVisible] = useState(false)
 
+  /** SMTP：验证码登录发信（163 等） */
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState(465)
+  const [smtpUser, setSmtpUser] = useState('')
+  const [smtpFrom, setSmtpFrom] = useState('')
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [hasSmtpPass, setHasSmtpPass] = useState(false)
+  const [smtpOk, setSmtpOk] = useState(false)
+  const [smtpBusy, setSmtpBusy] = useState(false)
+  /** SMTP 校验失败原因（展示在 SMTP 区块旁，避免只滚到页顶才看见） */
+  const [smtpErr, setSmtpErr] = useState('')
+
   const [status, setStatus] = useState(null)
   const [mobileSessions, setMobileSessions] = useState([])
   const [mobileErr, setMobileErr] = useState('')
@@ -182,6 +194,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       setDisplayName(cfg.display_name || '')
       setInstanceId(cfg.instance_id || '')
       setHasPassword(!!cfg.has_password)
+      setSmtpHost(cfg.smtp_host || '')
+      setSmtpPort(cfg.smtp_port > 0 ? cfg.smtp_port : 465)
+      setSmtpUser(cfg.smtp_user || '')
+      setSmtpFrom(cfg.smtp_from || '')
+      setHasSmtpPass(!!cfg.has_smtp_password)
+      setSmtpOk(!!cfg.smtp_ok)
+      setSmtpPassword('')
       setStatus(stRes.ok ? st : null)
       if (!stRes.ok) setErr(st.error || '加载状态失败')
     } catch (e) {
@@ -281,6 +300,11 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
           base_url: baseUrl.trim(),
           display_name: displayName.trim(),
           instance_id: instanceId.trim(),
+          smtp_host: smtpHost.trim(),
+          smtp_port: Number(smtpPort) || 465,
+          smtp_user: smtpUser.trim(),
+          smtp_from: smtpFrom.trim(),
+          ...(smtpPassword.trim() ? { smtp_password: smtpPassword.trim() } : {}),
         }),
       })
       if (res.status === 401) {
@@ -294,6 +318,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       setDisplayName(d.display_name || '')
       setInstanceId(d.instance_id || '')
       setHasPassword(!!d.has_password)
+      setSmtpHost(d.smtp_host || '')
+      setSmtpPort(d.smtp_port > 0 ? d.smtp_port : 465)
+      setSmtpUser(d.smtp_user || '')
+      setSmtpFrom(d.smtp_from || '')
+      setHasSmtpPass(!!d.has_smtp_password)
+      setSmtpOk(!!d.smtp_ok)
+      setSmtpPassword('')
       setMsg(
         enabled
           ? '本机连接配置已保存，出站桥接已按新配置重载（未改动实例密码 / 未重新注册）。'
@@ -304,6 +335,75 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       setErr(String(e.message || e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  /** 校验 SMTP 并上报 smtp_ok（心跳会同步到中继） */
+  async function testSmtp() {
+    if (smtpBusy || busy) return
+    setSmtpBusy(true)
+    setErr('')
+    setSmtpErr('')
+    setMsg('')
+    try {
+      if (!smtpHost.trim() || !smtpUser.trim() || !smtpFrom.trim()) {
+        throw new Error('请先填写 SMTP 主机、账号与发件人 From')
+      }
+      if (!smtpPassword.trim() && !hasSmtpPass) {
+        throw new Error('请填写授权码/密码（首次校验必填）')
+      }
+      // 先保存再测，避免测的是旧配置
+      const saveRes = await fetch(`${API}/admin/remote-relay/config`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          enabled,
+          base_url: baseUrl.trim(),
+          display_name: displayName.trim(),
+          instance_id: instanceId.trim(),
+          smtp_host: smtpHost.trim(),
+          smtp_port: Number(smtpPort) || 465,
+          smtp_user: smtpUser.trim(),
+          smtp_from: smtpFrom.trim(),
+          ...(smtpPassword.trim() ? { smtp_password: smtpPassword.trim() } : {}),
+        }),
+      })
+      if (saveRes.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const saved = await saveRes.json().catch(() => ({}))
+      if (!saveRes.ok) throw new Error(saved.error || `保存 SMTP 失败(${saveRes.status})`)
+
+      const res = await fetch(`${API}/admin/remote-relay/smtp/test`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(
+          (typeof d.error === 'string' && d.error.trim()) ||
+            `SMTP 校验失败(HTTP ${res.status})`,
+        )
+      }
+      const cfg = d.config || {}
+      setSmtpOk(!!cfg.smtp_ok)
+      setHasSmtpPass(!!cfg.has_smtp_password)
+      setSmtpPassword('')
+      setSmtpErr('')
+      setMsg('SMTP 校验通过，心跳将上报「验证码登录可用」。')
+      await load()
+    } catch (e) {
+      setSmtpOk(false)
+      const tip = String(e.message || e)
+      setSmtpErr(tip)
+      setErr(tip)
+    } finally {
+      setSmtpBusy(false)
     }
   }
 
@@ -671,11 +771,86 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
           </div>
         </div>
 
+        <div className="rr-password-block" style={{ marginTop: 16 }}>
+          <div className="rr-password-head">
+            <span>验证码登录 · 发送邮箱 SMTP</span>
+            <span className={`rr-reg-tag ${smtpOk ? 'set' : 'unset'}`}>
+              {smtpOk ? '已校验' : '未校验'}
+            </span>
+          </div>
+          <p className="empty-hint" style={{ margin: '6px 0 10px' }}>
+            配置 163 等 SMTP 后点「校验 SMTP」。手机需在设置填写接收邮箱，解锁弹窗才可「验证码登录」。
+          </p>
+          <label>
+            <span>SMTP 主机</span>
+            <input
+              type="text"
+              placeholder="smtp.163.com"
+              value={smtpHost}
+              onChange={(e) => setSmtpHost(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>端口</span>
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(Number(e.target.value) || 465)}
+            />
+          </label>
+          <label>
+            <span>账号</span>
+            <input
+              type="text"
+              autoComplete="off"
+              placeholder="you@163.com"
+              value={smtpUser}
+              onChange={(e) => setSmtpUser(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>授权码 / 密码</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              placeholder={hasSmtpPass ? '已保存，留空不修改' : '邮箱授权码'}
+              value={smtpPassword}
+              onChange={(e) => setSmtpPassword(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>发件人 From</span>
+            <input
+              type="email"
+              placeholder="you@163.com"
+              value={smtpFrom}
+              onChange={(e) => setSmtpFrom(e.target.value)}
+            />
+          </label>
+          <div className="rr-password-actions">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || smtpBusy || !smtpHost.trim() || !smtpUser.trim()}
+              onClick={() => void testSmtp()}
+            >
+              {smtpBusy ? '校验中…' : '校验 SMTP'}
+            </button>
+          </div>
+          {smtpErr ? (
+            <pre className="error" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>
+              {smtpErr}
+            </pre>
+          ) : null}
+        </div>
+
         <p className="empty-hint">
           推荐流程：填写 Base URL →「保存连接配置」→「生成并注册密码」→ 勾选启用并再次保存（若尚未启用）。
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button type="submit" className="primary" disabled={busy}>
+          <button type="submit" className="primary" disabled={busy || smtpBusy}>
             保存连接配置
           </button>
           <span className="empty-hint" style={{ margin: 0 }}>

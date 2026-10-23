@@ -295,7 +295,7 @@ func (s *Service) confirmCursorWorkspaceTrust(ctx context.Context, convID int64,
 	req.Meaning = "信任该目录后，Cursor Agent 可以在其中读取文件并执行代码"
 	req.Risk = "high"
 	s.Perms.AnnounceRequest(req)
-	s.notifyPermissionPending(agentID, req.ID)
+	s.notifyPermissionPending(agentID, req.ID, req.Summary, req.Risk)
 	out := s.Perms.Wait(ctx, req.ID)
 	if out.Behavior == permission.Allow {
 		return true, ""

@@ -28,6 +28,7 @@ export const KNOWN_ACTIONS = [
   'notify.prefs.get',
   'notify.prefs.update',
   'engines.usage.get',
+  'instance.send_unlock_otp',
 ] as const
 
 export type KnownAction = (typeof KNOWN_ACTIONS)[number]
@@ -59,4 +60,5 @@ export const V1_EXECUTABLE = new Set<string>([
   'notify.prefs.get',
   'notify.prefs.update',
   'engines.usage.get',
+  'instance.send_unlock_otp',
 ])

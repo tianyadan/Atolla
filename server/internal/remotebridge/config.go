@@ -22,6 +22,14 @@ type Config struct {
 	Password    string `json:"password,omitempty"`
 	// PendingPassword 是已经准备提交给中继、但尚未确认写回的新密码。先落盘再注册，进程在注册成功后退出时还能把它找回来。
 	PendingPassword string `json:"pending_password,omitempty"`
+
+	// SMTP：验证码登录发信（163 等）
+	SmtpHost     string `json:"smtp_host,omitempty"`
+	SmtpPort     int    `json:"smtp_port,omitempty"`
+	SmtpUser     string `json:"smtp_user,omitempty"`
+	SmtpPassword string `json:"smtp_password,omitempty"`
+	SmtpFrom     string `json:"smtp_from,omitempty"`
+	SmtpOk       bool   `json:"smtp_ok,omitempty"`
 }
 
 // PublicConfig is returned by admin GET (no password plaintext).
@@ -31,6 +39,13 @@ type PublicConfig struct {
 	InstanceID  string `json:"instance_id"`
 	DisplayName string `json:"display_name"`
 	HasPassword bool   `json:"has_password"`
+
+	SmtpHost     string `json:"smtp_host,omitempty"`
+	SmtpPort     int    `json:"smtp_port,omitempty"`
+	SmtpUser     string `json:"smtp_user,omitempty"`
+	SmtpFrom     string `json:"smtp_from,omitempty"`
+	HasSmtpPass  bool   `json:"has_smtp_password"`
+	SmtpOk       bool   `json:"smtp_ok"`
 }
 
 // ConfigStore loads and saves bridge settings under the Atolla data directory.
@@ -138,6 +153,12 @@ func (cs *ConfigStore) Public() PublicConfig {
 		InstanceID:  cs.cfg.InstanceID,
 		DisplayName: cs.cfg.DisplayName,
 		HasPassword: strings.TrimSpace(cs.cfg.Password) != "",
+		SmtpHost:    cs.cfg.SmtpHost,
+		SmtpPort:    cs.cfg.SmtpPort,
+		SmtpUser:    cs.cfg.SmtpUser,
+		SmtpFrom:    cs.cfg.SmtpFrom,
+		HasSmtpPass: strings.TrimSpace(cs.cfg.SmtpPassword) != "",
+		SmtpOk:      cs.cfg.SmtpOk,
 	}
 }
 
@@ -162,6 +183,31 @@ func (cs *ConfigStore) Update(patch Config) (Config, error) {
 		cs.cfg.Password = s
 		cs.cfg.PendingPassword = ""
 	}
+	// SMTP：有提交字段则更新；密码空字符串表示不改；仅实际变更时清 smtp_ok
+	smtpChanged := false
+	if s := strings.TrimSpace(patch.SmtpHost); s != "" && s != cs.cfg.SmtpHost {
+		cs.cfg.SmtpHost = s
+		smtpChanged = true
+	}
+	if patch.SmtpPort > 0 && patch.SmtpPort != cs.cfg.SmtpPort {
+		cs.cfg.SmtpPort = patch.SmtpPort
+		smtpChanged = true
+	}
+	if s := strings.TrimSpace(patch.SmtpUser); s != "" && s != cs.cfg.SmtpUser {
+		cs.cfg.SmtpUser = s
+		smtpChanged = true
+	}
+	if s := strings.TrimSpace(patch.SmtpFrom); s != "" && s != cs.cfg.SmtpFrom {
+		cs.cfg.SmtpFrom = s
+		smtpChanged = true
+	}
+	if s := strings.TrimSpace(patch.SmtpPassword); s != "" && s != cs.cfg.SmtpPassword {
+		cs.cfg.SmtpPassword = s
+		smtpChanged = true
+	}
+	if smtpChanged {
+		cs.cfg.SmtpOk = false
+	}
 	if strings.TrimSpace(cs.cfg.InstanceID) == "" {
 		cs.cfg.InstanceID = defaultInstanceID()
 	}
@@ -172,6 +218,27 @@ func (cs *ConfigStore) Update(patch Config) (Config, error) {
 		return cs.cfg, err
 	}
 	return cs.cfg, nil
+}
+
+/** SmtpConfigured 发送邮箱字段是否齐全 */
+func (c Config) SmtpConfigured() bool {
+	port := c.SmtpPort
+	if port <= 0 {
+		port = 465
+	}
+	return strings.TrimSpace(c.SmtpHost) != "" &&
+		strings.TrimSpace(c.SmtpUser) != "" &&
+		strings.TrimSpace(c.SmtpPassword) != "" &&
+		strings.TrimSpace(c.SmtpFrom) != "" &&
+		port > 0
+}
+
+/** SetSmtpOk 持久化 SMTP 校验结果 */
+func (cs *ConfigStore) SetSmtpOk(ok bool) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.cfg.SmtpOk = ok
+	return cs.saveLocked()
 }
 
 // SetPassword stores a new password and persists.

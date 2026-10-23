@@ -111,11 +111,12 @@ type HeartbeatResult struct {
 	MobileViewingAgentID string `json:"mobile_viewing_agent_id"`
 }
 
-// Heartbeat sends registry metadata (+ optional host metrics) to the relay.
-func (c *RelayClient) Heartbeat(ctx context.Context, actions []string) (*HeartbeatResult, error) {
+// Heartbeat sends registry metadata (+ optional host metrics / SMTP ready) to the relay.
+func (c *RelayClient) Heartbeat(ctx context.Context, actions []string, unlockOtpSmtpOk bool) (*HeartbeatResult, error) {
 	body := map[string]any{
-		"registry_version": RegistryVersion,
-		"actions":          actions,
+		"registry_version":    RegistryVersion,
+		"actions":             actions,
+		"unlock_otp_smtp_ok":  unlockOtpSmtpOk,
 	}
 	hm := CollectHostMetrics()
 	hostMap := map[string]any{

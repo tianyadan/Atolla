@@ -106,6 +106,8 @@ export function isEnqueueActionAllowed(
   if (!V1_EXECUTABLE.has(action)) return false
   // 已读回执幂等且安全：心跳 actions 偶发落后时仍允许入队，避免 App 未读卡死
   if (action === 'agent.mark_read') return true
+  // 发解锁验证码：Mac 未上报新 action 时也允许入队
+  if (action === 'instance.send_unlock_otp') return true
   return instanceActions.includes(action)
 }
 

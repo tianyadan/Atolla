@@ -33,6 +33,7 @@ import {
 import { ChatAttachPreview, ChatLightbox, ChatMessageImages } from './ChatImageUI.jsx'
 import { MobileViewerIcon } from './MobileViewerIcon.jsx'
 import GroupChatOfferSheet, { buildGroupMemberSet } from './GroupChatOfferSheet.jsx'
+import { ModernIcon } from './modernWorkspaceIcons.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -200,6 +201,7 @@ export default function ManagedAgentsPanel({
   authHeaders, onUnauthorized, active = true, onOpenWorkflowRun, onOpenGroupChat,
   focusAgentId = 0, onFocusConsumed, focusApprovalRequestId = '', onApprovalFocusConsumed,
   openHire = false, onHireConsumed, openSettings = false,
+  presentation = 'classic', conversationRefreshKey = 0, onAgentHired,
 }) {
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
@@ -210,7 +212,8 @@ export default function ManagedAgentsPanel({
   const [copyOpen, setCopyOpen] = useState(false)
   const [copyName, setCopyName] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsTab, setSettingsTab] = useState('basic') // basic | skills | legacy
+  const [settingsTab, setSettingsTab] = useState('basic') // basic | approval | skills | legacy
+  const [detailMoreOpen, setDetailMoreOpen] = useState(false)
   const [skillsSubTab, setSkillsSubTab] = useState('installed') // installed | store
   const [dismissTarget, setDismissTarget] = useState(null) // agent | null
   const [legacyMounts, setLegacyMounts] = useState([])
@@ -252,7 +255,6 @@ export default function ManagedAgentsPanel({
   const [permBusy, setPermBusy] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
   const [approveAllSaving, setApproveAllSaving] = useState(false)
-  const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
   /** JEV 胶囊开启且健康：自动审核前置 */
   const [jevReady, setJevReady] = useState(false)
   const [jevHint, setJevHint] = useState('')
@@ -635,7 +637,7 @@ export default function ManagedAgentsPanel({
     setPolicyDraft(policyFromAgent(selected))
     loadDetail(selected.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [selectedId, conversationRefreshKey])
 
   // 切换同事时清空未发送贴图
   useEffect(() => {
@@ -759,6 +761,7 @@ export default function ManagedAgentsPanel({
       setNewPolicy(emptyPolicy())
       setNewJellyColor(assignJellyColor(String(Date.now())))
       await loadAgents(d?.id, { forceSelect: true })
+      onAgentHired?.(d)
     } catch (err) {
       setCreateErr(err?.message || '创建失败')
     } finally { setBusy(false) }
@@ -909,6 +912,19 @@ export default function ManagedAgentsPanel({
     setDismissTarget(selected)
   }
 
+  /** 统一准备员工设置草稿，现代/经典入口共用，避免打开后字段残留。 */
+  function openSelectedSettings(tab = 'basic') {
+    if (!selected) return
+    setRenameDraft(selected.name || '')
+    setRulesDraft(selected.rules_prompt || '')
+    setPolicyDraft(policyFromAgent(selected))
+    setContextWindowDraft(selected.context_window_tokens || 1000000)
+    setJellyColorDraft(resolveJellyColor(selected))
+    setSettingsTab(tab)
+    setSettingsOpen(true)
+    setDetailMoreOpen(false)
+  }
+
   /** 加载设置页「继承记忆」 */
   async function loadLegacyMounts(agentId) {
     if (!agentId) { setLegacyMounts([]); return }
@@ -1005,9 +1021,13 @@ export default function ManagedAgentsPanel({
   }
 
   useEffect(() => {
-    if (approveSettingsOpen) void loadJevReady()
+    if (settingsOpen && settingsTab === 'approval') void loadJevReady()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [approveSettingsOpen])
+  }, [settingsOpen, settingsTab])
+
+  useEffect(() => {
+    setDetailMoreOpen(false)
+  }, [selectedId])
 
   /** 开关「命令全部审批通过」并落库 */
   async function toggleApproveAll(v) {
@@ -1738,7 +1758,7 @@ export default function ManagedAgentsPanel({
   }
 
   return (
-    <section className="ma-panel">
+    <section className={`ma-panel${presentation === 'focus' ? ' ma-panel-focus' : ''}`}>
       <button
         type="button"
         className="ma-list-collapse"
@@ -1959,52 +1979,95 @@ export default function ManagedAgentsPanel({
                   {liveRunSec(selected) > 0 && <span className="ma-runlive">{fmtSec(liveRunSec(selected))}</span>}
                 </div>
                 <div className="ma-detail-tools">
-                  {!workflowBusy && (
-                    <button
-                      type="button"
-                      className={`ghost ma-approve-settings-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
-                      onClick={() => setApproveSettingsOpen(true)}
-                      title="命令审批设置"
-                    >
-                      命令审批设置
-                      {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
-                    </button>
-                  )}
-                  <button type="button" className="ghost" onClick={() => {
-                    setRenameDraft(selected.name || '')
-                    setRulesDraft(selected.rules_prompt || '')
-                    setPolicyDraft(policyFromAgent(selected))
-                    setContextWindowDraft(selected.context_window_tokens || 1000000)
-                    setJellyColorDraft(resolveJellyColor(selected))
-                    setSettingsTab('basic')
-                    setSettingsOpen(true)
-                  }}>设置</button>
-                  {selected.status !== 'initializing' && !cloneInitBusy && (
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy || loading}
-                      onClick={() => {
-                        setCopyName(`${selected.name || '未命名员工'} 副本`)
-                        setCopyJellyColor(resolveJellyColor(selected))
-                        setCopyOpen(true)
-                      }}
-                    >
-                      复制
-                    </button>
-                  )}
-                  {!workflowBusy && !initializing && !cloneInitBusy && (
+                  {presentation === 'focus' ? (
                     <>
-                      <button type="button" className="ghost" onClick={fetchStatusSnapshot} disabled={loading || compressing}>状态</button>
-                      <button type="button" className="ghost" onClick={compressChat} disabled={loading || compressing}>
-                        {compressing ? '压缩记忆…' : '压缩'}
+                      <button
+                        type="button"
+                        className={`ma-detail-icon-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
+                        onClick={() => openSelectedSettings('basic')}
+                        title="员工设置"
+                        aria-label="员工设置"
+                      >
+                        <ModernIcon name="settings" />
+                        {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
                       </button>
+                      <div
+                        className="ma-detail-menu-wrap"
+                        onBlur={(event) => {
+                          if (!event.currentTarget.contains(event.relatedTarget)) setDetailMoreOpen(false)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') setDetailMoreOpen(false)
+                        }}
+                      >
+                        <button
+                          type="button"
+                          className="ma-detail-icon-btn"
+                          onClick={() => setDetailMoreOpen((value) => !value)}
+                          title="更多操作"
+                          aria-label="更多操作"
+                          aria-expanded={detailMoreOpen}
+                        >
+                          <ModernIcon name="menu" />
+                        </button>
+                        {detailMoreOpen && (
+                          <div className="ma-detail-more-menu">
+                            {selected.status !== 'initializing' && !cloneInitBusy && (
+                              <button
+                                type="button"
+                                disabled={busy || loading}
+                                onClick={() => {
+                                  setCopyName(`${selected.name || '未命名员工'} 副本`)
+                                  setCopyJellyColor(resolveJellyColor(selected))
+                                  setCopyOpen(true)
+                                  setDetailMoreOpen(false)
+                                }}
+                              >复制</button>
+                            )}
+                            {!workflowBusy && !initializing && !cloneInitBusy && (
+                              <>
+                                <button type="button" onClick={() => { setDetailMoreOpen(false); fetchStatusSnapshot() }} disabled={loading || compressing}>状态</button>
+                                <button type="button" onClick={() => { setDetailMoreOpen(false); compressChat() }} disabled={loading || compressing}>
+                                  {compressing ? '压缩记忆…' : '压缩'}
+                                </button>
+                              </>
+                            )}
+                            {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
+                              <button type="button" disabled={busy} onClick={() => { setDetailMoreOpen(false); retryCloneInit() }}>重试初始化</button>
+                            )}
+                            <hr />
+                            <button type="button" className="danger-item" onClick={() => { setDetailMoreOpen(false); deleteAgent() }} disabled={busy || loading}>解聘</button>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="ghost" onClick={() => openSelectedSettings('basic')}>设置</button>
+                      {selected.status !== 'initializing' && !cloneInitBusy && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={busy || loading}
+                          onClick={() => {
+                            setCopyName(`${selected.name || '未命名员工'} 副本`)
+                            setCopyJellyColor(resolveJellyColor(selected))
+                            setCopyOpen(true)
+                          }}
+                        >复制</button>
+                      )}
+                      {!workflowBusy && !initializing && !cloneInitBusy && (
+                        <>
+                          <button type="button" className="ghost" onClick={fetchStatusSnapshot} disabled={loading || compressing}>状态</button>
+                          <button type="button" className="ghost" onClick={compressChat} disabled={loading || compressing}>{compressing ? '压缩记忆…' : '压缩'}</button>
+                        </>
+                      )}
+                      {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
+                        <button type="button" className="ghost" disabled={busy} onClick={retryCloneInit}>重试初始化</button>
+                      )}
+                      <button type="button" className="ghost danger-text" onClick={deleteAgent} disabled={busy || loading}>解聘</button>
                     </>
                   )}
-                  {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
-                    <button type="button" className="ghost" disabled={busy} onClick={retryCloneInit}>重试初始化</button>
-                  )}
-                  <button type="button" className="ghost danger-text" onClick={deleteAgent} disabled={busy || loading}>解聘</button>
                 </div>
               </header>
 
@@ -2279,44 +2342,15 @@ export default function ManagedAgentsPanel({
         </div>
       </div>
 
-      {approveSettingsOpen && selected && (
-        <div className="modal-mask" onClick={() => !autoSaving && !approveAllSaving && setApproveSettingsOpen(false)}>
-          <div className="modal-card ma-settings ma-approve-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>命令审批设置</h2>
-            <p className="ma-approve-modal-desc">
-              控制本数字人命令授权策略。Hard Deny（如关机）仍不可绕过。
-            </p>
-            <CapsuleToggle
-              label="命令全部审批通过"
-              hint="开启后无需人工审批，全部自动通过；自动通过记录写入数据库，最多保留 7 天"
-              checked={approveAllOn}
-              disabled={approveAllSaving || workflowBusy}
-              onChange={toggleApproveAll}
-            />
-            <CapsuleToggle
-              label="自动审核"
-              hint={
-                jevReady
-                  ? '开启后由本地 JEV 审核非常规命令（仍可能弹窗）'
-                  : `需先开启 JEV：${jevHint || '请到「设置 · JEV」安装并打开胶囊'}`
-              }
-              checked={autoOn}
-              disabled={autoSaving || approveAllOn || workflowBusy || !jevReady}
-              onChange={toggleAuto}
-            />
-            <div className="modal-actions">
-              <button type="button" className="ghost" onClick={() => setApproveSettingsOpen(false)}>关闭</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <TalentMarket
         open={talentMarketOpen}
         authHeaders={authHeaders}
         onUnauthorized={onUnauthorized}
         onClose={() => setTalentMarketOpen(false)}
-        onHired={(a) => { if (a?.id) loadAgents(a.id, { forceSelect: true }) }}
+        onHired={(a) => {
+          if (a?.id) loadAgents(a.id, { forceSelect: true })
+          onAgentHired?.(a)
+        }}
         onCustomHire={() => {
           setTalentMarketOpen(false)
           setNewPolicy(emptyPolicy())
@@ -2459,6 +2493,7 @@ export default function ManagedAgentsPanel({
             <h2>员工设置 · {selected.name}</h2>
             <div className="ma-settings-tabs" role="tablist">
               <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>基本</button>
+              <button type="button" className={settingsTab === 'approval' ? 'active' : ''} onClick={() => setSettingsTab('approval')}>命令审批</button>
               <button type="button" className={settingsTab === 'skills' ? 'active' : ''} onClick={() => setSettingsTab('skills')}>技能</button>
               <button
                 type="button"
@@ -2504,6 +2539,33 @@ export default function ManagedAgentsPanel({
                   <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存'}</button>
                 </div>
               </form>
+            ) : settingsTab === 'approval' ? (
+              <div className="ma-approval-settings-panel">
+                <p className="ma-approve-modal-desc">
+                  控制本数字人的命令授权策略。Hard Deny（如关机）仍不可绕过。
+                </p>
+                <CapsuleToggle
+                  label="命令全部审批通过"
+                  hint="开启后无需人工审批，全部自动通过；自动通过记录写入数据库，最多保留 7 天"
+                  checked={approveAllOn}
+                  disabled={approveAllSaving || workflowBusy}
+                  onChange={toggleApproveAll}
+                />
+                <CapsuleToggle
+                  label="自动审核"
+                  hint={
+                    jevReady
+                      ? '开启后由本地 JEV 审核非常规命令（仍可能弹窗）'
+                      : `需先开启 JEV：${jevHint || '请到「设置 · JEV」安装并打开胶囊'}`
+                  }
+                  checked={autoOn}
+                  disabled={autoSaving || approveAllOn || workflowBusy || !jevReady}
+                  onChange={toggleAuto}
+                />
+                <div className="modal-actions">
+                  <button type="button" disabled={autoSaving || approveAllSaving} onClick={() => setSettingsOpen(false)}>关闭</button>
+                </div>
+              </div>
             ) : settingsTab === 'skills' ? (
               <>
                 <AgentSkillsPanel
@@ -2761,7 +2823,7 @@ function PermCard({ p, more, busy, onDecide }) {
       </div>
       {p.note && <div className="perm-note">{p.note}</div>}
       <div className="perm-tool">{p.tool_name}</div>
-      <CmdBlock content={p.summary} risk={p.risk} meaning={p.meaning} decision="ask" />
+      <CmdBlock content={p.summary} risk={p.risk} meaning={p.meaning} decision="ask" startExpanded />
       {more > 0 && <div className="perm-more">+{more} 条排队中</div>}
       <div className="perm-actions">
         <button type="button" className="deny" onClick={() => onDecide(p.request_id, 'deny')}>拒绝</button>
@@ -2781,12 +2843,37 @@ function PermCard({ p, more, busy, onDecide }) {
   )
 }
 
-/** 命令框：按风险着色 + 底栏含义 + 一键复制；Codex 时间线可附带输出 */
-function CmdBlock({ content, risk, meaning, decision, note }) {
+function commandPreview(content, max = 72) {
+  const oneLine = String(content || '').replace(/\s+/g, ' ').trim()
+  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine
+}
+
+/** 命令框：对话时间线默认折叠；审批卡保持展开，避免隐藏待确认内容。 */
+function CmdBlock({ content, risk, meaning, decision, note, startExpanded = false }) {
   const r = risk || (decision === 'deny' ? 'high' : 'mid')
   const riskText = ({ low: '无害', mid: '需注意', high: '高风险' })[r] || '需注意'
+  const [open, setOpen] = useState(startExpanded)
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className={`cmd-block cmd-block-collapsed risk-${r} ${decision === 'deny' ? 'denied' : ''}`}
+        onClick={() => setOpen(true)}
+        aria-expanded={false}
+        title="点击展开命令"
+      >
+        <span className="cmd-fold-tri" aria-hidden="true">▶</span>
+        <code className="cmd-preview">{commandPreview(content)}</code>
+        <span className="cmd-risk-dot">{riskText}</span>
+      </button>
+    )
+  }
   return (
     <div className={`cmd-block risk-${r} ${decision === 'deny' ? 'denied' : ''}`}>
+      <button type="button" className="cmd-fold-head" onClick={() => setOpen(false)} aria-expanded={true} title="点击折叠">
+        <span className="cmd-fold-tri" aria-hidden="true">▼</span>
+        <span className="cmd-fold-hint">命令</span>
+      </button>
       <div className="cmd-block-main">
         <code>{content}</code>
         <CopyTextButton text={content} className="cmd-copy" />

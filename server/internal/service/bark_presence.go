@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,11 +91,11 @@ func barkKindAllowed(prefs store.NotifyPrefs, dedupe string) bool {
 }
 
 // notifyPermissionPending 两端都不在该对话、且开关打开时推送待审批。
-func (s *Service) notifyPermissionPending(agentID int64, requestID string) {
+func (s *Service) notifyPermissionPending(agentID int64, requestID, summary, risk string) {
 	if strings.TrimSpace(requestID) == "" {
 		return
 	}
-	s.pushBark(agentID, "perm:"+requestID, notify.PermissionPendingText)
+	s.PushPermissionBarkIfAllowed(agentID, requestID, summary, risk)
 }
 
 // notifyTaskDone 两端都不在该对话、且开关打开时推送完成，标题不超过 10 个字。
@@ -101,15 +103,50 @@ func (s *Service) notifyTaskDone(agentID int64, question, dedupe string) {
 	if strings.TrimSpace(dedupe) == "" {
 		return
 	}
-	s.pushBark(agentID, "done:"+dedupe, notify.TaskDoneText(question))
+	s.PushTaskDoneBarkIfAllowed(agentID, dedupe, question)
 }
 
 // PushBarkIfAllowed 供管理接口复用：对话未打开且对应开关开启才推送。
 func (s *Service) PushBarkIfAllowed(agentID int64, dedupe, body string) bool {
-	return s.pushBark(agentID, dedupe, body)
+	name, department, _ := s.barkAgentIdentity(context.Background(), agentID)
+	return s.pushBarkCard(agentID, notify.Card{
+		DedupeKey: dedupe,
+		Title:     "Atolla",
+		Body:      name + "｜" + department + "\n" + strings.TrimSpace(body),
+		Icon:      s.barkAppIconURL(),
+		Group:     notify.AtollaGroup,
+	})
 }
 
-func (s *Service) pushBark(agentID int64, dedupe, body string) bool {
+// PushPermissionBarkIfAllowed 推送包含员工、部门、命令摘要和风险的审批卡片。
+func (s *Service) PushPermissionBarkIfAllowed(agentID int64, requestID, summary, risk string) bool {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return false
+	}
+	name, department, _ := s.barkAgentIdentity(context.Background(), agentID)
+	card := notify.PermissionCard(name, department, summary, risk)
+	card.DedupeKey = "perm:" + requestID
+	card.Icon = s.barkAppIconURL()
+	card.URL = s.barkDeepLink("approval", agentID, requestID)
+	return s.pushBarkCard(agentID, card)
+}
+
+// PushTaskDoneBarkIfAllowed 推送包含员工、部门、任务摘要和运行耗时的完成卡片。
+func (s *Service) PushTaskDoneBarkIfAllowed(agentID int64, dedupe, question string) bool {
+	dedupe = strings.TrimSpace(dedupe)
+	if dedupe == "" {
+		return false
+	}
+	name, department, durationMS := s.barkAgentIdentity(context.Background(), agentID)
+	card := notify.TaskDoneCard(name, department, question, durationMS)
+	card.DedupeKey = "done:" + dedupe
+	card.Icon = s.barkAppIconURL()
+	card.URL = s.barkDeepLink("agent", agentID, "")
+	return s.pushBarkCard(agentID, card)
+}
+
+func (s *Service) pushBarkCard(agentID int64, card notify.Card) bool {
 	if s == nil || s.Notify == nil || agentID <= 0 || s.agentChatOpen(agentID) {
 		return false
 	}
@@ -119,16 +156,67 @@ func (s *Service) pushBark(agentID int64, dedupe, body string) bool {
 			prefs = loaded
 		}
 	}
-	if !barkKindAllowed(prefs, dedupe) {
+	if !barkKindAllowed(prefs, card.DedupeKey) {
 		return false
 	}
-	name := "数字员工"
-	icon := ""
-	if s.Store != nil {
-		if a, _ := s.Store.GetManagedAgent(context.Background(), agentID); a != nil && strings.TrimSpace(a.Name) != "" {
-			name = strings.TrimSpace(a.Name)
-		}
-		icon = s.EnsureBarkAvatarURL(context.Background(), agentID)
+	return s.Notify.Push(card)
+}
+
+func (s *Service) barkAgentIdentity(ctx context.Context, agentID int64) (name, department string, durationMS int) {
+	name, department = "数字员工", "未分组"
+	if s == nil || s.Store == nil || agentID <= 0 {
+		return name, department, 0
 	}
-	return s.Notify.PushCard(dedupe, name, body, icon)
+	a, err := s.Store.GetManagedAgent(ctx, agentID)
+	if err != nil || a == nil {
+		return name, department, 0
+	}
+	enriched := s.EnrichAgentsFolderNames(ctx, []store.ManagedAgent{*a})
+	if len(enriched) > 0 {
+		a = &enriched[0]
+	}
+	if strings.TrimSpace(a.Name) != "" {
+		name = strings.TrimSpace(a.Name)
+	}
+	if strings.TrimSpace(a.FolderName) != "" {
+		department = strings.TrimSpace(a.FolderName)
+	}
+	return name, department, a.LastRunMs
+}
+
+// barkAppIconURL 始终返回 Atolla App 图标，不再把员工头像当作通知来源图标。
+func (s *Service) barkAppIconURL() string {
+	if s == nil {
+		return ""
+	}
+	if icon := strings.TrimSpace(s.Cfg.BarkIconURL); icon != "" {
+		return icon
+	}
+	if s.RemoteBridge == nil || s.RemoteBridge.Config == nil {
+		return ""
+	}
+	base := strings.TrimRight(strings.TrimSpace(s.RemoteBridge.Config.Public().BaseURL), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/app-icon-1024.png"
+}
+
+func (s *Service) barkDeepLink(kind string, agentID int64, requestID string) string {
+	if s == nil || agentID <= 0 || s.RemoteBridge == nil || s.RemoteBridge.Config == nil {
+		return ""
+	}
+	instanceID := strings.TrimSpace(s.RemoteBridge.Config.Public().InstanceID)
+	if instanceID == "" {
+		return ""
+	}
+	base := "atolla://agent/" + url.PathEscape(instanceID) + "/" + strconv.FormatInt(agentID, 10)
+	if kind == "approval" {
+		requestID = strings.TrimSpace(requestID)
+		if requestID == "" {
+			return ""
+		}
+		return "atolla://approval/" + url.PathEscape(instanceID) + "/" + strconv.FormatInt(agentID, 10) + "/" + url.PathEscape(requestID)
+	}
+	return base + "/chat"
 }
