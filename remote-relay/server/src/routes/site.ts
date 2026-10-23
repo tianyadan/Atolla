@@ -1,8 +1,8 @@
-import express, { type Request, type Response, type Router } from 'express'
+import express, { type NextFunction, type Request, type Response, type Router } from 'express'
 import { z } from 'zod'
 import type { RelayDatabase } from '../db.js'
 import { verifySiteToken } from '../auth/site.js'
-import { listInstancesPublic, revokeInstancePassword } from '../auth/instance.js'
+import { getInstanceRow, listInstancesPublic, revokeInstancePassword } from '../auth/instance.js'
 import type { FailLockLimiter } from '../auth/failLock.js'
 import {
   unlockClientIp,
@@ -20,6 +20,7 @@ import { clearMobileViewer, setMobileViewer } from '../viewer.js'
 import {
   deletePermissionsMirror,
   listAgentsMirror,
+  listInstancePermissionsMirror,
   listMessagesMirror,
   listPermissionsMirror,
   listTasksMirror,
@@ -491,6 +492,34 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         return
       }
       res.json({ command: result.command })
+    },
+  )
+
+  /** List pending permission cards across one instance */
+  router.get(
+    '/instances/:id/permissions/pending',
+    guard,
+    (req: Request, res: Response, next: NextFunction) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      if (!getInstanceRow(db, instanceId)) {
+        res.status(404).json({ error: 'Instance not found' })
+        return
+      }
+      next()
+    },
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const result = listInstancePermissionsMirror(db, instanceId)
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json({ items: result.items })
     },
   )
 
