@@ -4,8 +4,8 @@ import Foundation
 import UIKit
 
 /**
- * Capacitor 插件：忙碌数字人 → 灵动岛。
- * 灵动岛上 TimelineView 几乎不刷新，故用 App 内 Timer 每 0.2s update animPhase 驱动水母跳动。
+ * Capacitor 插件：优先级事件 → 单个灵动岛。
+ * 只有运行态使用 App 内 Timer 更新 animPhase，终态与审批保持静态以节省电量。
  */
 @objc(AtollaIslandPlugin)
 public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -13,14 +13,17 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   public let jsName = "AtollaIsland"
   public let pluginMethods: [CAPPluginMethod] = [
     CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
-    CAPPluginMethod(name: "syncBusy", returnType: CAPPluginReturnPromise),
+    CAPPluginMethod(name: "syncState", returnType: CAPPluginReturnPromise),
     CAPPluginMethod(name: "endAll", returnType: CAPPluginReturnPromise),
   ]
 
   private let activityIdKey = "atolla.island.activityId"
+  private let schemaVersionKey = "atolla.island.schemaVersion"
+  private let currentSchemaVersion = 2
   private var animTimer: Timer?
   private var animPhase: Int = 0
-  private var lastAgents: [AtollaBusyAttributes.BusyAgentSlice] = []
+  private var activeKind: String = ""
+  private var lastItems: [AtollaBusyAttributes.IslandItemSlice] = []
   private var lastCount: Int = 0
   private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -51,30 +54,42 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
-  @objc func syncBusy(_ call: CAPPluginCall) {
+  @objc func syncState(_ call: CAPPluginCall) {
     guard #available(iOS 16.2, *) else {
       call.reject("需要 iOS 16.2+")
       return
     }
+    guard let kind = Self.parseActiveKind(call.getString("activeKind")) else {
+      call.reject("无效的灵动岛状态")
+      return
+    }
     let count = call.getInt("count") ?? 0
-    let agents = Self.parseAgents(call.getArray("agents", JSObject.self) ?? [])
+    let items = Self.parseItems(call.getArray("items", JSObject.self) ?? [])
 
-    if count <= 0 || agents.isEmpty {
+    if count <= 0 || items.isEmpty {
       stopAnimTimer()
-      endAllActivities()
-      call.resolve(["ok": true])
+      Task { @MainActor in
+        await self.endAllActivitiesNow()
+        call.resolve(["ok": true])
+      }
       return
     }
 
-    lastAgents = agents
-    lastCount = max(count, agents.count)
-    let state = makeState()
-
     Task { @MainActor in
       do {
+        if Self.needsActivityReplacement(
+          storedSchemaVersion: UserDefaults.standard.object(forKey: self.schemaVersionKey) as? Int
+        ) {
+          await self.endAllActivitiesNow()
+        }
+        self.activeKind = kind
+        self.lastItems = items
+        self.lastCount = max(count, items.count)
+        let state = self.makeState()
         if let existing = self.currentActivity() {
           await existing.update(ActivityContent(state: state, staleDate: nil))
-          self.startAnimTimer()
+          self.updateAnimTimer()
+          UserDefaults.standard.set(self.currentSchemaVersion, forKey: self.schemaVersionKey)
           call.resolve(["ok": true, "updated": true])
           return
         }
@@ -85,7 +100,8 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
           pushType: nil
         )
         UserDefaults.standard.set(activity.id, forKey: self.activityIdKey)
-        self.startAnimTimer()
+        UserDefaults.standard.set(self.currentSchemaVersion, forKey: self.schemaVersionKey)
+        self.updateAnimTimer()
         call.resolve(["ok": true, "started": true])
       } catch {
         call.reject("启动灵动岛失败: \(error.localizedDescription)")
@@ -96,7 +112,11 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   @objc func endAll(_ call: CAPPluginCall) {
     stopAnimTimer()
     if #available(iOS 16.2, *) {
-      endAllActivities()
+      Task { @MainActor in
+        await self.endAllActivitiesNow()
+        call.resolve(["ok": true])
+      }
+      return
     }
     call.resolve(["ok": true])
   }
@@ -105,10 +125,20 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
 
   private func makeState() -> AtollaBusyAttributes.ContentState {
     AtollaBusyAttributes.ContentState(
+      activeKind: activeKind,
       count: lastCount,
-      agents: lastAgents,
-      animPhase: animPhase
+      items: lastItems,
+      animPhase: animPhase,
+      updatedAt: Date().timeIntervalSince1970
     )
+  }
+
+  private func updateAnimTimer() {
+    if activeKind == "running" {
+      startAnimTimer()
+    } else {
+      stopAnimTimer()
+    }
   }
 
   private func startAnimTimer() {
@@ -129,7 +159,7 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
 
   private func tickAnim() {
     guard #available(iOS 16.2, *) else { return }
-    guard !lastAgents.isEmpty else {
+    guard activeKind == "running", !lastItems.isEmpty else {
       stopAnimTimer()
       return
     }
@@ -151,7 +181,7 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     bgTask = UIApplication.shared.beginBackgroundTask(withName: "AtollaIslandAnim") { [weak self] in
       self?.endBackgroundTask()
     }
-    if animTimer == nil, !lastAgents.isEmpty {
+    if animTimer == nil, activeKind == "running", !lastItems.isEmpty {
       startAnimTimer()
     }
   }
@@ -163,30 +193,50 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
-  /// 解析 JS agents
-  private static func parseAgents(_ raw: [JSObject]) -> [AtollaBusyAttributes.BusyAgentSlice] {
+  private static func parseActiveKind(_ raw: String?) -> String? {
+    let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return ["error", "approval", "running", "completed"].contains(value) ? value : nil
+  }
+
+  private static func clamp(_ raw: Any?, limit: Int) -> String {
+    let value = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return String(value.prefix(limit))
+  }
+
+  private static func number(_ raw: Any?, fallback: Double = 0) -> Double {
+    if let value = raw as? Double { return value }
+    if let value = raw as? Int { return Double(value) }
+    if let value = raw as? String, let number = Double(value) { return number }
+    return fallback
+  }
+
+  /// 解析 JS 事件，限制数量和文本长度，避免 ActivityKit payload 过大。
+  private static func parseItems(_ raw: [JSObject]) -> [AtollaBusyAttributes.IslandItemSlice] {
     raw.prefix(5).compactMap { obj in
-      let name = (obj["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-      guard !name.isEmpty else { return nil }
-      let color = (obj["jellyColor"] as? String) ?? "blue"
-      let status = (obj["statusLabel"] as? String) ?? "运行中"
-      let started: Double
-      if let n = obj["runStartedAt"] as? Double {
-        started = n
-      } else if let n = obj["runStartedAt"] as? Int {
-        started = Double(n)
-      } else if let s = obj["runStartedAt"] as? String, let n = Double(s) {
-        started = n
-      } else {
-        started = 0
+      let id = clamp(obj["id"], limit: 160)
+      let name = clamp(obj["agentName"], limit: 48)
+      guard !id.isEmpty, !name.isEmpty, let kind = parseActiveKind(obj["kind"] as? String) else {
+        return nil
       }
-      return AtollaBusyAttributes.BusyAgentSlice(
-        name: name,
-        jellyColor: color,
-        statusLabel: status,
-        runStartedAt: started
+      let rawLink = clamp(obj["deepLink"], limit: 512)
+      let deepLink = URL(string: rawLink)?.scheme?.lowercased() == "atolla" ? rawLink : ""
+      return AtollaBusyAttributes.IslandItemSlice(
+        id: id,
+        kind: kind,
+        agentName: name,
+        department: clamp(obj["department"], limit: 48),
+        occurredAt: max(0, number(obj["occurredAt"])),
+        durationMs: Int(number(obj["durationMs"], fallback: -1)),
+        summary: clamp(obj["summary"], limit: 160),
+        deepLink: deepLink,
+        jellyColor: clamp(obj["jellyColor"], limit: 16).isEmpty
+          ? "blue" : clamp(obj["jellyColor"], limit: 16)
       )
     }
+  }
+
+  static func needsActivityReplacement(storedSchemaVersion: Int?) -> Bool {
+    storedSchemaVersion != 2
   }
 
   @available(iOS 16.2, *)
@@ -197,19 +247,23 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   }
 
   @available(iOS 16.2, *)
-  private func endAllActivities() {
-    lastAgents = []
+  @MainActor
+  private func endAllActivitiesNow() async {
+    activeKind = ""
+    lastItems = []
     lastCount = 0
     animPhase = 0
+    stopAnimTimer()
     UserDefaults.standard.removeObject(forKey: activityIdKey)
-    Task { @MainActor in
-      for activity in Activity<AtollaBusyAttributes>.activities {
-        let done = AtollaBusyAttributes.ContentState(count: 0, agents: [], animPhase: 0)
-        await activity.end(
-          ActivityContent(state: done, staleDate: nil),
-          dismissalPolicy: .immediate
-        )
-      }
+    for activity in Activity<AtollaBusyAttributes>.activities {
+      let done = AtollaBusyAttributes.ContentState(
+        activeKind: "", count: 0, items: [], animPhase: 0,
+        updatedAt: Date().timeIntervalSince1970
+      )
+      await activity.end(
+        ActivityContent(state: done, staleDate: nil),
+        dismissalPolicy: .immediate
+      )
     }
   }
 }

@@ -1,26 +1,33 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PublicMirrorAgent } from './api'
-import { resolveMirrorJellyColor } from './jelly/jellyColor'
+import {
+  buildIslandEvents,
+  islandEventDeepLink,
+  selectIslandPresentation,
+  type IslandPresentation,
+} from './islandEvents'
 import {
   agentBusy,
-  agentRunStartedAt,
-  agentStatusLabel,
-  listBusyAgents,
 } from './utils/agentStatus'
 
-/** 岛上单个数字人摘要 */
-export type IslandBusyAgent = {
-  name: string
+export type NativeIslandItem = {
+  id: string
+  kind: string
+  agentName: string
+  department: string
+  occurredAt: number
+  durationMs: number
+  summary: string
+  deepLink: string
   jellyColor: string
-  statusLabel: string
-  runStartedAt: number
 }
 
 /** 与原生 AtollaIsland 插件对齐 */
 export interface AtollaIslandPlugin {
-  syncBusy(options: {
+  syncState(options: {
+    activeKind: string
     count: number
-    agents: IslandBusyAgent[]
+    items: NativeIslandItem[]
   }): Promise<{ ok: boolean; started?: boolean; updated?: boolean }>
   isAvailable(): Promise<{ available: boolean; reason?: string }>
   endAll(): Promise<{ ok: boolean }>
@@ -36,27 +43,18 @@ export function getIslandLastError(): string {
   return lastError
 }
 
-/** 展示用忙碌状态文案（比「忙」更清晰） */
-function islandStatusLabel(status: string | null | undefined): string {
-  const s = String(status || '').toLowerCase()
-  if (s === 'waiting') return '等待中'
-  if (s === 'compressing') return '压缩中'
-  if (s === 'initializing') return '初始化'
-  if (s === '插话中') return '插话中'
-  if (agentStatusLabel(status) === '忙') return '运行中'
-  return agentStatusLabel(status)
-}
-
-/** 把 mirror agents 编成岛上 slices（最多 5） */
-function toIslandAgents(agents: PublicMirrorAgent[]): IslandBusyAgent[] {
-  return listBusyAgents(agents)
-    .slice(0, 5)
-    .map((a) => ({
-      name: a.display_name || a.agent_id || '数字人',
-      jellyColor: resolveMirrorJellyColor(a),
-      statusLabel: islandStatusLabel(a.status),
-      runStartedAt: agentRunStartedAt(a.payload) ?? 0,
-    }))
+function toNativeItems(presentation: IslandPresentation): NativeIslandItem[] {
+  return presentation.items.slice(0, 5).map((event) => ({
+    id: event.id,
+    kind: event.type,
+    agentName: event.agentName,
+    department: event.department,
+    occurredAt: event.occurredAt > 0 ? event.occurredAt / 1000 : 0,
+    durationMs: event.durationMs ?? -1,
+    summary: event.summary ?? '',
+    deepLink: islandEventDeepLink(event),
+    jellyColor: event.jellyColor ?? 'blue',
+  }))
 }
 
 /**
@@ -64,31 +62,37 @@ function toIslandAgents(agents: PublicMirrorAgent[]): IslandBusyAgent[] {
  */
 export async function syncIslandOptimisticAgent(
   agent: PublicMirrorAgent | null | undefined,
-  opts?: { forceBusy?: boolean },
+  opts?: { forceBusy?: boolean; instanceId?: string },
 ): Promise<void> {
   if (!agent) return
   const row: PublicMirrorAgent =
     opts?.forceBusy && !agentBusy(agent.status)
       ? { ...agent, status: 'running' }
       : agent
-  await syncIslandFromAgents([row])
+  await syncIslandFromAgents([row], opts?.instanceId ?? '')
 }
 
-/**
- * 根据 agents 驱动 iPhone 灵动岛。
- * 失败不写 lastKey，便于下次轮询重试。
- */
+/** 兼容原调用方的运行态同步；统一轮询接入后由 syncIslandPresentation 驱动。 */
 export async function syncIslandFromAgents(
   agents: PublicMirrorAgent[],
+  instanceId: string = '',
+): Promise<void> {
+  const events = buildIslandEvents(instanceId, agents, [])
+  await syncIslandPresentation(selectIslandPresentation(events))
+}
+
+/** 根据优先级聚合结果驱动一个原生 Live Activity。 */
+export async function syncIslandPresentation(
+  presentation: IslandPresentation,
 ): Promise<void> {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'ios') return
 
-  const slices = toIslandAgents(agents)
-  const count = listBusyAgents(agents).length
-  const key = slices
-    .map((a) => `${a.name}|${a.jellyColor}|${a.statusLabel}|${a.runStartedAt}`)
-    .join(';')
-  const fullKey = `${count}|${key}`
+  const items = toNativeItems(presentation)
+  const fullKey = JSON.stringify({
+    activeKind: presentation.activeKind,
+    count: presentation.count,
+    items,
+  })
   if (fullKey === lastKey) return
 
   try {
@@ -98,16 +102,20 @@ export async function syncIslandFromAgents(
       console.warn('[AtollaIsland]', lastError)
       return
     }
-    if (count === 0) {
+    if (!presentation.activeKind || presentation.count === 0 || items.length === 0) {
       await AtollaIsland.endAll()
       lastKey = fullKey
       lastError = ''
       return
     }
-    const res = await AtollaIsland.syncBusy({ count, agents: slices })
+    const res = await AtollaIsland.syncState({
+      activeKind: presentation.activeKind,
+      count: presentation.count,
+      items,
+    })
     lastKey = fullKey
     lastError = ''
-    console.info('[AtollaIsland] sync ok', { count, res })
+    console.info('[AtollaIsland] sync ok', { count: presentation.count, res })
   } catch (err) {
     lastError = err instanceof Error ? err.message : String(err)
     console.warn('[AtollaIsland] sync failed', lastError)
