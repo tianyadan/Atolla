@@ -56,6 +56,7 @@ import {
   saveChatHeaderExpanded,
 } from '../utils/chatHeaderCollapse'
 import { syncIslandOptimisticAgent } from '../islandLiveActivity'
+import { invalidateIslandSync } from '../islandSyncInvalidation'
 import { JellyAvatar } from '../jelly/JellyAvatar'
 import { jellyStateFromAgent, resolveMirrorJellyColor } from '../jelly/jellyColor'
 import {
@@ -425,9 +426,11 @@ export function ChatHistoryPage() {
         void clearViewerPresence(instanceId, agentId).catch(() => {})
         return
       }
-      void setViewerPresence(instanceId, agentId).catch(() => {
-        /* Mac offline: ignore */
-      })
+      void setViewerPresence(instanceId, agentId)
+        .then(() => invalidateIslandSync())
+        .catch(() => {
+          /* Mac offline: ignore */
+        })
     }
     beat()
     const hb = window.setInterval(beat, VIEWER_HEARTBEAT_MS)
@@ -497,8 +500,8 @@ export function ChatHistoryPage() {
   useEffect(() => {
     if (!agent) return
     if (!busy) return
-    void syncIslandOptimisticAgent(agent, { forceBusy: true })
-  }, [agent, busy, awaitingReply])
+    void syncIslandOptimisticAgent(agent, { forceBusy: true, instanceId })
+  }, [agent, busy, awaitingReply, instanceId])
 
   const activeTask = useMemo(() => {
     const running = tasks.find((t) => {
@@ -716,6 +719,7 @@ export function ChatHistoryPage() {
     setPermQueue((q) => q.filter((p) => p.request_id !== rid))
     try {
       await decidePermission(instanceId, agentId, rid, behavior)
+      invalidateIslandSync()
     } catch (err) {
       decidedIdsRef.current.delete(rid)
       if (!handleApiError(err)) {
