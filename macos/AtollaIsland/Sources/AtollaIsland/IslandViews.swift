@@ -29,11 +29,56 @@ enum IslandMetrics {
   }
 }
 
+final class IslandLayoutEditor: ObservableObject {
+  @Published private(set) var layout: IslandLayout
+
+  private let onMove: (CGSize, Bool) -> Void
+  private let onResize: (IslandResizeEdge, CGSize, Bool) -> Void
+  private let onToggleAspectRatio: () -> Void
+  private let onReset: () -> Void
+
+  init(
+    layout: IslandLayout,
+    onMove: @escaping (CGSize, Bool) -> Void,
+    onResize: @escaping (IslandResizeEdge, CGSize, Bool) -> Void,
+    onToggleAspectRatio: @escaping () -> Void,
+    onReset: @escaping () -> Void
+  ) {
+    self.layout = layout
+    self.onMove = onMove
+    self.onResize = onResize
+    self.onToggleAspectRatio = onToggleAspectRatio
+    self.onReset = onReset
+  }
+
+  func update(layout: IslandLayout) {
+    self.layout = layout
+  }
+
+  func move(by translation: CGSize, completed: Bool) {
+    onMove(translation, completed)
+  }
+
+  func resize(edge: IslandResizeEdge, by translation: CGSize, completed: Bool) {
+    onResize(edge, translation, completed)
+  }
+
+  func toggleAspectRatio() {
+    onToggleAspectRatio()
+  }
+
+  func reset() {
+    onReset()
+  }
+}
+
 /// 主岛 + 副岛同一坐标空间；mergeProgress 驱动吸收，再顺势 expand。
 struct IslandRootView: View {
   @ObservedObject var model: IslandViewModel
   @ObservedObject var morph: IslandMorphDriver
+  @ObservedObject var layoutEditor: IslandLayoutEditor
   var notch: NotchGeometry
+  @State private var isLayoutEditorHovering = false
 
   private var collapsedW: CGFloat { notch.width }
   private var collapsedH: CGFloat { notch.height }
@@ -66,6 +111,9 @@ struct IslandRootView: View {
   private var panelHeight: CGFloat {
     max(morph.height, useCollapsedChromeLayout ? IslandMetrics.badgeSize : morph.height)
   }
+
+  private var layoutWidthScale: CGFloat { max(0.1, layoutEditor.layout.widthScale) }
+  private var layoutHeightScale: CGFloat { max(0.1, layoutEditor.layout.heightScale) }
 
   /// 主岛左缘：收起态始终与有活动时相同（左侧角标位留白）；stretch 溢出时钳制
   private var mainLeadingX: CGFloat {
@@ -141,11 +189,22 @@ struct IslandRootView: View {
         .allowsHitTesting(morph.contentProgress > 0.45)
     }
     .frame(width: panelWidth, height: panelHeight, alignment: .topLeading)
+    // 尺寸偏好以渲染缩放叠加在 morph 之上，避免展开/收起时回退到默认刘海尺寸。
+    .scaleEffect(x: layoutWidthScale, y: layoutHeightScale, anchor: .topLeading)
+    .frame(
+      width: panelWidth * layoutWidthScale,
+      height: panelHeight * layoutHeightScale,
+      alignment: .topLeading
+    )
+    .overlay(alignment: .topLeading) {
+      IslandLayoutEditOverlay(editor: layoutEditor, isHovering: isLayoutEditorHovering)
+    }
     // morph 已由 DisplayLink 逐帧插值，禁止 SwiftUI 隐式动画再插一层（会掉帧/卡顿）
     .transaction { $0.animation = nil }
     .onAppear {
       morph.syncIdle(width: collapsedW, height: collapsedH, expanded: false)
     }
+    .onHover { isLayoutEditorHovering = $0 }
   }
 
   /// 副岛：位置/缩放/数字透明度由 mergeProgress 派生量驱动
@@ -318,6 +377,94 @@ struct IslandRootView: View {
     case .running: return IslandMetrics.purpleCount
     case nil: return .white.opacity(0.4)
     }
+  }
+}
+
+private struct IslandLayoutEditOverlay: View {
+  @ObservedObject var editor: IslandLayoutEditor
+  let isHovering: Bool
+
+  var body: some View {
+    GeometryReader { proxy in
+      ZStack(alignment: .topLeading) {
+        if isHovering {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(Color.white.opacity(0.42), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            .padding(1)
+            .allowsHitTesting(false)
+
+          moveHandle
+            .position(x: proxy.size.width / 2, y: 8)
+
+          aspectRatioButton
+            .position(x: max(16, proxy.size.width - 16), y: 10)
+
+          resizeHandle(.left, x: 0, y: proxy.size.height / 2)
+          resizeHandle(.right, x: proxy.size.width, y: proxy.size.height / 2)
+          resizeHandle(.top, x: proxy.size.width / 2, y: 0)
+          resizeHandle(.bottom, x: proxy.size.width / 2, y: proxy.size.height)
+          resizeHandle(.topLeft, x: 0, y: 0)
+          resizeHandle(.topRight, x: proxy.size.width, y: 0)
+          resizeHandle(.bottomLeft, x: 0, y: proxy.size.height)
+          resizeHandle(.bottomRight, x: proxy.size.width, y: proxy.size.height)
+        }
+      }
+    }
+  }
+
+  private var moveHandle: some View {
+    Capsule(style: .continuous)
+      .fill(Color.white.opacity(0.65))
+      .frame(width: 28, height: 4)
+      .contentShape(Rectangle().inset(by: -6))
+      .gesture(moveGesture)
+      .onTapGesture(count: 2) { editor.reset() }
+      .help("拖动移动灵动岛，双击恢复默认位置")
+  }
+
+  private var aspectRatioButton: some View {
+    Button { editor.toggleAspectRatio() } label: {
+      Image(systemName: editor.layout.isAspectRatioLocked ? "lock.fill" : "lock.open")
+        .font(.system(size: 8, weight: .bold))
+        .foregroundStyle(.white.opacity(0.82))
+        .frame(width: 18, height: 18)
+        .background(.black.opacity(0.52), in: Circle())
+    }
+    .buttonStyle(.plain)
+    .help(editor.layout.isAspectRatioLocked ? "已锁定宽高比" : "已解锁宽高比")
+  }
+
+  private func resizeHandle(_ edge: IslandResizeEdge, x: CGFloat, y: CGFloat) -> some View {
+    Circle()
+      .fill(Color.white.opacity(0.8))
+      .frame(width: 6, height: 6)
+      .contentShape(Rectangle().inset(by: -6))
+      .position(x: x, y: y)
+      .gesture(resizeGesture(edge))
+  }
+
+  private var moveGesture: some Gesture {
+    DragGesture()
+      .onChanged { value in
+        editor.move(by: appKitTranslation(value.translation), completed: false)
+      }
+      .onEnded { value in
+        editor.move(by: appKitTranslation(value.translation), completed: true)
+      }
+  }
+
+  private func resizeGesture(_ edge: IslandResizeEdge) -> some Gesture {
+    DragGesture()
+      .onChanged { value in
+        editor.resize(edge: edge, by: appKitTranslation(value.translation), completed: false)
+      }
+      .onEnded { value in
+        editor.resize(edge: edge, by: appKitTranslation(value.translation), completed: true)
+      }
+  }
+
+  private func appKitTranslation(_ translation: CGSize) -> CGSize {
+    CGSize(width: translation.width, height: -translation.height)
   }
 }
 
