@@ -1116,8 +1116,11 @@ export default function App() {
                 active={adminMenu === 'remote-relay'}
               />
             )}
-            {adminMenu === 'settings' && (
-              <section className="settings-page">
+            {/* 安装 JEV/灵动岛可能持续数分钟；仅隐藏而不卸载设置页，避免切换菜单后丢失安装进度与错误。 */}
+            <section
+              className="settings-page"
+              style={{ display: adminMenu === 'settings' ? undefined : 'none' }}
+            >
                 <h2 className="settings-page-title">设置</h2>
                 <NotifySettings
                   authHeaders={authHeaders}
@@ -1144,8 +1147,7 @@ export default function App() {
                   onUnauthorized={() => clearAuth('登录已过期')}
                   active={adminMenu === 'settings'}
                 />
-              </section>
-            )}
+            </section>
             {adminMenu === 'network-allowlist' && (
               <NetworkPolicyPanel
                 authHeaders={authHeaders}
