@@ -34,6 +34,7 @@ import { ChatAttachPreview, ChatLightbox, ChatMessageImages } from './ChatImageU
 import { MobileViewerIcon } from './MobileViewerIcon.jsx'
 import GroupChatOfferSheet, { buildGroupMemberSet } from './GroupChatOfferSheet.jsx'
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
+import EngineUsageChip from './EngineUsageChip.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -42,6 +43,20 @@ const ENGINES = [
   { id: 'codex', label: 'Codex', color: '#10a37f' },
   { id: 'agent', label: 'Cursor', color: '#6366f1' },
 ]
+
+/** 引擎错误展示压成约 1～2 行，完整内容放 title。 */
+function shortErrorText(raw, max = 140) {
+  let t = String(raw || '').trim()
+  if (!t) return ''
+  const low = t.toLowerCase()
+  if (low.includes('reading additional input from stdin')) {
+    return 'CLI 异常：等待 stdin 输入失败，请重试'
+  }
+  t = t.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 2).join(' · ')
+  t = t.replace(/\s+/g, ' ')
+  if (t.length <= max) return t
+  return `${t.slice(0, max)}…`
+}
 
 /** 未入组：没有工作组，或工作组已被删除（否则人和组对不上，列表两边都看不到）。 */
 function isUngroupedAgent(agent, folders) {
@@ -317,32 +332,89 @@ export default function ManagedAgentsPanel({
     return () => clearInterval(t)
   }, [selectedId, permQueue.length])
 
-  // 运行中轮询挂起授权：SSE 若因会话重建漏推，仍能补上审批卡
-  // 绑定「当前选中且正在跑」的数字人 id，切换后不再把结果写进新窗口
+  /**
+   * 从后端补齐某数字人挂起的命令审批（灵动岛深链 / 页签重入 / SSE 漏推）。
+   * @returns {Promise<object[]>} 合并后的队列快照
+   */
+  async function pullPendingForAgent(agentId, { promoteRequestId = '' } = {}) {
+    const id = Number(agentId) || 0
+    if (!id) return []
+    let conv = getAgentSession(id).convId
+      || viewRef.current.agents.find((a) => a.id === id)?.conversation_id
+      || 0
+    // 会话 id 尚未进本地：用 messages 接口拿 conversation_id
+    if (!conv) {
+      try {
+        const res = await fetch(`${API}/admin/agents/${id}/messages?limit=1`, { headers: authHeaders() })
+        if (res.status === 401) { onUnauthorized?.(); return [] }
+        if (res.ok) {
+          const d = await res.json().catch(() => ({}))
+          conv = Number(d.conversation_id) || 0
+          if (conv) patchAgentSession(id, { convId: conv })
+        }
+      } catch { /* ignore */ }
+    }
+    if (!conv) return getAgentSession(id).permQueue || []
+    try {
+      const res = await fetch(`${API}/permissions/pending?conversation_id=${conv}`, { headers: authHeaders() })
+      if (res.status === 401) { onUnauthorized?.(); return [] }
+      if (!res.ok) return getAgentSession(id).permQueue || []
+      const d = await res.json().catch(() => ({}))
+      const items = d?.items || []
+      let queue = dedupPerm([...(getAgentSession(id).permQueue || []), ...items])
+        .filter((p) => remainSec(p) > 0)
+      const want = String(promoteRequestId || '').trim()
+      if (want) {
+        const index = queue.findIndex((item) => item.request_id === want)
+        if (index > 0) {
+          queue = [queue[index], ...queue.slice(0, index), ...queue.slice(index + 1)]
+        }
+      }
+      patchAgentSession(id, { permQueue: queue })
+      return queue
+    } catch {
+      return getAgentSession(id).permQueue || []
+    }
+  }
+
+  // 运行中 / 等待审批 / 灵动岛深链：轮询挂起授权（不依赖 SSE loading，避免岛跳入后弹窗丢失）
   useEffect(() => {
-    if (!loading || !selectedId || !active) return undefined
+    if (!selectedId || !active) return undefined
     const agentId = selectedId
+    const st = String(viewRef.current.agents.find((a) => a.id === agentId)?.status || '').toLowerCase()
+    const waitingLike = st === 'waiting' || st === 'running' || st === 'busy' || st === '插话中'
+    const needPull = loading || waitingLike || !!focusApprovalRequestId
+    if (!needPull) return undefined
+    let stopped = false
     const pull = () => {
-      if (viewRef.current.selectedId !== agentId) return
-      const conv = getAgentSession(agentId).convId
-        || viewRef.current.agents.find((a) => a.id === agentId)?.conversation_id
-      if (!conv) return
-      fetch(`${API}/permissions/pending?conversation_id=${conv}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (viewRef.current.selectedId !== agentId) return
-          const items = d?.items || []
-          if (!items.length) return
-          patchAgentSession(agentId, {
-            permQueue: dedupPerm([...(getAgentSession(agentId).permQueue || []), ...items]),
-          })
-        })
-        .catch(() => {})
+      if (stopped || viewRef.current.selectedId !== agentId) return
+      void pullPendingForAgent(agentId, { promoteRequestId: focusApprovalRequestId })
     }
     pull()
     const t = window.setInterval(pull, 2000)
-    return () => window.clearInterval(t)
-  }, [loading, selectedId, active, selected?.conversation_id])
+    return () => {
+      stopped = true
+      window.clearInterval(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, selectedId, active, selected?.conversation_id, selected?.status, focusApprovalRequestId])
+
+  // 窗口重新可见时补拉审批（岛点进来若未整页刷新，也能恢复弹窗）
+  useEffect(() => {
+    if (!active) return undefined
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const id = viewRef.current.selectedId
+      if (id) void pullPendingForAgent(id, { promoteRequestId: focusApprovalRequestId })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, focusApprovalRequestId])
 
   /**
    * 刷新数字员工列表。
@@ -577,10 +649,11 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => { loadAgents() /* eslint-disable-next-line */ }, [])
 
-  // 从「数字人管理」卡片跳转：选中并打开设置 / 招聘
+  // 从「数字人管理」卡片 / 灵动岛跳转：选中并打开设置 / 招聘；顺带补拉审批
   useEffect(() => {
     if (!focusAgentId) return
     setSelectedId(focusAgentId)
+    void pullPendingForAgent(focusAgentId, { promoteRequestId: focusApprovalRequestId })
     if (openSettings) {
       const a = agents.find((x) => x.id === focusAgentId)
       if (a) {
@@ -597,21 +670,31 @@ export default function ManagedAgentsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusAgentId, openSettings])
 
-  // 灵动岛审批深链：等目标会话的待审批队列拉取完成后，将指定命令提到首位。
+  // 灵动岛审批深链：主动拉取 pending 并把指定命令提到首位（不依赖内存里是否还有旧队列）
   useEffect(() => {
-    if (!focusApprovalRequestId || !selectedId || selectedId !== focusAgentId && focusAgentId) return
-    const queue = getAgentSession(selectedId).permQueue || []
-    const index = queue.findIndex((item) => item.request_id === focusApprovalRequestId)
-    if (index < 0) return
-    if (index > 0) {
-      patchAgentSession(selectedId, {
-        permQueue: [queue[index], ...queue.slice(0, index), ...queue.slice(index + 1)],
-      })
-    }
-    requestAnimationFrame(() => boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' }))
-    onApprovalFocusConsumed?.()
+    if (!focusApprovalRequestId || !selectedId) return undefined
+    // 若 App 仍带着 focusAgentId 且尚未切到目标人，先等选中对齐
+    if (focusAgentId && selectedId !== focusAgentId) return undefined
+    let cancelled = false
+    const want = focusApprovalRequestId
+    const agentId = selectedId
+    ;(async () => {
+      // 最多重试几次：agents / conversation_id 可能稍晚才就绪
+      for (let i = 0; i < 8 && !cancelled; i += 1) {
+        const queue = await pullPendingForAgent(agentId, { promoteRequestId: want })
+        if (cancelled) return
+        const index = (queue || []).findIndex((item) => item.request_id === want)
+        if (index >= 0) {
+          requestAnimationFrame(() => boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight, behavior: 'smooth' }))
+          onApprovalFocusConsumed?.()
+          return
+        }
+        await new Promise((r) => setTimeout(r, 400))
+      }
+    })()
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusApprovalRequestId, selectedId, permQueue.length])
+  }, [focusApprovalRequestId, selectedId, focusAgentId])
 
   useEffect(() => {
     if (!openHire) return
@@ -637,7 +720,7 @@ export default function ManagedAgentsPanel({
     setPolicyDraft(policyFromAgent(selected))
     loadDetail(selected.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, conversationRefreshKey])
+  }, [selectedId, conversationRefreshKey, selected?.id])
 
   // 切换同事时清空未发送贴图
   useEffect(() => {
@@ -837,6 +920,8 @@ export default function ManagedAgentsPanel({
       )))
       setSettingsOpen(false)
       await loadAgents(selected.id)
+      // 换工作区后可能写入系统提示，刷新对话区
+      await loadDetail(selected.id, { force: true })
     } finally { setBusy(false) }
   }
 
@@ -1439,6 +1524,18 @@ export default function ManagedAgentsPanel({
     })
   }
 
+  /** ChatGPT 式：默认一行，内容增多时向上增高（受 max-height 限制） */
+  function autosizeComposer() {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+
+  useEffect(() => {
+    autosizeComposer()
+  }, [question])
+
   /** 输入 @ 时弹出同事列表 */
   function onComposerChange(e) {
     const v = e.target.value
@@ -1470,6 +1567,7 @@ export default function ManagedAgentsPanel({
       el.focus()
       const pos = (at >= 0 ? at : caret) + token.length
       el.setSelectionRange(pos, pos)
+      autosizeComposer()
     })
   }
 
@@ -1644,9 +1742,28 @@ export default function ManagedAgentsPanel({
     payload: {},
   } : null)
   const activeProgress = Math.min(100, Math.max(0, activeTask?.progress || 0))
-  const activeSteps = activeTask?.payload?.steps || []
-  const activeStepIdx = activeTask?.payload?.current_step ?? 0
-  const failedStepIdx = activeTask?.payload?.failed ? (activeTask?.payload?.failed_step ?? -1) : -1
+  /** 优先 step_items（v1 协议）；兼容旧 steps 字符串数组 */
+  const planPayload = activeTask?.payload || {}
+  const stepItems = Array.isArray(planPayload.step_items) ? planPayload.step_items : null
+  const activeSteps = stepItems
+    ? stepItems.map((s) => s?.title || s?.Title || '')
+    : (planPayload.steps || [])
+  const activeStepIdx = planPayload.current_step ?? 0
+  const failedStepIdx = planPayload.failed ? (planPayload.failed_step ?? -1) : -1
+  const planPhase = planPayload.phase || ''
+  function stepClass(i) {
+    if (stepItems?.[i]?.status) {
+      const st = stepItems[i].status
+      if (st === 'failed') return 'failed'
+      if (st === 'done' || st === 'skipped') return 'done'
+      if (st === 'active') return 'current'
+      return ''
+    }
+    if (i === failedStepIdx) return 'failed'
+    if (i < activeStepIdx) return 'done'
+    if (i === activeStepIdx) return 'current'
+    return ''
+  }
 
   const searchQ = agentSearch.trim().toLowerCase()
   const filteredAgents = useMemo(() => {
@@ -1967,6 +2084,14 @@ export default function ManagedAgentsPanel({
                   <span className={`ma-status st-${cloneInitBusy ? 'initializing' : statusClass(getAgentSession(selected.id).compressing ? 'compressing' : (getAgentSession(selected.id).loading ? 'running' : selected.status))}`}>
                     {statusLabel(selected)}
                   </span>
+                  {presentation === 'focus' && (
+                    <EngineUsageChip
+                      engine={selected.engine}
+                      authHeaders={authHeaders}
+                      onUnauthorized={onUnauthorized}
+                      active={active}
+                    />
+                  )}
                   {workflowBusy && selected.occupancy?.workflow_run_id > 0 && onOpenWorkflowRun && (
                     <button
                       type="button"
@@ -2242,11 +2367,13 @@ export default function ManagedAgentsPanel({
                   <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
                   <textarea
                     ref={composerRef}
+                    className="ma-composer-input"
                     value={question}
                     onChange={onComposerChange}
                     onKeyDown={onKeyDown}
                     onPaste={onComposerPaste}
-                    rows={3}
+                    onInput={autosizeComposer}
+                    rows={1}
                     placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事；可粘贴图片' : '输入任务，Ctrl+Enter 发送，Enter 换行；@ 协作；可粘贴/拖入图片')}
                     disabled={initializing || !!groupOffer}
                   />
@@ -2301,9 +2428,11 @@ export default function ManagedAgentsPanel({
               {taskPlanOn && (
               <div className="ma-progress-panel">
                 <div className="ma-progress-head">
-                  <strong>任务进度</strong>
+                  <strong>任务规划</strong>
                   {activeTask ? (
-                    <span className={`ma-status st-${statusClass(activeTask.status)}`}>{statusZh(activeTask.status)}</span>
+                    <span className={`ma-status st-${statusClass(activeTask.status)}`}>
+                      {planPhase === 'planning' ? '拆分中' : statusZh(activeTask.status)}
+                    </span>
                   ) : (
                     <span className="muted">暂无进行中的任务</span>
                   )}
@@ -2318,13 +2447,10 @@ export default function ManagedAgentsPanel({
                     {activeSteps.length > 0 && (
                       <ol className="ma-progress-steps">
                         {activeSteps.map((s, i) => {
-                          let cls = ''
-                          if (i === failedStepIdx) cls = 'failed'
-                          else if (i < activeStepIdx) cls = 'done'
-                          else if (i === activeStepIdx) cls = 'current'
+                          const cls = stepClass(i)
                           return (
                             <li key={i} className={cls}>
-                              {i === failedStepIdx ? <span className="step-x">✕</span> : null}
+                              {cls === 'failed' ? <span className="step-x">✕</span> : null}
                               {s}
                             </li>
                           )
@@ -2337,8 +2463,12 @@ export default function ManagedAgentsPanel({
               )}
             </div>
           )}
-          {sess.error && <pre className="error">{sess.error}</pre>}
-          {selected?.last_error && !loading && <pre className="error">上次错误: {selected.last_error}</pre>}
+          {sess.error && <p className="error ma-last-error">{shortErrorText(sess.error)}</p>}
+          {selected?.last_error && !loading && (
+            <p className="error ma-last-error" title={String(selected.last_error)}>
+              上次错误: {shortErrorText(selected.last_error)}
+            </p>
+          )}
         </div>
       </div>
 
@@ -2385,6 +2515,9 @@ export default function ManagedAgentsPanel({
               onChange={setNewPolicy}
               workspaces={workspaces}
               disabled={busy}
+              authHeaders={authHeaders}
+              onUnauthorized={onUnauthorized}
+              onWorkspacesChange={setWorkspaces}
             />
             {createErr ? <pre className="error">{createErr}</pre> : null}
             <div className="modal-actions">
@@ -2489,8 +2622,22 @@ export default function ManagedAgentsPanel({
           setSettingsOpen(false)
           loadAgents(selected.id)
         }}>
-          <div className="modal-card ma-settings ma-settings-wide" onClick={(e) => e.stopPropagation()}>
-            <h2>员工设置 · {selected.name}</h2>
+          <div className="modal-card ma-settings ma-settings-wide ma-settings-modern" onClick={(e) => e.stopPropagation()}>
+            <header className="ma-settings-head">
+              <div>
+                <h2>员工设置</h2>
+                <p className="ma-settings-sub">{selected.name}</p>
+              </div>
+              <button
+                type="button"
+                className="ma-settings-close"
+                disabled={busy}
+                aria-label="关闭"
+                onClick={() => { setSettingsOpen(false); loadAgents(selected.id) }}
+              >
+                ×
+              </button>
+            </header>
             <div className="ma-settings-tabs" role="tablist">
               <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>基本</button>
               <button type="button" className={settingsTab === 'approval' ? 'active' : ''} onClick={() => setSettingsTab('approval')}>命令审批</button>
@@ -2504,36 +2651,53 @@ export default function ManagedAgentsPanel({
               </button>
             </div>
             {settingsTab === 'basic' ? (
-              <form onSubmit={(e) => { e.preventDefault(); saveRules() }}>
-                <div className="ma-avatar-edit">
-                  <JellyAvatar color={jellyColorDraft} size={72} state="idle" />
-                  <div className="ma-avatar-actions">
-                    <JellyColorPicker value={jellyColorDraft} onChange={setJellyColorDraft} disabled={busy} label="水母颜色" />
+              <form className="ma-settings-form" onSubmit={(e) => { e.preventDefault(); saveRules() }}>
+                <section className="ma-settings-section">
+                  <div className="ma-avatar-edit">
+                    <JellyAvatar color={jellyColorDraft} size={56} state="idle" />
+                    <div className="ma-avatar-actions">
+                      <JellyColorPicker value={jellyColorDraft} onChange={setJellyColorDraft} disabled={busy} label="水母颜色" />
+                    </div>
                   </div>
-                </div>
-                <label>
-                  名称
-                  <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
-                </label>
-                <label>
-                  上下文窗口
-                  <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
-                    <option value={262144}>256K</option>
-                    <option value={524288}>512K</option>
-                    <option value={1000000}>1M</option>
-                  </select>
-                </label>
-                <label>
-                  系统提示词
-                  <textarea rows={8} value={rulesDraft} onChange={(e) => setRulesDraft(e.target.value)} disabled={busy} />
-                </label>
+                  <div className="ma-settings-grid">
+                    <label>
+                      名称
+                      <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
+                    </label>
+                    <label>
+                      上下文窗口
+                      <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
+                        <option value={262144}>256K</option>
+                        <option value={524288}>512K</option>
+                        <option value={1000000}>1M</option>
+                      </select>
+                    </label>
+                  </div>
+                </section>
+                <section className="ma-settings-section">
+                  <div className="ma-settings-section-label">
+                    <span>系统提示词</span>
+                  </div>
+                  <div className="ma-settings-prompt">
+                    <textarea
+                      rows={9}
+                      value={rulesDraft}
+                      onChange={(e) => setRulesDraft(e.target.value)}
+                      disabled={busy}
+                      placeholder="角色、边界与协作方式…"
+                      spellCheck={false}
+                    />
+                  </div>
+                </section>
                 <AgentPolicyFields
                   value={policyDraft}
                   onChange={setPolicyDraft}
                   workspaces={workspaces}
                   disabled={busy}
+                  authHeaders={authHeaders}
+                  onUnauthorized={onUnauthorized}
+                  onWorkspacesChange={setWorkspaces}
                 />
-                <p className="muted">权限会写入系统提示，并每 10 轮重申；工具层会硬拦截违规操作。也可在「技能商店」按技能安装细粒度能力。</p>
                 <div className="modal-actions">
                   <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>取消</button>
                   <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存'}</button>
@@ -2541,12 +2705,9 @@ export default function ManagedAgentsPanel({
               </form>
             ) : settingsTab === 'approval' ? (
               <div className="ma-approval-settings-panel">
-                <p className="ma-approve-modal-desc">
-                  控制本数字人的命令授权策略。Hard Deny（如关机）仍不可绕过。
-                </p>
                 <CapsuleToggle
                   label="命令全部审批通过"
-                  hint="开启后无需人工审批，全部自动通过；自动通过记录写入数据库，最多保留 7 天"
+                  hint="自动通过；记录保留 7 天。Hard Deny 仍不可绕过"
                   checked={approveAllOn}
                   disabled={approveAllSaving || workflowBusy}
                   onChange={toggleApproveAll}
@@ -2555,8 +2716,8 @@ export default function ManagedAgentsPanel({
                   label="自动审核"
                   hint={
                     jevReady
-                      ? '开启后由本地 JEV 审核非常规命令（仍可能弹窗）'
-                      : `需先开启 JEV：${jevHint || '请到「设置 · JEV」安装并打开胶囊'}`
+                      ? '本地 JEV 审核非常规命令'
+                      : `需先开启 JEV：${jevHint || '设置 · JEV'}`
                   }
                   checked={autoOn}
                   disabled={autoSaving || approveAllOn || workflowBusy || !jevReady}
@@ -2591,9 +2752,9 @@ export default function ManagedAgentsPanel({
               </>
             ) : (
               <div className="lm-mounts-panel">
-                <p className="muted">已继承的离职记忆（最多 5 本）；认领时已写入规则区，可在「基本」中编辑正文。</p>
+                <p className="ma-settings-tip">最多 5 本；正文可在「基本」编辑。</p>
                 {legacyMounts.length === 0 ? (
-                  <p className="empty">尚未继承记忆。可在「数字员工记忆」书架认领。</p>
+                  <p className="empty">尚未继承。可在「数字员工记忆」书架认领。</p>
                 ) : (
                   <ul className="lm-mount-list">
                     {legacyMounts.map((m) => (
@@ -2658,101 +2819,159 @@ function policyFromAgent(a) {
 }
 
 /** 权限 / 工作区 / 定时表单块 */
-function AgentPolicyFields({ value, onChange, workspaces, disabled }) {
+function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders, onUnauthorized, onWorkspacesChange }) {
   const v = value || emptyPolicy()
+  const [pickingDir, setPickingDir] = useState(false)
+  const [pickErr, setPickErr] = useState('')
   function patch(p) {
     onChange({ ...v, ...p })
   }
+  /** 调用本机 macOS 原生「选择文件夹」面板 */
+  async function pickDirectoryNative() {
+    if (disabled || pickingDir || !authHeaders) return
+    setPickingDir(true)
+    setPickErr('')
+    try {
+      const res = await fetch(`${API}/admin/pick-directory`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ prompt: '选择数字员工工作区目录' }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setPickErr(d.error || '无法打开系统选目录面板，请改用下方手动输入')
+        return
+      }
+      if (d.cancelled) return
+      const path = String(d.path || '').trim()
+      if (!path) {
+        setPickErr('未选择目录')
+        return
+      }
+      patch({ workspace_path: path })
+      // 刷新授权列表，便于下拉里看到刚选的路径（若已登记）
+      try {
+        const wr = await fetch(`${API}/workspaces`)
+        const wd = await wr.json().catch(() => ({}))
+        if (Array.isArray(wd.items)) onWorkspacesChange?.(wd.items)
+      } catch { /* ignore */ }
+    } catch (e) {
+      setPickErr(String(e.message || e) || '选目录失败')
+    } finally {
+      setPickingDir(false)
+    }
+  }
   return (
     <div className="ma-policy">
-      <h3 className="ma-policy-title">权限</h3>
-      <CapsuleToggle label="允许写入文件" checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
-      <CapsuleToggle label="允许联网搜索" checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
-      <CapsuleToggle label="允许执行 rm" checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
-      <p className="dbs-hint">浏览器能力已迁至「技能 → 浏览器操作」。安装该技能后自动检测/下载 browser-use，用完须关闭标签。</p>
+      <section className="ma-settings-section">
+        <h3 className="ma-policy-title">权限</h3>
+        <CapsuleToggle label="允许写入文件" checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
+        <CapsuleToggle label="允许联网搜索" checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
+        <CapsuleToggle label="允许执行 rm" checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
+        <p className="ma-settings-tip">浏览器请到「技能 → 浏览器操作」安装。</p>
+      </section>
 
-      <h3 className="ma-policy-title">运行边界</h3>
-      <CapsuleToggle
-        label="限制工作区"
-        checked={!!v.workspace_bound}
-        disabled={disabled}
-        onChange={(c) => patch({ workspace_bound: c, workspace_path: c ? v.workspace_path : '' })}
-      />
-      {v.workspace_bound && (
-        <div className="ma-policy-sub">
-          <label>
-            选择授权目录
-            <select
-              value={workspaces.some((w) => w.path === v.workspace_path) ? v.workspace_path : ''}
-              disabled={disabled}
-              onChange={(e) => patch({ workspace_path: e.target.value })}
-            >
-              <option value="">请选择…</option>
-              {(workspaces || []).map((w) => (
-                <option key={w.id || w.path} value={w.path}>{w.name || w.path}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            或手动输入绝对路径
-            <input
-              value={v.workspace_path || ''}
-              disabled={disabled}
-              placeholder="/Users/.../project"
-              onChange={(e) => patch({ workspace_path: e.target.value })}
-            />
-          </label>
-        </div>
-      )}
+      <section className="ma-settings-section">
+        <h3 className="ma-policy-title">工作区</h3>
+        <CapsuleToggle
+          label="限制工作区"
+          hint="关闭=默认可全盘读写；开启=仅指定目录。换目录保留对话与引擎会话，并尽量迁移 projects/"
+          checked={!!v.workspace_bound}
+          disabled={disabled}
+          onChange={(c) => patch({ workspace_bound: c, workspace_path: c ? v.workspace_path : '' })}
+        />
+        {v.workspace_bound && (
+          <div className="ma-policy-sub">
+            <div className="ma-ws-pick-row">
+              <button
+                type="button"
+                className="ghost"
+                disabled={disabled || pickingDir || !authHeaders}
+                onClick={pickDirectoryNative}
+                title="打开 macOS 系统文件夹选择面板"
+              >
+                {pickingDir ? '选择中…' : '浏览选择目录…'}
+              </button>
+              <span className="ma-ws-pick-hint">Mac 系统弹窗</span>
+            </div>
+            {pickErr ? <p className="ma-ws-pick-err">{pickErr}</p> : null}
+            <label>
+              已授权目录
+              <select
+                value={workspaces.some((w) => w.path === v.workspace_path) ? v.workspace_path : ''}
+                disabled={disabled}
+                onChange={(e) => patch({ workspace_path: e.target.value })}
+              >
+                <option value="">请选择…</option>
+                {(workspaces || []).map((w) => (
+                  <option key={w.id || w.path} value={w.path}>{w.name || w.path}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              绝对路径
+              <input
+                value={v.workspace_path || ''}
+                disabled={disabled}
+                placeholder="/Users/.../project"
+                onChange={(e) => patch({ workspace_path: e.target.value })}
+              />
+            </label>
+          </div>
+        )}
+      </section>
 
-      <CapsuleToggle
-        label="开启定时执行"
-        checked={!!v.schedule_enabled}
-        disabled={disabled}
-        onChange={(c) => patch({ schedule_enabled: c })}
-      />
-      {v.schedule_enabled && (
-        <div className="ma-policy-sub ma-schedule">
-          <label>
-            常用计划
-            <select
-              value={v.schedule_preset || ''}
-              disabled={disabled}
-              onChange={(e) => {
-                const id = e.target.value
-                const p = SCHEDULE_PRESETS.find((x) => x.id === id)
-                patch({
-                  schedule_preset: id,
-                  schedule_cron: p?.cron || v.schedule_cron,
-                  schedule_label: p?.label && id ? p.label : v.schedule_label,
-                })
-              }}
-            >
-              {SCHEDULE_PRESETS.map((p) => (
-                <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Cron 表达式（分 时 日 月 周）
-            <input
-              value={v.schedule_cron || ''}
-              disabled={disabled}
-              placeholder="0 9 * * 1-5"
-              onChange={(e) => patch({ schedule_cron: e.target.value, schedule_preset: '' })}
-            />
-          </label>
-          <label>
-            计划名称
-            <input
-              value={v.schedule_label || ''}
-              disabled={disabled}
-              placeholder="例行巡检"
-              onChange={(e) => patch({ schedule_label: e.target.value })}
-            />
-          </label>
-        </div>
-      )}
+      <section className="ma-settings-section">
+        <CapsuleToggle
+          label="开启定时执行"
+          checked={!!v.schedule_enabled}
+          disabled={disabled}
+          onChange={(c) => patch({ schedule_enabled: c })}
+        />
+        {v.schedule_enabled && (
+          <div className="ma-policy-sub ma-schedule">
+            <label>
+              常用计划
+              <select
+                value={v.schedule_preset || ''}
+                disabled={disabled}
+                onChange={(e) => {
+                  const id = e.target.value
+                  const p = SCHEDULE_PRESETS.find((x) => x.id === id)
+                  patch({
+                    schedule_preset: id,
+                    schedule_cron: p?.cron || v.schedule_cron,
+                    schedule_label: p?.label && id ? p.label : v.schedule_label,
+                  })
+                }}
+              >
+                {SCHEDULE_PRESETS.map((p) => (
+                  <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Cron（分 时 日 月 周）
+              <input
+                value={v.schedule_cron || ''}
+                disabled={disabled}
+                placeholder="0 9 * * 1-5"
+                onChange={(e) => patch({ schedule_cron: e.target.value, schedule_preset: '' })}
+              />
+            </label>
+            <label>
+              计划名称
+              <input
+                value={v.schedule_label || ''}
+                disabled={disabled}
+                placeholder="例行巡检"
+                onChange={(e) => patch({ schedule_label: e.target.value })}
+              />
+            </label>
+          </div>
+        )}
+      </section>
     </div>
   )
 }

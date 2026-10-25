@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 
+	"atolla/server/internal/agent"
 	"atolla/server/internal/store"
 )
 
@@ -128,7 +129,7 @@ func (s *Service) SpeakInGroup(ctx context.Context, groupID, speakerAgentID int6
 	if runErr != nil {
 		status = "error"
 		agentStatus = "error"
-		lastErr = runErr.Error()
+		lastErr = agent.ShortEngineError(runErr.Error())
 		if strings.TrimSpace(out) == "" {
 			out = "❌ " + lastErr
 		}

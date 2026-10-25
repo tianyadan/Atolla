@@ -274,7 +274,8 @@ export default function ModernWorkspace({
           openHire={hireOpen}
           onHireConsumed={() => setHireOpen(false)}
           onAgentHired={handleAgentHired}
-          focusAgentId={selected?.agent_id || focusAgentId}
+          // 灵动岛深链优先于侧栏当前选中，否则审批跳转会被旧 selected 盖住
+          focusAgentId={Number(focusAgentId) > 0 ? focusAgentId : (selected?.agent_id || 0)}
           focusApprovalRequestId={focusApprovalRequestId}
           onFocusConsumed={onFocusConsumed}
           onApprovalFocusConsumed={onApprovalFocusConsumed}

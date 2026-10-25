@@ -63,7 +63,7 @@ func (h *Handler) AdminIslandSettingsGet(c *gin.Context) {
 	c.JSON(http.StatusOK, st)
 }
 
-// AdminIslandSettingsInstall POST /api/admin/island/settings/install — 检测环境并编译安装。
+// AdminIslandSettingsInstall POST /api/admin/island/settings/install — 从最新 GitHub Release 自动安装。
 func (h *Handler) AdminIslandSettingsInstall(c *gin.Context) {
 	st, err := h.svc.InstallIsland()
 	if err != nil {
@@ -76,6 +76,23 @@ func (h *Handler) AdminIslandSettingsInstall(c *gin.Context) {
 			"detail":      st.Detail,
 			"repo_hint":   st.RepoHint,
 			"source_path": st.SourcePath,
+			"release_tag": st.ReleaseTag,
+			"release_url": st.ReleaseURL,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, st)
+}
+
+// AdminIslandSettingsUninstall DELETE /api/admin/island/settings — 卸载并清理本机组件。
+func (h *Handler) AdminIslandSettingsUninstall(c *gin.Context) {
+	st, err := h.svc.UninstallIsland()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":     err.Error(),
+			"installed": st.Installed,
+			"enabled":   st.Enabled,
+			"detail":    st.Detail,
 		})
 		return
 	}
@@ -99,6 +116,8 @@ func (h *Handler) AdminIslandSettingsPut(c *gin.Context) {
 			"enabled":   st.Enabled,
 			"detail":    st.Detail,
 			"repo_hint": st.RepoHint,
+			"release_tag": st.ReleaseTag,
+			"release_url": st.ReleaseURL,
 		})
 		return
 	}

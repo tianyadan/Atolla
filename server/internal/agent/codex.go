@@ -31,12 +31,32 @@ type CodexEvent struct {
 	Command  *CodexCommandEvent
 }
 
+// CodexSandboxMode 按是否绑定工作区选择 Codex 沙箱：
+// 绑定 → workspace-write（仅工作区内写）；未绑定 → danger-full-access（全盘读写，与「限制工作区」关闭语义一致）。
+func CodexSandboxMode(workspaceBound bool) string {
+	if workspaceBound {
+		return "workspace-write"
+	}
+	return "danger-full-access"
+}
+
+// NormalizeCodexSandbox 校验/回落沙箱模式名。
+func NormalizeCodexSandbox(s string) string {
+	switch strings.TrimSpace(s) {
+	case "read-only", "workspace-write", "danger-full-access":
+		return strings.TrimSpace(s)
+	default:
+		return "workspace-write"
+	}
+}
+
 // CodexArgs 构造非交互 `codex exec` 参数(禁止 -p:那是 profile)。
-func CodexArgs(dir, prompt string, jsonMode bool) []string {
+// sandbox 为空时默认 workspace-write（兼容旧调用）。
+func CodexArgs(dir, prompt string, jsonMode bool, sandbox string) []string {
 	args := []string{
 		"exec",
 		"--skip-git-repo-check",
-		"-s", "workspace-write",
+		"-s", NormalizeCodexSandbox(sandbox),
 	}
 	if jsonMode {
 		args = append(args, "--json")
@@ -184,12 +204,13 @@ func CodexAsk(ctx context.Context, bin, dir, systemPrompt, question, history str
 
 // CodexAskMeta 同 CodexAsk，额外支持用量/会话回调、resume 与命令时间线。
 func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn) (string, int, error) {
-	return CodexAskMetaEx(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeThread, onCommand, nil)
+	return CodexAskMetaEx(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeThread, onCommand, nil, "workspace-write")
 }
 
 // CodexAskMetaEx 增加 onCompact：JSONL 出现压缩事件时回调（用于平台清库同步）。
+// sandbox：Codex -s 模式；未限制工作区时应传 danger-full-access。
 // extraEnv：授权路由 AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承。
-func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), extraEnv ...string) (string, int, error) {
+func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox string, extraEnv ...string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -210,25 +231,26 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 		bin = "codex"
 	}
 	start := time.Now()
+	sb := NormalizeCodexSandbox(sandbox)
 
 	// resume：codex exec --json … resume <thread_id> <prompt>
 	var args []string
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
 		args = []string{
-			"exec", "--json", "--skip-git-repo-check", "-s", "workspace-write",
+			"exec", "--json", "--skip-git-repo-check", "-s", sb,
 			"--dangerously-bypass-hook-trust",
 			"resume", rs, prompt,
 		}
 		if strings.TrimSpace(dir) != "" {
 			// -C 需在 resume 子命令前
 			args = []string{
-				"exec", "--json", "--skip-git-repo-check", "-s", "workspace-write",
+				"exec", "--json", "--skip-git-repo-check", "-s", sb,
 				"--dangerously-bypass-hook-trust",
 				"-C", dir, "resume", rs, prompt,
 			}
 		}
 	} else {
-		args = CodexArgs(dir, prompt, true)
+		args = CodexArgs(dir, prompt, true, sb)
 	}
 
 	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand, onCompact, extraEnv)
@@ -239,9 +261,9 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 	if onActivity != nil {
 		onActivity(Activity{Tool: "codex", Summary: "Codex 执行中…"})
 	}
-	fallbackArgs := CodexArgs(dir, prompt, false)
+	fallbackArgs := CodexArgs(dir, prompt, false, sb)
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
-		fallbackArgs = []string{"exec", "--skip-git-repo-check", "-s", "workspace-write", "--dangerously-bypass-hook-trust"}
+		fallbackArgs = []string{"exec", "--skip-git-repo-check", "-s", sb, "--dangerously-bypass-hook-trust"}
 		if strings.TrimSpace(dir) != "" {
 			fallbackArgs = append(fallbackArgs, "-C", dir)
 		}
@@ -273,7 +295,7 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 		if text != "" {
 			out = text
 		}
-		return out, int(time.Since(start).Milliseconds()), fmt.Errorf("codex: %s", msg)
+		return out, int(time.Since(start).Milliseconds()), fmt.Errorf("codex: %s", ShortEngineError(msg))
 	}
 	if onChunk != nil && out != "" {
 		onChunk(out)
@@ -374,14 +396,18 @@ func runCodexJSONStream(
 	_ = sc.Err()
 	waitErr := cmd.Wait()
 	if !sawJSON {
-		return "", lastMeta, fmt.Errorf("codex: no json events: %s", strings.TrimSpace(stderr.String()))
+		tail := ShortEngineError(stderr.String())
+		if tail == "未知错误" {
+			tail = "无 JSON 事件"
+		}
+		return "", lastMeta, fmt.Errorf("codex: %s", tail)
 	}
 	if waitErr != nil && full.Len() == 0 {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = waitErr.Error()
 		}
-		return full.String(), lastMeta, fmt.Errorf("codex: %s", msg)
+		return full.String(), lastMeta, fmt.Errorf("codex: %s", ShortEngineError(msg))
 	}
 	if onMeta != nil && (lastMeta.SessionID != "" || lastMeta.InputTokens > 0) {
 		onMeta(lastMeta)

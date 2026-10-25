@@ -147,7 +147,7 @@ struct JellyAvatarView: View {
   }
 }
 
-/// 精灵图缓存：Bundle.module → 可执行目录 → ~/.atolla/bin
+/// 精灵图缓存：稳定目录 / 可执行旁 →（可选）Bundle.module
 enum JellySpriteStore {
   static let shared = JellySpriteStoreBox()
 }
@@ -167,27 +167,51 @@ final class JellySpriteStoreBox {
   }
 
   private func resolveURL(fileName: String) -> URL? {
-    // SPM 资源
-    if let u = Bundle.module.url(forResource: fileName.replacingOccurrences(of: ".png", with: ""), withExtension: "png", subdirectory: "jelly-sprites") {
-      return u
-    }
-    if let u = Bundle.module.url(forResource: fileName, withExtension: nil, subdirectory: "jelly-sprites") {
-      return u
-    }
-    // 目录列举
-    if let dir = Bundle.module.resourceURL?.appendingPathComponent("jelly-sprites") {
-      let u = dir.appendingPathComponent(fileName)
-      if FileManager.default.fileExists(atPath: u.path) { return u }
-    }
-    // 安装目录
-    let home = FileManager.default.homeDirectoryForCurrentUser
+    // 必须先走文件系统：Bundle.module 在缺少 AtollaIsland_AtollaIsland.bundle 时会直接 fatal
+    let fm = FileManager.default
+    let home = fm.homeDirectoryForCurrentUser
     let stable = home.appendingPathComponent(".atolla/bin/jelly-sprites/\(fileName)")
-    if FileManager.default.fileExists(atPath: stable.path) { return stable }
-    // 可执行文件旁
+    if fm.fileExists(atPath: stable.path) { return stable }
+
+    // 可执行文件旁（预编译包 / 本机安装布局）
     if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
       let u = exe.appendingPathComponent("jelly-sprites/\(fileName)")
-      if FileManager.default.fileExists(atPath: u.path) { return u }
+      if fm.fileExists(atPath: u.path) { return u }
+      // SPM 资源包旁：AtollaIsland_AtollaIsland.bundle/jelly-sprites/
+      let bundled = exe.appendingPathComponent("AtollaIsland_AtollaIsland.bundle/jelly-sprites/\(fileName)")
+      if fm.fileExists(atPath: bundled.path) { return bundled }
+    }
+
+    // SPM Bundle.module（仅当资源包存在时才安全访问）
+    if Self.spmResourceBundleAvailable(),
+       let u = Bundle.module.url(
+         forResource: fileName.replacingOccurrences(of: ".png", with: ""),
+         withExtension: "png",
+         subdirectory: "jelly-sprites"
+       ) {
+      return u
+    }
+    if Self.spmResourceBundleAvailable(),
+       let u = Bundle.module.url(forResource: fileName, withExtension: nil, subdirectory: "jelly-sprites") {
+      return u
+    }
+    if Self.spmResourceBundleAvailable(),
+       let dir = Bundle.module.resourceURL?.appendingPathComponent("jelly-sprites") {
+      let u = dir.appendingPathComponent(fileName)
+      if fm.fileExists(atPath: u.path) { return u }
     }
     return nil
+  }
+
+  /// Bundle.module 访问前探测：缺 bundle 时绝不触碰 Bundle.module（会 fatal）
+  private static func spmResourceBundleAvailable() -> Bool {
+    if let exe = Bundle.main.executableURL?.deletingLastPathComponent() {
+      let nextToExe = exe.appendingPathComponent("AtollaIsland_AtollaIsland.bundle")
+      if FileManager.default.fileExists(atPath: nextToExe.path) { return true }
+    }
+    // 开发态：.build 产物旁；安装态：~/.atolla/bin
+    let stable = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".atolla/bin/AtollaIsland_AtollaIsland.bundle")
+    return FileManager.default.fileExists(atPath: stable.path)
   }
 }

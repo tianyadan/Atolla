@@ -18,7 +18,7 @@ Mac 顶部「灵动岛」：展示正在忙碌的数字人，点击跳转 Atolla
 
 `AtollaIsland-macos-arm64-YYYYMMDD-xxxx.zip`
 
-解压后得到文件夹，里面有 `install.sh`、`AtollaIsland`、`jelly-sprites/` 等。
+解压后得到文件夹，里面有 `install.sh`、`AtollaIsland`、`AtollaIsland_AtollaIsland.bundle/`（SPM 资源包，须与二进制同目录）、`jelly-sprites/` 等。缺少 `.bundle` 时进程会在启动时 fatal。
 
 ### 2. 一键安装
 
@@ -34,6 +34,7 @@ chmod +x install.sh configure.sh uninstall.sh
 
 - 清除下载隔离属性（没有苹果签名时必需）
 - 把程序装到 `~/.atolla/bin/AtollaIsland`
+- 同步安装 `AtollaIsland_AtollaIsland.bundle`（与二进制同目录）
 - 注册开机常驻（LaunchAgent）
 
 若系统仍弹「无法验证开发者」：在访达中对该文件夹里的 `AtollaIsland` **右键 → 打开 → 仍要打开**，然后再跑一次 `./install.sh`。
@@ -70,7 +71,8 @@ Token：在管理台登录成功后，从浏览器开发者工具 Application �
 
 | 现象 | 处理 |
 |------|------|
-| 岛不出现 | 看 `~/.atolla/island.err.log`；确认 `./install.sh` 成功且进程在跑 |
+| 岛不出现 | 看 `~/.atolla/island.err.log`；确认 `./install.sh` 成功且进程在跑；确认 `~/.atolla/bin/AtollaIsland_AtollaIsland.bundle` 存在 |
+| 日志含 missing bundle / Bundle.module | zip 未带 `AtollaIsland_AtollaIsland.bundle`；换新版包重装，或把该 bundle 放到 `~/.atolla/bin/` |
 | 岛是空的 | 管理台登录一次，或跑 `./configure.sh`；确认后端 `/api/admin/island/busy` 有数据 |
 | 提示无法验证开发者 | 右键打开二进制，或重新 `./install.sh`（会清 quarantine） |
 | Intel / M 芯片下打不开 | 换对应 arch 的 zip，不要混用 |
@@ -86,3 +88,4 @@ cd macos/AtollaIsland
 
 生成 `dist/AtollaIsland-macos-<arch>-<日期>-<git>.zip`，上传到 GitHub Release 即可。  
 包为 **未签名**；安装脚本已处理 quarantine，接收方一般无需证书。
+**发布检查**：zip 内必须含 `AtollaIsland_AtollaIsland.bundle/`（与 `AtollaIsland` 同级），否则安装后会 fatal。

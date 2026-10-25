@@ -153,6 +153,7 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.GET("/admin/island/events", h.AdminIslandEvents)
 			adm.GET("/admin/island/settings", h.AdminIslandSettingsGet)
 			adm.POST("/admin/island/settings/install", h.AdminIslandSettingsInstall)
+			adm.DELETE("/admin/island/settings", h.AdminIslandSettingsUninstall)
 			adm.PUT("/admin/island/settings", h.AdminIslandSettingsPut)
 
 			adm.GET("/admin/jevos/settings", h.AdminJevosSettingsGet)
@@ -162,6 +163,7 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.GET("/admin/network-allowlist", h.AdminNetworkAllowlistGet)
 			adm.PUT("/admin/network-allowlist", h.AdminNetworkAllowlistPut)
 			adm.POST("/admin/network-allowlist/sync", h.AdminNetworkAllowlistSync)
+			adm.POST("/admin/pick-directory", h.AdminPickDirectory)
 
 			adm.GET("/admin/remote-relay/config", h.AdminRemoteRelayConfigGet)
 			adm.PUT("/admin/remote-relay/config", h.AdminRemoteRelayConfigPut)

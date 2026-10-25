@@ -82,8 +82,10 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		return "", 0, fmt.Errorf("engine binary not configured for %q", engineName)
 	}
 	dir := s.Cfg.WorkspaceRoot
+	workspaceBound := false
 	if ws := strings.TrimSpace(a.WorkspacePath); ws != "" {
 		dir = ws
+		workspaceBound = true
 	}
 	atts = NormalizeChatAttachments(atts)
 	engineQ := question
@@ -202,7 +204,9 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		}
 		// 进程级 AVATAR_CONV_ID：与 Claude 一致，避免同工作区 hook 文件被后写者覆盖导致串台
 		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
-		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact, hookEnv...)
+		// 未限制工作区 → danger-full-access；绑定工作区 → workspace-write
+		codexSandbox := agent.CodexSandboxMode(workspaceBound)
+		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact, codexSandbox, hookEnv...)
 		// thread 在本机已无 rollout：清掉粘着的 session，拼平台历史后无 resume 重试
 		if err != nil && resume != "" && agent.IsCodexResumeGone(err.Error()) {
 			_ = s.Store.ClearConversationEngineMeta(context.WithoutCancel(ctx), metaConv)
@@ -214,7 +218,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				"type":    "system_note",
 				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
 			})
-			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact, hookEnv...)
+			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact, codexSandbox, hookEnv...)
 		}
 		return out, ms, err
 	default:
