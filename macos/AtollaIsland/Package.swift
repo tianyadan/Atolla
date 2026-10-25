@@ -9,6 +9,7 @@ let package = Package(
       name: "AtollaIsland",
       path: "Sources/AtollaIsland",
       resources: [
+        .copy("Resources/brand-jellyfish-white.png"),
         .copy("Resources/jelly-sprites"),
       ]
     ),

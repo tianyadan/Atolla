@@ -94,6 +94,54 @@ final class IslandLayoutTests: XCTestCase {
     XCTAssertEqual(maximum.frame(contentSize: contentSize, screenFrame: screenFrame).width, 640)
   }
 
+  func testUnlockedResizeAllowsHeightBelowCollapsedNotchHeight() {
+    var layout = IslandLayout.default
+    layout.isAspectRatioLocked = false
+    let collapsedContent = CGSize(width: 240, height: 32)
+
+    let resized = layout.resized(
+      edge: .bottom,
+      translation: CGSize(width: 0, height: 20),
+      contentSize: collapsedContent,
+      screenFrame: screenFrame
+    )
+
+    XCTAssertEqual(
+      resized.frame(contentSize: collapsedContent, screenFrame: screenFrame).height,
+      18,
+      accuracy: 0.001
+    )
+  }
+
+  func testApplyingSettingsFrameSupportsTopOffsetAndIndependentHeight() {
+    let current = IslandLayout.default
+    let content = CGSize(width: 240, height: 32)
+    var desired = current.frame(contentSize: content, screenFrame: screenFrame)
+    desired.origin.x = 120
+    desired.origin.y = 700
+    desired.size = CGSize(width: 300, height: 56)
+
+    let updated = current.applying(frame: desired, contentSize: content, screenFrame: screenFrame)
+    let actual = updated.frame(contentSize: content, screenFrame: screenFrame)
+
+    XCTAssertEqual(actual, desired)
+  }
+
+  func testLockedSettingsSizeKeepsCurrentAspectRatio() {
+    let content = CGSize(width: 240, height: 40)
+    let current = IslandLayout.default.frame(contentSize: content, screenFrame: screenFrame)
+
+    let locked = IslandLayout.default.sizedFrame(current, width: 300, height: nil, screenFrame: screenFrame)
+    var unlockedLayout = IslandLayout.default
+    unlockedLayout.isAspectRatioLocked = false
+    let unlocked = unlockedLayout.sizedFrame(current, width: 300, height: nil, screenFrame: screenFrame)
+
+    XCTAssertEqual(locked.width, 300, accuracy: 0.001)
+    XCTAssertEqual(locked.height, 50, accuracy: 0.001)
+    XCTAssertEqual(unlocked.width, 300, accuracy: 0.001)
+    XCTAssertEqual(unlocked.height, 40, accuracy: 0.001)
+  }
+
   func testStoreKeepsIndependentLayoutForEachDisplay() {
     let store = IslandLayoutStore(defaults: UserDefaults(suiteName: "AtollaIslandTests.\(UUID().uuidString)")!)
     var primary = IslandLayout.default
@@ -122,6 +170,43 @@ final class IslandLayoutTests: XCTestCase {
     XCTAssertEqual(expanded.height, 168, accuracy: 0.001)
   }
 
+  func testSettingsDraftDoesNotApplyUntilExplicitCommit() {
+    let snapshot = IslandLayoutSettingsSnapshot(
+      width: 240,
+      height: 40,
+      x: 600,
+      y: 0,
+      top: 0,
+      right: 600,
+      bottom: 860,
+      left: 600,
+      widthRange: 160...640,
+      heightRange: 18...320,
+      horizontalPositionRange: 0...1_200,
+      verticalPositionRange: 0...860,
+      isAspectRatioLocked: true
+    )
+    var updateCount = 0
+    let model = IslandLayoutSettingsModel(
+      snapshot: snapshot,
+      onUpdate: { field, value in
+        updateCount += 1
+        return snapshot.setting(field, to: value)
+      },
+      onToggleAspectRatio: { snapshot }
+    )
+
+    model.draftBinding(for: .width).wrappedValue = 320
+
+    XCTAssertEqual(updateCount, 0)
+    XCTAssertEqual(model.snapshot.width, 320)
+
+    model.commit(.width)
+
+    XCTAssertEqual(updateCount, 1)
+    XCTAssertEqual(model.snapshot.width, 320)
+  }
+
   @MainActor
   func testLayoutEditorMarksOnlyDragEndAsPersistenceBoundary() {
     var completedStates: [Bool] = []
@@ -137,5 +222,22 @@ final class IslandLayoutTests: XCTestCase {
     editor.move(by: CGSize(width: 24, height: 10), completed: true)
 
     XCTAssertEqual(completedStates, [false, true])
+  }
+
+  @MainActor
+  func testLayoutEditorKeepsControlsHiddenUntilExplicitlyUnlocked() {
+    let editor = IslandLayoutEditor(
+      layout: .default,
+      onMove: { _, _ in },
+      onResize: { _, _, _ in },
+      onToggleAspectRatio: {},
+      onReset: {}
+    )
+
+    XCTAssertFalse(editor.isEditingEnabled)
+
+    editor.setEditingEnabled(true)
+
+    XCTAssertTrue(editor.isEditingEnabled)
   }
 }

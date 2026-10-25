@@ -27,10 +27,19 @@ elif [[ "${ATOLLA_ISLAND_SKIP_BUILD:-0}" == "1" && -x "$STABLE_BIN" ]]; then
 else
   echo "==> build release"
   swift build -c release
-  BIN="$(swift build -c release --show-bin-path)/AtollaIsland"
+  BUILD_BIN_DIR="$(swift build -c release --show-bin-path)"
+  BIN="${BUILD_BIN_DIR}/AtollaIsland"
   # 拷到稳定路径，避免 .build 路径变动
   cp "$BIN" "$STABLE_BIN"
   chmod +x "$STABLE_BIN"
+
+  # SwiftPM 资源位于可执行文件旁的 bundle 中；仅复制二进制会导致运行时找不到品牌图标等资源。
+  RESOURCE_BUNDLE_SRC="${BUILD_BIN_DIR}/AtollaIsland_AtollaIsland.bundle"
+  RESOURCE_BUNDLE_DST="${STABLE_DIR}/AtollaIsland_AtollaIsland.bundle"
+  if [[ -d "$RESOURCE_BUNDLE_SRC" ]]; then
+    mkdir -p "$RESOURCE_BUNDLE_DST"
+    cp -R "$RESOURCE_BUNDLE_SRC"/. "$RESOURCE_BUNDLE_DST"/
+  fi
 fi
 xattr -cr "$STABLE_BIN" 2>/dev/null || true
 
