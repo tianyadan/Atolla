@@ -20,13 +20,19 @@ struct IslandEvent: Identifiable, Codable, Equatable {
   let duration_ms: Int?
   let summary: String?
   let request_id: String?
+  /// 任务规划进度 0–100（running 时可有）
+  let progress: Int?
+  /// atolla.task_plan.v1 phase
+  let plan_phase: String?
 
   var displayStatus: String {
     switch kind {
     case .error: return "任务报错"
     case .approval: return "待命令审批"
     case .completed: return "任务完成"
-    case .running: return "运行中"
+    case .running:
+      if let p = progress, p > 0, p < 100 { return "\(p)%" }
+      return "运行中"
     }
   }
 
@@ -47,10 +53,15 @@ struct IslandEvent: Identifiable, Codable, Equatable {
   func subtitle(now: Date = Date()) -> String {
     switch kind {
     case .running:
+      var parts: [String] = [displayGroup]
       if let start = occurredDate {
-        return "\(displayGroup) · \(Self.formatDuration(seconds: Int(now.timeIntervalSince(start))))"
+        parts.append(Self.formatDuration(seconds: Int(now.timeIntervalSince(start))))
       }
-      return "\(displayGroup) · 运行中"
+      // 任务规划摘要（后端 formatIslandTaskPlanSummary）
+      let plan = (summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      if !plan.isEmpty { parts.append(plan) }
+      else { parts.append("运行中") }
+      return parts.joined(separator: " · ")
     case .approval:
       let text = (summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       return text.isEmpty ? "\(displayGroup) · 点击审批" : "\(displayGroup) · \(text)"
@@ -152,6 +163,8 @@ final class AgentAPI {
     var query = [URLQueryItem(name: "agent", value: "\(id)")]
     if let approvalRequestID, !approvalRequestID.isEmpty {
       query.append(URLQueryItem(name: "approval_request_id", value: approvalRequestID))
+      // 每次点击带时间戳，避免浏览器认为 URL 未变而不导航、前端无法重拉审批弹窗
+      query.append(URLQueryItem(name: "_island", value: "\(Int(Date().timeIntervalSince1970 * 1000))"))
     }
     components.queryItems = query
     components.fragment = "agent=\(id)"

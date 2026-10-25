@@ -159,30 +159,36 @@ export default function App() {
       let aid = Number(q.get('agent') || 0)
       const hm = (window.location.hash || '').match(/^#?agent=(\d+)/i)
       if (!aid && hm) aid = Number(hm[1])
-      if (aid > 0) {
-        setFocusAgentId(aid)
-        setFocusApprovalRequestId(q.get('approval_request_id') || '')
+      const approvalId = String(q.get('approval_request_id') || '').trim()
+      // 无 agent 但有审批 id 时仍进入管理台，审批卡由后续 pending 补齐
+      if (aid > 0 || approvalId) {
+        if (aid > 0) setFocusAgentId(aid)
+        if (approvalId) setFocusApprovalRequestId(approvalId)
         setAdminMenu('agents')
         setDigitalOpen(true)
         setView('admin')
         const url = new URL(window.location.href)
         url.searchParams.delete('agent')
         url.searchParams.delete('approval_request_id')
-        url.hash = `agent=${aid}`
+        url.searchParams.delete('_island')
+        if (aid > 0) url.hash = `agent=${aid}`
         window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
       }
     } catch { /* ignore */ }
   }
 
-  // 已打开的管理台被岛再次导航时（同标签改 URL / hash），继续聚焦对应数字人
+  // 已打开的管理台被岛再次导航时（同标签改 URL / hash / pageshow），继续聚焦对应数字人与审批
   useEffect(() => {
     if (!authToken) return undefined
     const onHash = () => consumeAgentDeepLink()
     window.addEventListener('hashchange', onHash)
     window.addEventListener('popstate', onHash)
+    // bfcache / 岛强制导航回来时再消费一次 query
+    window.addEventListener('pageshow', onHash)
     return () => {
       window.removeEventListener('hashchange', onHash)
       window.removeEventListener('popstate', onHash)
+      window.removeEventListener('pageshow', onHash)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken])

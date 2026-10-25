@@ -274,7 +274,9 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 		in.JellyColor = &norm
 	}
 
-	if err := h.svc.Store.UpdateManagedAgent(c.Request.Context(), id, in); err != nil {
+	// 换工作区时保留引擎 session / 对话，并迁移 projects/ 记忆
+	a, err := h.svc.UpdateManagedAgentPreservingMemory(c.Request.Context(), id, in)
+	if err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
@@ -289,7 +291,6 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	if h.svc.Sched != nil {
 		h.svc.Sched.Reload(c.Request.Context())
 	}
-	a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
 	c.JSON(http.StatusOK, a)
 }
 

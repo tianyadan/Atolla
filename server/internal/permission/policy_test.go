@@ -53,3 +53,16 @@ func TestApplyAgentPolicyWorkspace(t *testing.T) {
 		t.Fatalf("want allow inside, got %v", d2)
 	}
 }
+
+// 未绑定工作区：不得按目录边界拒绝读写（AllowWrite 时跨路径写入应放行）。
+func TestApplyAgentPolicyUnboundNoWorkspaceBoundary(t *testing.T) {
+	p := AgentPolicy{AllowWrite: true, AllowNetwork: true, AllowRm: false, WorkspacePath: ""}
+	d := ApplyAgentPolicy("Write", map[string]interface{}{"file_path": "/tmp/anywhere/x.go"}, Decision{Behavior: Ask, Reason: ""}, p)
+	if d.Behavior != Allow {
+		t.Fatalf("unbound write should allow, got %v %s", d.Behavior, d.Reason)
+	}
+	d2 := ApplyAgentPolicy("Read", map[string]interface{}{"file_path": "/etc/hosts"}, Decision{Behavior: Allow, Reason: ""}, p)
+	if d2.Behavior != Allow {
+		t.Fatalf("unbound read should not deny by workspace, got %v %s", d2.Behavior, d2.Reason)
+	}
+}

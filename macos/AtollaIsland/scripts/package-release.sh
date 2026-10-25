@@ -52,6 +52,19 @@ mkdir -p "$OUT_DIR"
 
 cp "$BIN" "$OUT_DIR/AtollaIsland"
 chmod +x "$OUT_DIR/AtollaIsland"
+
+# SPM 资源包必须与二进制同目录，否则 Bundle.module 会 fatal
+BIN_DIR="$(dirname "$BIN")"
+BUNDLE="$BIN_DIR/AtollaIsland_AtollaIsland.bundle"
+if [[ -d "$BUNDLE" ]]; then
+  echo "==> 复制 SPM bundle → $OUT_DIR/AtollaIsland_AtollaIsland.bundle"
+  cp -R "$BUNDLE" "$OUT_DIR/"
+else
+  echo "错误: 未找到 SPM 资源包 $BUNDLE（swift build 后应生成在二进制旁）" >&2
+  exit 1
+fi
+
+# 保留扁平 jelly-sprites 作为文件系统回退
 mkdir -p "$OUT_DIR/jelly-sprites"
 cp -R "$SPRITE_SRC"/. "$OUT_DIR/jelly-sprites"/
 

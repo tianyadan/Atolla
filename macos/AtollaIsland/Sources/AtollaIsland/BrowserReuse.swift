@@ -8,14 +8,18 @@ enum BrowserReuse {
     let hostKeys = hostMatchKeys(webBase: webBase)
     guard !hostKeys.isEmpty else { return false }
     let target = targetURL.absoluteString
-    // 审批深链必须重新导航，不能只激活同一数字人的旧标签。
+    // 审批深链必须重新导航，不能只激活同一数字人的旧标签（否则前端不会重新拉 pending）。
     let approvalNeedle = URLComponents(url: targetURL, resolvingAgainstBaseURL: false)?
       .queryItems?.first(where: { $0.name == "approval_request_id" })?.value
-    let agentNeedle = approvalNeedle.map { "approval_request_id=\($0)" } ?? "agent=\(agentId)"
+    let forceNavigate = !(approvalNeedle ?? "").isEmpty
+    let agentNeedle = forceNavigate
+      ? "approval_request_id=\(approvalNeedle!)"
+      : "agent=\(agentId)"
 
-    // 1) 精确：同 host 且 URL 含 agent=id → 仅前置
-    // 2) 回退：同 host 任意管理台标签 → 导航到目标深链（不新建窗口）
-    for requireAgent in [true, false] {
+    // 普通跳转：1) 精确同 agent 仅前置 2) 同 host 任意标签导航
+    // 审批跳转：跳过「仅前置」，始终导航到带 approval_request_id 的 URL，触发前端恢复弹窗
+    let requireAgentPasses = forceNavigate ? [false] : [true, false]
+    for requireAgent in requireAgentPasses {
       for browser in preferredBrowsers() {
         let hit: Bool
         if browser == "Safari" {
@@ -23,7 +27,8 @@ enum BrowserReuse {
             hostKeys: hostKeys,
             agentNeedle: agentNeedle,
             navigateURL: target,
-            requireAgent: requireAgent
+            requireAgent: requireAgent,
+            forceNavigate: forceNavigate
           )
         } else {
           hit = runChromeFamily(
@@ -31,7 +36,8 @@ enum BrowserReuse {
             hostKeys: hostKeys,
             agentNeedle: agentNeedle,
             navigateURL: target,
-            requireAgent: requireAgent
+            requireAgent: requireAgent,
+            forceNavigate: forceNavigate
           )
         }
         if hit { return true }
@@ -82,17 +88,20 @@ enum BrowserReuse {
     hostKeys: [String],
     agentNeedle: String,
     navigateURL: String,
-    requireAgent: Bool
+    requireAgent: Bool,
+    forceNavigate: Bool
   ) -> Bool {
     // Safari 单独处理
     if appName == "Safari" { return false }
     let hostList = hostKeys.map { "\"\($0)\"" }.joined(separator: ", ")
     let req = requireAgent ? "true" : "false"
+    let force = forceNavigate ? "true" : "false"
     let script = """
     set hostList to {\(hostList)}
     set agentNeedle to "\(escape(agentNeedle))"
     set navigateURL to "\(escape(navigateURL))"
     set requireAgent to \(req)
+    set forceNavigate to \(force)
     tell application "\(appName)"
       if not running then return "miss"
       repeat with w in windows
@@ -114,7 +123,7 @@ enum BrowserReuse {
               else
                 set active tab index of w to i
                 set index of w to 1
-                if not agentHit then
+                if forceNavigate or not agentHit then
                   set URL of tab i of w to navigateURL
                 end if
                 activate
@@ -134,15 +143,18 @@ enum BrowserReuse {
     hostKeys: [String],
     agentNeedle: String,
     navigateURL: String,
-    requireAgent: Bool
+    requireAgent: Bool,
+    forceNavigate: Bool
   ) -> Bool {
     let hostList = hostKeys.map { "\"\($0)\"" }.joined(separator: ", ")
     let req = requireAgent ? "true" : "false"
+    let force = forceNavigate ? "true" : "false"
     let script = """
     set hostList to {\(hostList)}
     set agentNeedle to "\(escape(agentNeedle))"
     set navigateURL to "\(escape(navigateURL))"
     set requireAgent to \(req)
+    set forceNavigate to \(force)
     tell application "Safari"
       if not running then return "miss"
       repeat with w in windows
@@ -161,7 +173,7 @@ enum BrowserReuse {
               if (not requireAgent) or agentHit then
                 set current tab of w to t
                 set index of w to 1
-                if not agentHit then
+                if forceNavigate or not agentHit then
                   set URL of t to navigateURL
                 end if
                 activate

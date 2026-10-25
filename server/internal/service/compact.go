@@ -27,9 +27,9 @@ func CompactStatusAfterSync(prev string) string {
 	}
 }
 
-// ReinjectionPrefix 压缩后下一轮系统提示强化段。
+// ReinjectionPrefix 压缩或工作区切换后下一轮系统提示强化段。
 func ReinjectionPrefix() string {
-	return "【压缩后续聊】引擎上下文刚完成压缩。请重新严格遵循下列数字人员设、权限与工作区策略。"
+	return "【续聊提醒】请重新严格遵循下列数字人员设、权限与工作区策略。对话与引擎会话应视为连续；若工作区目录刚调整，请到新目录 projects/*/summary.md 查阅项目协作记忆，勿当作失忆。"
 }
 
 // ApplySystemReinject 若需要 reinject，在系统提示前加强化段。

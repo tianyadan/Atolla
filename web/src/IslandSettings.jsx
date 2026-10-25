@@ -3,27 +3,32 @@ import SettingsFold from './SettingsFold.jsx'
 
 const API = '/api'
 
-/** 开启/安装时轮播的固定文案（浅色小字） */
+/** 开启时常驻文案 */
 const ENABLE_STEPS = [
-  '正在配置灵动岛设置…',
-  '正在校验本机 LaunchAgent…',
-  '正在加载灵动岛组件…',
-  '正在唤醒顶部常驻进程…',
-  '即将完成，请稍候…',
+  '正在配置灵动岛…',
+  '正在注册 LaunchAgent…',
+  '正在唤醒顶部常驻…',
+  '即将完成…',
 ]
 
+/** 从 GitHub Release 一键安装 */
 const INSTALL_STEPS = [
-  '正在检查 Xcode 与源码目录…',
-  '正在编译灵动岛（首次可能较久）…',
-  '正在写入本机二进制…',
-  '正在注册 LaunchAgent 常驻…',
-  '正在启动灵动岛组件…',
-  '即将完成，请稍候…',
+  '正在获取最新 GitHub Release…',
+  '正在下载灵动岛组件…',
+  '正在解压并写入本机…',
+  '正在注册 LaunchAgent…',
+  '正在启动灵动岛…',
+  '即将完成…',
 ]
 
 const DISABLE_STEPS = [
   '正在关闭灵动岛常驻…',
-  '正在卸载 LaunchAgent…',
+  '即将完成…',
+]
+
+const UNINSTALL_STEPS = [
+  '正在停止灵动岛…',
+  '正在清理本机组件…',
   '即将完成…',
 ]
 
@@ -55,7 +60,6 @@ function useStagedProgress(active, steps) {
       stepRef.current = Math.min(steps.length - 1, stepRef.current + 1)
       setLabel(steps[stepRef.current])
       setPct((p) => {
-        // 缓增，最高卡在 92%，等真实请求结束再封顶
         const cap = 92
         const next = p + (cap - p) * 0.18 + 3
         return Math.min(cap, Math.round(next))
@@ -77,54 +81,58 @@ function useStagedProgress(active, steps) {
     setLabel('完成')
   }
 
-  return { pct, label, finish, setPct, setLabel }
+  return { pct, label, finish }
 }
 
-/** 设置 · 灵动岛：首次「安装」，之后胶囊开关；检测结果走后端缓存。 */
+/** 压成一行短报错 */
+function shortErr(msg) {
+  const s = String(msg || '').trim().split('\n')[0].trim()
+  if (s.length <= 120) return s
+  return `${s.slice(0, 120)}…`
+}
+
+/** 设置 · 灵动岛：未安装点「安装」自动拉最新 Release；已安装可开关或卸载。 */
 export default function IslandSettings({ authHeaders, onUnauthorized, active }) {
   const [open, setOpen] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [progressMode, setProgressMode] = useState(null) // 'enable' | 'install' | 'disable' | null
+  const [progressMode, setProgressMode] = useState(null) // enable|install|disable|uninstall
   const [err, setErr] = useState('')
   const [st, setSt] = useState({
     installed: false,
     enabled: false,
-    has_source: false,
-    has_xcode: false,
     detail: '',
     cached: false,
     checked_at: '',
-    repo_hint: 'macos/AtollaIsland',
-    source_path: '',
+    release_tag: '',
+    release_url: '',
+    binary_path: '',
   })
 
   const stepList =
     progressMode === 'install'
       ? INSTALL_STEPS
-      : progressMode === 'disable'
-        ? DISABLE_STEPS
-        : progressMode === 'enable'
-          ? ENABLE_STEPS
-          : EMPTY_STEPS
+      : progressMode === 'uninstall'
+        ? UNINSTALL_STEPS
+        : progressMode === 'disable'
+          ? DISABLE_STEPS
+          : progressMode === 'enable'
+            ? ENABLE_STEPS
+            : EMPTY_STEPS
   const progress = useStagedProgress(!!progressMode, stepList)
 
   function applyStatus(d) {
     setSt({
       installed: !!d.installed,
       enabled: !!d.enabled,
-      has_source: !!d.has_source,
-      has_xcode: !!d.has_xcode,
       detail: d.detail || '',
       cached: !!d.cached,
       checked_at: d.checked_at || '',
-      repo_hint: d.repo_hint || 'macos/AtollaIsland',
-      source_path: d.source_path || '',
-      xcode_detail: d.xcode_detail || '',
+      release_tag: d.release_tag || '',
+      release_url: d.release_url || '',
       binary_path: d.binary_path || '',
     })
   }
 
-  /** 收起进度条（稍留完成态） */
   async function endProgress(ok) {
     if (ok) progress.finish()
     await new Promise((r) => setTimeout(r, ok ? 420 : 0))
@@ -132,7 +140,6 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
     setBusy(false)
   }
 
-  /** 拉取状态；force=true 绕过缓存重检环境 */
   async function load(force = false) {
     setErr('')
     try {
@@ -146,7 +153,7 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
       if (!res.ok) throw new Error(d.error || d.detail || `加载失败(${res.status})`)
       applyStatus(d)
     } catch (e) {
-      setErr(String(e.message || e))
+      setErr(shortErr(e.message || e))
     }
   }
 
@@ -155,7 +162,7 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
 
-  /** 首次安装：编译源码 + 注册 LaunchAgent */
+  /** 一键安装：后端拉最新 GitHub Release 并常驻 */
   async function install() {
     setBusy(true)
     setProgressMode('install')
@@ -180,7 +187,38 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
       applyStatus(d)
       await endProgress(true)
     } catch (e) {
-      setErr(String(e.message || e))
+      setErr(shortErr(e.message || e))
+      setProgressMode(null)
+      setBusy(false)
+    }
+  }
+
+  /** 完全卸载并清理本机文件 */
+  async function uninstall() {
+    if (!window.confirm('确定卸载灵动岛？将停止常驻并删除本机组件。')) return
+    setBusy(true)
+    setProgressMode('uninstall')
+    setErr('')
+    try {
+      const res = await fetch(`${API}/admin/island/settings`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        setProgressMode(null)
+        setBusy(false)
+        return
+      }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        applyStatus(d)
+        throw new Error(d.error || d.detail || `卸载失败(${res.status})`)
+      }
+      applyStatus(d)
+      await endProgress(true)
+    } catch (e) {
+      setErr(shortErr(e.message || e))
       setProgressMode(null)
       setBusy(false)
     }
@@ -215,20 +253,19 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
       await endProgress(true)
     } catch (e) {
       setSt(prev)
-      setErr(String(e.message || e))
+      setErr(shortErr(e.message || e))
       setProgressMode(null)
       setBusy(false)
     }
   }
 
   const needInstall = !st.installed
-  const canInstall = st.has_source && st.has_xcode
   const showProgress = !!progressMode
 
   return (
     <SettingsFold
       title="灵动岛"
-      desc="macOS 顶部展示运行中数字人；可选组件，源码在 macos/AtollaIsland"
+      desc="macOS 顶部展示运行中数字人；首次安装自动拉取最新 GitHub Release"
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >
@@ -242,30 +279,20 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
           </span>
           <p className="ma-capsule-hint">
             {st.detail || '未检测'}
+            {st.release_tag ? ` · ${st.release_tag}` : ''}
             {st.cached && st.checked_at ? `（缓存于 ${st.checked_at}）` : ''}
           </p>
-          {!st.has_source ? (
-            <p className="ma-capsule-hint" style={{ marginTop: 6 }}>
-              缺少源码目录 <code>{st.repo_hint || 'macos/AtollaIsland'}</code>
-              。可从本仓库拷贝该目录（纯源码、可单独提交 GitHub），放到 Atolla 的 macos/ 下后再安装。
-            </p>
-          ) : null}
-          {st.has_source && !st.has_xcode ? (
-            <p className="ma-capsule-hint" style={{ marginTop: 6 }}>
-              请先安装完整 Xcode（App Store），仅 Command Line Tools 无法编译。
-            </p>
-          ) : null}
         </div>
 
         {needInstall ? (
           <button
             type="button"
             className="gc-meet-btn"
-            disabled={busy || !canInstall}
+            disabled={busy}
             onClick={() => void install()}
-            title={!canInstall ? '请先满足源码与 Xcode 条件' : '编译并安装 LaunchAgent'}
+            title="从 GitHub 最新 Release 自动下载并安装"
           >
-            {busy ? '安装中…' : '安装'}
+            {busy && progressMode === 'install' ? '安装中…' : '安装'}
           </button>
         ) : (
           <label className={`auto-switch ma-capsule ${busy ? 'busy' : ''}`}>
@@ -293,17 +320,33 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
         <button type="button" className="ghost" disabled={busy} onClick={() => void load(true)}>
           重新检测
         </button>
-        {st.installed && !st.enabled ? (
-          <button type="button" className="ghost" disabled={busy} onClick={() => void install()}>
-            重新安装
-          </button>
+        {st.installed ? (
+          <>
+            <button type="button" className="ghost" disabled={busy} onClick={() => void install()}>
+              重新安装
+            </button>
+            <button type="button" className="ghost" disabled={busy} onClick={() => void uninstall()}>
+              卸载
+            </button>
+          </>
+        ) : null}
+        {st.release_url ? (
+          <a
+            className="ghost"
+            href={st.release_url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}
+          >
+            Release
+          </a>
         ) : null}
       </div>
 
       {err ? (
-        <pre className="error" style={{ marginTop: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>
+        <p className="error" style={{ marginTop: 12, fontSize: 13, lineHeight: 1.4 }}>
           {err}
-        </pre>
+        </p>
       ) : null}
     </SettingsFold>
   )

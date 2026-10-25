@@ -44,7 +44,8 @@ func AgentPolicyBlock(a *store.ManagedAgent) string {
 	}
 	ws := strings.TrimSpace(a.WorkspacePath)
 	if ws == "" {
-		b.WriteString("- 工作区:未绑定,可在已授权工作区范围内跨项目工作。\n")
+		// 未勾选「限制工作区」：不按目录边界拦截，默认可全盘读写（仍受写入/联网/rm 开关与 Hard Deny 约束）
+		b.WriteString("- 工作区:未限制。默认可在本机任意路径读写（仍受上方写入/联网/rm 开关约束；Hard Deny 仍拦截）。\n")
 	} else {
 		b.WriteString("- 工作区:已绑定「" + ws + "」。严禁读写该目录之外的任何路径。\n")
 	}

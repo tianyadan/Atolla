@@ -30,6 +30,9 @@ type IslandEvent struct {
 	DurationMs int    `json:"duration_ms,omitempty"`
 	Summary    string `json:"summary,omitempty"`
 	RequestID  string `json:"request_id,omitempty"`
+	// 任务规划 v1（running 时可选）：与 agent_tasks.payload 同源，供小岛展示步骤摘要
+	Progress  int    `json:"progress,omitempty"`
+	PlanPhase string `json:"plan_phase,omitempty"`
 }
 
 // IslandPresentation 只返回当前最高优先级类别，避免不同状态在小岛里互相争抢。
@@ -75,7 +78,17 @@ func (s *Service) ListIslandEvents(ctx context.Context) (IslandPresentation, err
 			})
 		}
 	}
-	events := buildIslandEvents(agents, occupancy, approvals, time.Now())
+	// 运行中任务规划：一次查出，按 agent 取最新 running
+	planByAgent := map[string]store.AgentTask{}
+	if tasks, terr := s.Store.AgentTasks(ctx, "managed", "running"); terr == nil {
+		for _, t := range tasks {
+			if _, ok := planByAgent[t.AgentID]; ok {
+				continue
+			}
+			planByAgent[t.AgentID] = t
+		}
+	}
+	events := buildIslandEvents(agents, occupancy, approvals, planByAgent, time.Now())
 	// 正在查看的对话不展示 completed/error 未读终态（用户已在看）
 	filtered := make([]IslandEvent, 0, len(events))
 	for _, ev := range events {
@@ -87,7 +100,13 @@ func (s *Service) ListIslandEvents(ctx context.Context) (IslandPresentation, err
 	return selectIslandPresentation(filtered, 5), nil
 }
 
-func buildIslandEvents(agents []store.ManagedAgent, occupancy map[int64]store.Occupancy, approvals []islandApproval, now time.Time) []IslandEvent {
+func buildIslandEvents(
+	agents []store.ManagedAgent,
+	occupancy map[int64]store.Occupancy,
+	approvals []islandApproval,
+	planByAgent map[string]store.AgentTask,
+	now time.Time,
+) []IslandEvent {
 	byID := make(map[int64]store.ManagedAgent, len(agents))
 	events := make([]IslandEvent, 0, len(agents)+len(approvals))
 	for _, agent := range agents {
@@ -114,11 +133,20 @@ func buildIslandEvents(agents []store.ManagedAgent, occupancy map[int64]store.Oc
 			} else if occupied && !occ.StartedAt.IsZero() {
 				started = occ.StartedAt
 			}
-			events = append(events, IslandEvent{
+			ev := IslandEvent{
 				ID: fmt.Sprintf("running:%d", agent.ID), Kind: IslandEventRunning,
 				AgentID: agent.ID, AgentName: agent.Name, JellyColor: agent.JellyColor,
 				GroupName: group, Status: agent.Status, OccurredAt: started.UTC().Format(time.RFC3339),
-			})
+			}
+			if planByAgent != nil {
+				if t, ok := planByAgent[fmt.Sprintf("%d", agent.ID)]; ok {
+					snap := ParseTaskPlanSnapshot(t.Payload, t.Status, t.Progress, t.Message)
+					ev.Summary = formatIslandTaskPlanSummary(snap)
+					ev.Progress = snap.Progress
+					ev.PlanPhase = snap.Phase
+				}
+			}
+			events = append(events, ev)
 		}
 	}
 
@@ -171,4 +199,38 @@ func islandGroupName(raw string) string {
 		return group
 	}
 	return "未分组"
+}
+
+/** 灵动岛一行摘要：复用 task_plan.v1，短且稳定 */
+func formatIslandTaskPlanSummary(snap TaskPlanSnapshot) string {
+	switch snap.Phase {
+	case TaskPhasePlanning:
+		return "正在拆分任务"
+	case TaskPhaseDone:
+		return "已完成"
+	case TaskPhaseFailed:
+		if msg := strings.TrimSpace(snap.Message); msg != "" {
+			return "失败 · " + truncateRunes(msg, 24)
+		}
+		return "执行失败"
+	default:
+		parts := make([]string, 0, 3)
+		if snap.TotalCount > 0 {
+			cur := snap.CurrentStep + 1
+			if cur < 1 {
+				cur = 1
+			}
+			if cur > snap.TotalCount {
+				cur = snap.TotalCount
+			}
+			parts = append(parts, fmt.Sprintf("%d/%d", cur, snap.TotalCount))
+		}
+		if msg := strings.TrimSpace(snap.Message); msg != "" {
+			parts = append(parts, truncateRunes(msg, 28))
+		}
+		if snap.Progress > 0 && snap.Progress < 100 {
+			parts = append(parts, fmt.Sprintf("%d%%", snap.Progress))
+		}
+		return strings.Join(parts, " · ")
+	}
 }

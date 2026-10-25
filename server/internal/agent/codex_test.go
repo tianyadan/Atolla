@@ -77,3 +77,25 @@ func TestParseCodexJSONLReasoningChunk(t *testing.T) {
 		t.Fatalf("ev=%+v ok=%v", ev, ok)
 	}
 }
+
+func TestCodexSandboxMode(t *testing.T) {
+	if CodexSandboxMode(true) != "workspace-write" {
+		t.Fatal("bound should workspace-write")
+	}
+	if CodexSandboxMode(false) != "danger-full-access" {
+		t.Fatal("unbound should danger-full-access")
+	}
+}
+
+func TestCodexArgsSandbox(t *testing.T) {
+	bound := CodexArgs("/tmp/ws", "hi", true, CodexSandboxMode(true))
+	joined := strings.Join(bound, " ")
+	if !strings.Contains(joined, "-s workspace-write") || !strings.Contains(joined, "-C /tmp/ws") {
+		t.Fatalf("bound args=%v", bound)
+	}
+	free := CodexArgs("/tmp/ws", "hi", false, CodexSandboxMode(false))
+	joined = strings.Join(free, " ")
+	if !strings.Contains(joined, "-s danger-full-access") {
+		t.Fatalf("unbound args=%v", free)
+	}
+}

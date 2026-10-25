@@ -115,10 +115,74 @@ func MapCursorResponse(raw []byte) (mappedEngine, error) {
 			}
 		}
 	}
+	// Cursor 可能在 individualUsage 下新增第三方 API、特定模型（如 Grok）等独立配额。
+	// 不写死供应商名：只收集带明确百分比字段的对象，接口扩展后前端详情即可自动展示。
+	windows = append(windows, mapCursorAdditionalWindows(ind)...)
 	if len(windows) == 0 {
 		return mappedEngine{}, fmt.Errorf("Cursor 响应缺少 individualUsage.plan")
 	}
 	return mappedEngine{Plan: strings.TrimSpace(plan), Windows: windows}, nil
+}
+
+// mapCursorAdditionalWindows 收集 Cursor 返回的扩展额度项；plan 已由主窗口单独处理，避免重复。
+func mapCursorAdditionalWindows(ind map[string]any) []UsageWindow {
+	if ind == nil {
+		return nil
+	}
+	windows := make([]UsageWindow, 0)
+	for key, raw := range ind {
+		if key == "plan" {
+			continue
+		}
+		obj := asObject(raw)
+		if obj == nil {
+			continue
+		}
+		pct, ok := pickCursorPercent(obj)
+		if !ok {
+			continue
+		}
+		windows = append(windows, UsageWindow{
+			Kind:        "cursor_" + key,
+			Label:       cursorUsageLabel(key, obj),
+			Hint:        "Cursor 返回的独立用量项",
+			UsedPercent: pct,
+		})
+	}
+	return windows
+}
+
+// pickCursorPercent 只接受语义明确的百分比字段，避免把金额或 token 数误显示为百分比。
+func pickCursorPercent(obj map[string]any) (int, bool) {
+	for _, key := range []string{
+		"totalPercentUsed", "total_percent_used", "autoPercentUsed", "auto_percent_used",
+		"usedPercent", "used_percent", "percentUsed", "percent_used", "usagePercent", "usage_percent", "percent",
+	} {
+		if value, exists := obj[key]; exists {
+			return numberToPercent(value)
+		}
+	}
+	return 0, false
+}
+
+func cursorUsageLabel(key string, obj map[string]any) string {
+	for _, field := range []string{"displayName", "display_name", "label", "name", "modelName", "model_name"} {
+		if value, ok := obj[field].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	var out []rune
+	for index, r := range []rune(key) {
+		if index > 0 && r >= 'A' && r <= 'Z' {
+			out = append(out, ' ')
+		}
+		if r == '_' || r == '-' {
+			out = append(out, ' ')
+			continue
+		}
+		out = append(out, r)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // readCursorAccessToken 只读方式收集 Cursor access token（CLI 文件优先，其次 IDE sqlite）。

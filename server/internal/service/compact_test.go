@@ -13,7 +13,7 @@ func TestCompactNoticeText(t *testing.T) {
 
 func TestReinjectPrefix(t *testing.T) {
 	p := ReinjectionPrefix()
-	if p == "" || !containsAll(p, "压缩后续聊") {
+	if p == "" || !containsAll(p, "续聊提醒", "工作区") {
 		t.Fatalf("bad prefix: %q", p)
 	}
 }
@@ -21,7 +21,7 @@ func TestReinjectPrefix(t *testing.T) {
 func TestApplySystemReinject(t *testing.T) {
 	base := "你是数字员工A"
 	got := ApplySystemReinject(base, true)
-	if !containsAll(got, "压缩后续聊", base) {
+	if !containsAll(got, "续聊提醒", base) {
 		t.Fatalf("want reinject+base, got %q", got)
 	}
 	same := ApplySystemReinject(base, false)

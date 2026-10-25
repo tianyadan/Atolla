@@ -25,6 +25,18 @@ func TestAgentPolicyBlockAndReinforce(t *testing.T) {
 	}
 }
 
+// 未限制工作区：策略条文须明确允许全盘读写，不得再写「仅限已授权工作区」。
+func TestAgentPolicyBlockUnboundAllowsFullFS(t *testing.T) {
+	a := &store.ManagedAgent{Name: "x", AllowWrite: true, AllowNetwork: true}
+	block := AgentPolicyBlock(a)
+	if !strings.Contains(block, "未限制") || !strings.Contains(block, "任意路径") {
+		t.Fatalf("unbound should allow full FS: %s", block)
+	}
+	if strings.Contains(block, "已授权工作区") {
+		t.Fatalf("must not restrict to authorized workspaces when unbound: %s", block)
+	}
+}
+
 func TestBuildAgentSystemPromptIncludesProjectMemory(t *testing.T) {
 	a := &store.ManagedAgent{Name: "x", RulesPrompt: "hi"}
 	p := BuildAgentSystemPrompt(a)

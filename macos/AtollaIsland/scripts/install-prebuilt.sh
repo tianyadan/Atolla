@@ -42,6 +42,20 @@ cp "$BIN_SRC" "$STABLE_BIN"
 chmod +x "$STABLE_BIN"
 xattr -cr "$STABLE_BIN" 2>/dev/null || true
 
+# SPM Bundle.module 依赖二进制旁的 AtollaIsland_AtollaIsland.bundle
+BUNDLE_SRC="$PKG/AtollaIsland_AtollaIsland.bundle"
+BUNDLE_DST="${STABLE_DIR}/AtollaIsland_AtollaIsland.bundle"
+if [[ -d "$BUNDLE_SRC" ]]; then
+  echo "==> 安装 SPM 资源包 → $BUNDLE_DST"
+  mkdir -p "$BUNDLE_DST"
+  cp -R "$BUNDLE_SRC"/. "$BUNDLE_DST"/
+  xattr -cr "$BUNDLE_DST" 2>/dev/null || true
+else
+  echo "错误: 包内缺少 AtollaIsland_AtollaIsland.bundle（与 AtollaIsland 同目录）。" >&2
+  echo "       旧版 zip 未打包该资源会导致启动 fatal；请换用新版 Release，或手动补齐 bundle。" >&2
+  exit 1
+fi
+
 if [[ -d "$SPRITE_SRC" ]]; then
   echo "==> 安装精灵图 → $SPRITE_DST"
   mkdir -p "$SPRITE_DST"

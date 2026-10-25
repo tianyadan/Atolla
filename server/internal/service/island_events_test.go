@@ -7,6 +7,18 @@ import (
 	"atolla/server/internal/store"
 )
 
+func TestFormatIslandTaskPlanSummary(t *testing.T) {
+	if got := formatIslandTaskPlanSummary(TaskPlanSnapshot{Phase: TaskPhasePlanning}); got != "正在拆分任务" {
+		t.Fatalf("planning: %q", got)
+	}
+	got := formatIslandTaskPlanSummary(TaskPlanSnapshot{
+		Phase: TaskPhaseRunning, CurrentStep: 1, TotalCount: 4, Message: "改代码", Progress: 40,
+	})
+	if got != "2/4 · 改代码 · 40%" {
+		t.Fatalf("running: %q", got)
+	}
+}
+
 func TestSelectIslandPresentationPriorityAndLimit(t *testing.T) {
 	events := []IslandEvent{
 		{ID: "completed:1", Kind: IslandEventCompleted, OccurredAt: "2026-10-23T08:00:00Z"},
@@ -36,7 +48,24 @@ func TestBuildIslandEventsTerminalAndRunning(t *testing.T) {
 		{ID: 4, Name: "脏快照", TaskUnread: true, TaskUnreadKind: "unknown", TaskUnreadAt: &completedAt},
 	}
 
-	got := buildIslandEvents(agents, nil, nil, now)
+	planByAgent := map[string]store.AgentTask{
+		"3": {
+			AgentID:  "3",
+			Status:   "running",
+			Progress: 5,
+			Message:  "确认任务目标：修 bug",
+			Payload: map[string]any{
+				"schema": TaskPlanSchemaV1, "phase": TaskPhaseRunning,
+				"steps": []any{"确认任务目标：修 bug", "改代码", "验证", "回复"},
+				"step_items": []any{
+					map[string]any{"id": "s0", "title": "确认任务目标：修 bug", "status": TaskStepActive},
+					map[string]any{"id": "s1", "title": "改代码", "status": TaskStepPending},
+				},
+				"current_step": 0, "completed_count": 0, "total_count": 4,
+			},
+		},
+	}
+	got := buildIslandEvents(agents, nil, nil, planByAgent, now)
 	if len(got) != 3 {
 		t.Fatalf("expected 3 valid events, got %d: %+v", len(got), got)
 	}
@@ -49,6 +78,9 @@ func TestBuildIslandEventsTerminalAndRunning(t *testing.T) {
 	if got[2].Kind != IslandEventRunning || got[2].OccurredAt != startedAt.Format(time.RFC3339) {
 		t.Fatalf("unexpected running event: %+v", got[2])
 	}
+	if got[2].Summary == "" || got[2].PlanPhase != TaskPhaseRunning || got[2].Progress != 5 {
+		t.Fatalf("expected task plan on running event: %+v", got[2])
+	}
 }
 
 func TestBuildIslandEventsApprovalAndWorkflowRunning(t *testing.T) {
@@ -60,7 +92,7 @@ func TestBuildIslandEventsApprovalAndWorkflowRunning(t *testing.T) {
 	}
 	occupancy := map[int64]store.Occupancy{8: {AgentID: 8, SourceType: "WORKFLOW", StartedAt: now.Add(-2 * time.Minute)}}
 
-	got := buildIslandEvents(agents, occupancy, approvals, now)
+	got := buildIslandEvents(agents, occupancy, approvals, nil, now)
 	if len(got) != 2 {
 		t.Fatalf("expected approval and workflow event, got %+v", got)
 	}

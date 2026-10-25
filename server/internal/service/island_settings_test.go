@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,5 +48,22 @@ func TestIslandSettingsCacheRoundTrip(t *testing.T) {
 	}
 	if !out.Installed || !out.Enabled || out.Detail != "ok" {
 		t.Fatalf("%+v", out)
+	}
+}
+
+func TestShortIslandErr(t *testing.T) {
+	got := shortIslandErr(fmt.Errorf("第一行\n第二行很长很长"))
+	if got != "第一行" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPickIslandAsset(t *testing.T) {
+	a, ok := pickIslandAsset([]githubReleaseAsset{
+		{Name: "Source.zip", BrowserDownloadURL: "x"},
+		{Name: "AtollaIsland-macos-arm64-20261024-repack-bundle.zip", BrowserDownloadURL: "y"},
+	}, "AtollaIsland-macos-arm64-")
+	if !ok || a.BrowserDownloadURL != "y" {
+		t.Fatalf("%v %v", ok, a)
 	}
 }

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"atolla/server/internal/agent"
 	"atolla/server/internal/permission"
-	"atolla/server/internal/store"
-
 	"atolla/server/internal/remotebridge"
+	"atolla/server/internal/store"
 )
 
 // AskManagedBackground validates the agent then runs AskManagedWith on a detached goroutine (remote-relay).
@@ -375,34 +375,36 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	var steps []string
 	var tp *TaskProgress
 	if shouldEmitTaskPlanAsk(a, opts.skipTaskPlan) {
-		// 先规划具体步骤(禁止空话),再进入执行
+		// 真实阶段：planning → 拆分 → 激活第 0 步；禁止再跳到中间步
+		tp = s.beginTaskProgress(runCtx, agentID, truncateRunTitle(taskBody), onEvent)
 		steps = s.PlanConcreteSteps(runCtx, a, taskBody, calleeRefs)
-		tp = s.beginTaskProgress(runCtx, agentID, truncateRunTitle(taskBody), steps)
-		emitAsk(onEvent, map[string]any{"type": "task_progress", "task_id": tp.taskID, "steps": steps, "progress": 0})
-	}
-
-	if tp != nil && len(steps) > 0 {
-		tp.advance(runCtx, 0, steps[0])
+		tp.SetPlan(runCtx, steps)
+		steps = tp.Snapshot("").StepTitles
 	}
 
 	if len(mentions) > 0 {
 		return s.askManagedWithInvokes(runCtx, a, convID, opts, userQuestion, taskBody, mentions, steps, tp, onEvent, onChunk)
 	}
 
+	// reinject 前读取：工作区切换/压缩后下一轮补强平台历史，避免换目录后引擎侧「失忆」
+	metaBefore, _ := s.Store.GetConversationEngineMeta(runCtx, convID)
+	forceHistory := metaBefore.NeedsSystemReinject
 	sys := s.BuildAgentSystemPromptWithSkills(runCtx, a)
 	sys = s.consumeSystemReinject(runCtx, convID, sys)
 	userTurns, _ := s.Store.CountUserMessages(runCtx, convID)
 	q := MaybeReinforcePolicy(a, userTurns, engineQuestion)
-	mid := 1
-	if len(steps) > 2 {
-		mid = len(steps) / 2
-	}
-	if tp != nil && mid < len(steps) {
-		tp.advance(runCtx, mid, steps[mid])
+	// 单引擎长跑：整段执行期间保持第 0 步 active（不伪造中段进度）
+	if tp != nil {
+		tp.Activate(runCtx, 0, "")
 	}
 
-	// history 有 session 时恒空；丢失时由 runManagedEngine 回退 RecentTurns
-	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, "", onChunk, onEvent, userQuestion, atts)
+	// 默认靠引擎 resume；session 丢失或需 reinject（换工作区/压缩）时拼平台历史
+	history := ""
+	if forceHistory {
+		turns, _ := s.Store.RecentTurns(runCtx, convID, 16)
+		history = FormatResumeHistory(turns, q)
+	}
+	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, history, onChunk, onEvent, userQuestion, atts)
 	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
@@ -453,12 +455,19 @@ func (s *Service) askManagedWithInvokes(
 	onChunk func(string),
 ) (*store.Message, error) {
 	bindMainConv := opts.bindMainConv
-	// 步骤 0 已是理解需求；从 1 开始委托
+	// 协作：第 0 步保持到委托开始；每位同事返回后 CompleteThrough；最后一步做汇总
 	results := s.invokeAllParallel(ctx, caller, mentions, taskBody, onEvent)
 	for i, r := range results {
-		stepIdx := i + 1
-		if tp != nil && stepIdx < len(steps) {
-			tp.advance(ctx, stepIdx, steps[stepIdx])
+		if tp != nil {
+			// 完成「准备/前序」，推进到与委托对应的步骤（至多到倒数第二）
+			through := i
+			if len(steps) > 1 && through >= len(steps)-1 {
+				through = len(steps) - 2
+			}
+			if through < 0 {
+				through = 0
+			}
+			tp.CompleteThrough(ctx, through, "")
 		}
 		meta, _ := json.Marshal(map[string]any{
 			"callee_id": r.AgentID, "callee_name": r.AgentName, "engine": r.Engine, "error": r.Err,
@@ -478,11 +487,9 @@ func (s *Service) askManagedWithInvokes(
 	}
 
 	if tp != nil && len(steps) > 0 {
+		// 汇总步：激活最后一步，等 finishManagedAsk 再全部 done
 		sumStep := len(steps) - 1
-		if sumStep < 0 {
-			sumStep = 0
-		}
-		tp.advance(ctx, sumStep, steps[sumStep])
+		tp.Activate(ctx, sumStep, steps[sumStep])
 	}
 	// 委托并行跑完后从库重载调用方，避免长生命周期结构体上的引擎路径被脏内存改成 "\x00gent"。
 	if fresh, err := s.Store.GetManagedAgent(ctx, caller.ID); err == nil && fresh != nil {
@@ -525,7 +532,7 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 	agentStatus := "idle"
 	if runErr != nil {
 		status = "error"
-		lastErr = runErr.Error()
+		lastErr = agent.ShortEngineError(runErr.Error())
 		agentStatus = "error"
 		if out == "" {
 			out = "❌ " + lastErr
