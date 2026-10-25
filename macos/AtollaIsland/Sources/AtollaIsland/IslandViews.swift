@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 灵动岛静态尺寸（动画节奏见 IslandMorphDriver）。
@@ -31,6 +32,7 @@ enum IslandMetrics {
 
 final class IslandLayoutEditor: ObservableObject {
   @Published private(set) var layout: IslandLayout
+  @Published private(set) var isEditingEnabled = false
 
   private let onMove: (CGSize, Bool) -> Void
   private let onResize: (IslandResizeEdge, CGSize, Bool) -> Void
@@ -53,6 +55,10 @@ final class IslandLayoutEditor: ObservableObject {
 
   func update(layout: IslandLayout) {
     self.layout = layout
+  }
+
+  func setEditingEnabled(_ enabled: Bool) {
+    isEditingEnabled = enabled
   }
 
   func move(by translation: CGSize, completed: Bool) {
@@ -197,7 +203,9 @@ struct IslandRootView: View {
       alignment: .topLeading
     )
     .overlay(alignment: .topLeading) {
-      IslandLayoutEditOverlay(editor: layoutEditor, isHovering: isLayoutEditorHovering)
+      if layoutEditor.isEditingEnabled {
+        IslandLayoutEditOverlay(editor: layoutEditor, isHovering: isLayoutEditorHovering)
+      }
     }
     // morph 已由 DisplayLink 逐帧插值，禁止 SwiftUI 隐式动画再插一层（会掉帧/卡顿）
     .transaction { $0.animation = nil }
@@ -383,6 +391,7 @@ struct IslandRootView: View {
 private struct IslandLayoutEditOverlay: View {
   @ObservedObject var editor: IslandLayoutEditor
   let isHovering: Bool
+  private let sliderHitSize: CGFloat = 44
 
   var body: some View {
     GeometryReader { proxy in
@@ -393,20 +402,20 @@ private struct IslandLayoutEditOverlay: View {
             .padding(1)
             .allowsHitTesting(false)
 
+          resizeSlider(.left, width: sliderWidth(for: proxy.size), height: sliderHeight(for: proxy.size))
+            .position(x: 0, y: proxy.size.height / 2)
+          resizeSlider(.right, width: sliderWidth(for: proxy.size), height: sliderHeight(for: proxy.size))
+            .position(x: proxy.size.width, y: proxy.size.height / 2)
+          resizeSlider(.top, width: sliderWidth(for: proxy.size), height: sliderHeight(for: proxy.size))
+            .position(x: proxy.size.width * 0.25, y: 0)
+          resizeSlider(.bottom, width: sliderWidth(for: proxy.size), height: sliderHeight(for: proxy.size))
+            .position(x: proxy.size.width / 2, y: proxy.size.height)
+
           moveHandle
-            .position(x: proxy.size.width / 2, y: 8)
+            .position(x: proxy.size.width / 2, y: 9)
 
           aspectRatioButton
-            .position(x: max(16, proxy.size.width - 16), y: 10)
-
-          resizeHandle(.left, x: 0, y: proxy.size.height / 2)
-          resizeHandle(.right, x: proxy.size.width, y: proxy.size.height / 2)
-          resizeHandle(.top, x: proxy.size.width / 2, y: 0)
-          resizeHandle(.bottom, x: proxy.size.width / 2, y: proxy.size.height)
-          resizeHandle(.topLeft, x: 0, y: 0)
-          resizeHandle(.topRight, x: proxy.size.width, y: 0)
-          resizeHandle(.bottomLeft, x: 0, y: proxy.size.height)
-          resizeHandle(.bottomRight, x: proxy.size.width, y: proxy.size.height)
+            .position(x: max(22, proxy.size.width - 22), y: max(16, proxy.size.height / 2))
         }
       }
     }
@@ -414,11 +423,12 @@ private struct IslandLayoutEditOverlay: View {
 
   private var moveHandle: some View {
     Capsule(style: .continuous)
-      .fill(Color.white.opacity(0.65))
-      .frame(width: 28, height: 4)
-      .contentShape(Rectangle().inset(by: -6))
+      .fill(Color.white.opacity(0.82))
+      .frame(width: 42, height: 4)
+      .contentShape(Rectangle().inset(by: -8))
       .gesture(moveGesture)
       .onTapGesture(count: 2) { editor.reset() }
+      .islandCursor(.openHand)
       .help("拖动移动灵动岛，双击恢复默认位置")
   }
 
@@ -434,13 +444,72 @@ private struct IslandLayoutEditOverlay: View {
     .help(editor.layout.isAspectRatioLocked ? "已锁定宽高比" : "已解锁宽高比")
   }
 
-  private func resizeHandle(_ edge: IslandResizeEdge, x: CGFloat, y: CGFloat) -> some View {
-    Circle()
-      .fill(Color.white.opacity(0.8))
-      .frame(width: 6, height: 6)
-      .contentShape(Rectangle().inset(by: -6))
-      .position(x: x, y: y)
+  private func resizeSlider(_ edge: IslandResizeEdge, width: CGFloat, height: CGFloat) -> some View {
+    ZStack {
+      Color.clear
+      sliderThumb(for: edge)
+    }
+      .frame(width: max(1, width), height: max(1, height))
+      .contentShape(Rectangle())
       .gesture(resizeGesture(edge))
+      .islandCursor(cursor(for: edge))
+      .help(sliderHelp(for: edge))
+  }
+
+  @ViewBuilder
+  private func sliderThumb(for edge: IslandResizeEdge) -> some View {
+    switch edge {
+    case .left, .right:
+      Capsule(style: .continuous)
+        .fill(Color.white.opacity(0.88))
+        .frame(width: 9, height: 28)
+        .overlay {
+          Image(systemName: edge == .left ? "chevron.left" : "chevron.right")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(.black.opacity(0.7))
+        }
+    case .top, .bottom:
+      Capsule(style: .continuous)
+        .fill(Color.white.opacity(0.88))
+        .frame(width: 28, height: 9)
+        .overlay {
+          Image(systemName: edge == .top ? "chevron.up" : "chevron.down")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(.black.opacity(0.7))
+        }
+    case .topLeft, .topRight, .bottomLeft, .bottomRight:
+      EmptyView()
+    }
+  }
+
+  private func sliderWidth(for size: CGSize) -> CGFloat {
+    min(sliderHitSize, max(20, size.width))
+  }
+
+  private func sliderHeight(for size: CGSize) -> CGFloat {
+    min(sliderHitSize, max(18, size.height))
+  }
+
+  private func sliderHelp(for edge: IslandResizeEdge) -> String {
+    switch edge {
+    case .left, .right:
+      return "拖动调整灵动岛宽度"
+    case .top, .bottom:
+      return "拖动调整灵动岛高度"
+    case .topLeft, .topRight, .bottomLeft, .bottomRight:
+      return ""
+    }
+  }
+
+  private func cursor(for edge: IslandResizeEdge) -> NSCursor {
+    switch edge {
+    case .left, .right:
+      return .resizeLeftRight
+    case .top, .bottom:
+      return .resizeUpDown
+    case .topLeft, .topRight, .bottomLeft, .bottomRight:
+      return .crosshair
+    }
   }
 
   private var moveGesture: some Gesture {
@@ -465,6 +534,36 @@ private struct IslandLayoutEditOverlay: View {
 
   private func appKitTranslation(_ translation: CGSize) -> CGSize {
     CGSize(width: translation.width, height: -translation.height)
+  }
+}
+
+private struct IslandCursorModifier: ViewModifier {
+  let cursor: NSCursor
+  @State private var isCursorActive = false
+
+  func body(content: Content) -> some View {
+    content
+      .onHover { isHovering in
+        if isHovering && !isCursorActive {
+          cursor.push()
+          isCursorActive = true
+        } else if !isHovering && isCursorActive {
+          NSCursor.pop()
+          isCursorActive = false
+        }
+      }
+      .onDisappear {
+        if isCursorActive {
+          NSCursor.pop()
+          isCursorActive = false
+        }
+      }
+  }
+}
+
+private extension View {
+  func islandCursor(_ cursor: NSCursor) -> some View {
+    modifier(IslandCursorModifier(cursor: cursor))
   }
 }
 

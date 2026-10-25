@@ -12,6 +12,9 @@ final class IslandPanelController {
   private var layout = IslandLayout.default
   private let layoutStore = IslandLayoutStore()
   private var layoutEditStart: IslandLayout?
+  private var isLayoutEditingEnabled = false
+  private var layoutSettingsPanel: NSPanel?
+  private var layoutSettingsModel: IslandLayoutSettingsModel?
   private var lastFrame: CGRect = .null
   private lazy var layoutEditor = IslandLayoutEditor(
     layout: layout,
@@ -90,6 +93,45 @@ final class IslandPanelController {
     link.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 30, preferred: 15)
     link.add(to: .main, forMode: .common)
     idleLink = link
+  }
+
+  /// 编辑权限只在本次运行期间有效，重启后默认锁定，避免误拖动已确认的布局。
+  func toggleLayoutEditing() -> Bool {
+    isLayoutEditingEnabled.toggle()
+    if !isLayoutEditingEnabled {
+      layoutEditStart = nil
+    }
+    layoutEditor.setEditingEnabled(isLayoutEditingEnabled)
+    return isLayoutEditingEnabled
+  }
+
+  func showLayoutSettings() {
+    let snapshot = layoutSettingsSnapshot()
+    if let layoutSettingsPanel, let layoutSettingsModel {
+      layoutSettingsModel.replace(snapshot: snapshot)
+      layoutSettingsPanel.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    let model = IslandLayoutSettingsModel(
+      snapshot: snapshot,
+      onUpdate: { [weak self] field, value in
+        self?.updateLayoutSettings(field: field, value: value) ?? snapshot
+      },
+      onToggleAspectRatio: { [weak self] in
+        self?.toggleAspectRatioFromSettings() ?? snapshot
+      }
+    )
+    let root = IslandLayoutSettingsView(model: model) { [weak self] in
+      self?.resetLayoutForSettings() ?? snapshot
+    }
+    let panel = NSPanel.islandLayoutSettingsPanel(contentView: NSHostingView(rootView: root))
+    panel.center()
+    layoutSettingsModel = model
+    layoutSettingsPanel = panel
+    panel.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
   }
 
   @objc private func onIdleTick(_ link: CADisplayLink) {
@@ -223,5 +265,73 @@ final class IslandPanelController {
     layoutEditor.update(layout: layout)
     layoutStore.save(layout, displayID: displayID)
     syncSize(force: true)
+  }
+
+  private func resetLayoutForSettings() -> IslandLayoutSettingsSnapshot {
+    resetLayout()
+    return layoutSettingsSnapshot()
+  }
+
+  private func layoutSettingsSnapshot() -> IslandLayoutSettingsSnapshot {
+    let screenFrame = notch.screen.frame
+    let frame = layout.frame(contentSize: currentContentSize(), screenFrame: screenFrame)
+    let bounds = IslandLayout.sizeBounds(screenFrame: screenFrame)
+    let x = frame.minX - screenFrame.minX
+    let y = screenFrame.maxY - frame.maxY
+    let horizontalPositionRange = 0...Double(max(0, screenFrame.width - frame.width))
+    let verticalPositionRange = 0...Double(max(0, screenFrame.height - frame.height))
+    return IslandLayoutSettingsSnapshot(
+      width: frame.width,
+      height: frame.height,
+      x: x,
+      y: y,
+      top: y,
+      right: screenFrame.maxX - frame.maxX,
+      bottom: frame.minY - screenFrame.minY,
+      left: x,
+      widthRange: bounds.width,
+      heightRange: bounds.height,
+      horizontalPositionRange: horizontalPositionRange,
+      verticalPositionRange: verticalPositionRange,
+      isAspectRatioLocked: layout.isAspectRatioLocked
+    )
+  }
+
+  private func updateLayoutSettings(
+    field: IslandLayoutSettingField,
+    value: Double
+  ) -> IslandLayoutSettingsSnapshot {
+    let screenFrame = notch.screen.frame
+    let contentSize = currentContentSize()
+    let current = layout.frame(contentSize: contentSize, screenFrame: screenFrame)
+    var target = current
+
+    switch field {
+    case .width:
+      target = layout.sizedFrame(current, width: CGFloat(value), height: nil, screenFrame: screenFrame)
+    case .height:
+      target = layout.sizedFrame(current, width: nil, height: CGFloat(value), screenFrame: screenFrame)
+    case .x, .left:
+      target.origin.x = screenFrame.minX + CGFloat(value)
+    case .y, .top:
+      target.origin.y = screenFrame.maxY - CGFloat(value) - target.height
+    case .right:
+      target.origin.x = screenFrame.maxX - CGFloat(value) - target.width
+    case .bottom:
+      target.origin.y = screenFrame.minY + CGFloat(value)
+    }
+
+    layout = layout.applying(frame: target, contentSize: contentSize, screenFrame: screenFrame)
+    layoutEditor.update(layout: layout)
+    syncSize(force: true)
+    layoutStore.save(layout, displayID: displayID)
+    return layoutSettingsSnapshot()
+  }
+
+  private func toggleAspectRatioFromSettings() -> IslandLayoutSettingsSnapshot {
+    layout.isAspectRatioLocked.toggle()
+    layoutEditor.update(layout: layout)
+    layoutStore.save(layout, displayID: displayID)
+    return layoutSettingsSnapshot()
   }
 }

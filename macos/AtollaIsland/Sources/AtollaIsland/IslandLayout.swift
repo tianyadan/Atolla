@@ -41,7 +41,7 @@ enum IslandResizeEdge: String {
 struct IslandLayout: Codable, Equatable {
   static let `default` = IslandLayout()
 
-  private static let minimumSize = CGSize(width: 160, height: 32)
+  private static let minimumSize = CGSize(width: 160, height: 18)
   private static let maximumSize = CGSize(width: 640, height: 480)
 
   var centerXRatio: CGFloat = 0.5
@@ -63,6 +63,58 @@ struct IslandLayout: Codable, Equatable {
 
   func scaledContentSize(_ contentSize: CGSize, screenFrame: CGRect) -> CGSize {
     resolvedSize(contentSize: contentSize, screenFrame: screenFrame)
+  }
+
+  /// 将设置页提交的绝对矩形转换回相对显示器的持久化布局。
+  func applying(frame: CGRect, contentSize: CGSize, screenFrame: CGRect) -> IslandLayout {
+    let boundedSize = clampedSize(frame.size, screenFrame: screenFrame)
+    let boundedFrame = clamped(CGRect(origin: frame.origin, size: boundedSize), in: screenFrame)
+    var updated = updatedAnchor(for: boundedFrame, screenFrame: screenFrame)
+    updated.widthScale = boundedFrame.width / max(contentSize.width, 1)
+    updated.heightScale = boundedFrame.height / max(contentSize.height, 1)
+    return updated
+  }
+
+  func sizedFrame(
+    _ frame: CGRect,
+    width: CGFloat?,
+    height: CGFloat?,
+    screenFrame: CGRect
+  ) -> CGRect {
+    let center = CGPoint(x: frame.midX, y: frame.midY)
+    var targetWidth = width ?? frame.width
+    var targetHeight = height ?? frame.height
+    if isAspectRatioLocked {
+      let aspectRatio = frame.width / max(frame.height, 1)
+      if let width {
+        targetWidth = width
+        targetHeight = width / aspectRatio
+      } else if let height {
+        targetHeight = height
+        targetWidth = height * aspectRatio
+      }
+    }
+
+    let boundedSize = clampedSize(
+      CGSize(width: targetWidth, height: targetHeight),
+      screenFrame: screenFrame
+    )
+    return clamped(
+      CGRect(
+        x: center.x - boundedSize.width / 2,
+        y: center.y - boundedSize.height / 2,
+        width: boundedSize.width,
+        height: boundedSize.height
+      ),
+      in: screenFrame
+    )
+  }
+
+  static func sizeBounds(screenFrame: CGRect) -> IslandLayoutSizeBounds {
+    IslandLayoutSizeBounds(
+      width: Double(minimumSize.width)...Double(min(maximumSize.width, screenFrame.width)),
+      height: Double(minimumSize.height)...Double(min(maximumSize.height, screenFrame.height))
+    )
   }
 
   func moved(by translation: CGSize, contentSize: CGSize, screenFrame: CGRect) -> IslandLayout {
@@ -178,6 +230,11 @@ struct IslandLayout: Codable, Equatable {
     updated.topYRatio = (frame.maxY - screenFrame.minY) / max(screenFrame.height, 1)
     return updated
   }
+}
+
+struct IslandLayoutSizeBounds {
+  let width: ClosedRange<Double>
+  let height: ClosedRange<Double>
 }
 
 /// 按显示器隔离偏好，防止外接屏布局覆盖内建屏的刘海布局。
