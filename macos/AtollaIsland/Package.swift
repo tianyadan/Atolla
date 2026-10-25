@@ -12,5 +12,10 @@ let package = Package(
         .copy("Resources/jelly-sprites"),
       ]
     ),
+    .testTarget(
+      name: "AtollaIslandTests",
+      dependencies: ["AtollaIsland"],
+      path: "Tests/AtollaIslandTests"
+    ),
   ]
 )
