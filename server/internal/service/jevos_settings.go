@@ -79,6 +79,17 @@ func (s *Service) JevosSettingsSet(enabled bool) (any, error) {
 
 // GetJevosSettingsStatus 读取 JEV 状态；force 时重检。
 func (s *Service) GetJevosSettingsStatus(force bool) (JevosSettingsStatus, error) {
+	// Release 的模型压缩包可能自带 model/ 前缀。先修复已安装的旧目录，
+	// 否则缓存会持续把“文件已下载但层级不对”展示成未安装。
+	normalized, err := flattenJevosModelDirectory(filepath.Join(s.jevosInstallDir(), "model"))
+	if err != nil {
+		st := s.probeJevosSettings()
+		st.Detail = "模型目录修复失败: " + err.Error()
+		return st, err
+	}
+	if normalized {
+		force = true
+	}
 	if !force {
 		if c, ok := s.loadJevosSettingsCache(); ok {
 			c.Cached = true
@@ -167,6 +178,11 @@ func (s *Service) InstallJevos(packageID string) (JevosSettingsStatus, error) {
 			return st, fmt.Errorf("%s", st.Detail)
 		}
 	}
+	if _, err := flattenJevosModelDirectory(filepath.Join(stage, "model")); err != nil {
+		st := s.probeJevosSettings()
+		st.Detail = "整理模型目录失败: " + err.Error()
+		return st, fmt.Errorf("%s", st.Detail)
+	}
 
 	bin := filepath.Join(stage, "jev")
 	if runtime.GOOS == "windows" {
@@ -191,6 +207,11 @@ func (s *Service) InstallJevos(packageID string) (JevosSettingsStatus, error) {
 	})
 
 	st := s.probeJevosSettings()
+	if !st.Installed {
+		st.Detail = "安装文件不完整：未检测到 JEV 运行时或 OpenVINO 模型"
+		_ = s.saveJevosSettingsCache(st)
+		return st, fmt.Errorf("%s", st.Detail)
+	}
 	st.Detail = "安装成功，请打开胶囊启用 JEV 常驻"
 	_ = s.saveJevosSettingsCache(st)
 	return st, nil
@@ -659,32 +680,80 @@ func unzipTo(src, dest string) error {
 	return nil
 }
 
-// flattenJevosStage 若 stage/jev/jev 存在，把 jev/* 提到 stage。
+// flattenJevosStage 若 Release 将运行时包在 stage/jev/ 下，提升到 stage 根目录。
+// 先把目录改名释放 stage/jev，才能将同名可执行文件移动到目标位置。
 func flattenJevosStage(stage string) error {
 	nested := filepath.Join(stage, "jev")
 	st, err := os.Stat(nested)
 	if err != nil || !st.IsDir() {
 		return nil
 	}
-	// 已是扁平（stage/jev 是二进制）则跳过
-	if fileExists(nested) {
-		return nil
+
+	binaryName := "jev"
+	if runtime.GOOS == "windows" {
+		binaryName = "jev.exe"
 	}
-	entries, err := os.ReadDir(nested)
+	if !fileExists(filepath.Join(nested, binaryName)) {
+		return fmt.Errorf("解压后未找到 %s", binaryName)
+	}
+
+	archivedRuntime := nested + ".payload." + fmt.Sprintf("%d", time.Now().UnixNano())
+	if err := os.Rename(nested, archivedRuntime); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(archivedRuntime)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		from := filepath.Join(nested, e.Name())
+		from := filepath.Join(archivedRuntime, e.Name())
 		to := filepath.Join(stage, e.Name())
 		if err := os.Rename(from, to); err != nil {
 			return err
 		}
 	}
-	// 空目录改名归档（禁止 rm）
-	_ = os.Rename(nested, nested+".empty."+fmt.Sprintf("%d", time.Now().Unix()))
-	if !fileExists(filepath.Join(stage, "jev")) && !fileExists(filepath.Join(stage, "jev.exe")) {
-		return fmt.Errorf("解压后未找到 jev 二进制")
+	// 空目录改名归档（禁止 rm），保留诊断痕迹。
+	_ = os.Rename(archivedRuntime, archivedRuntime+".empty")
+	if !fileExists(filepath.Join(stage, binaryName)) {
+		return fmt.Errorf("解压后未找到 %s", binaryName)
 	}
 	return nil
+}
+
+// flattenJevosModelDirectory 移除模型压缩包自带的 model/ 前缀，统一为 model/<artifact>。
+// 返回 changed=true 时调用方必须绕过旧状态缓存重新探测安装结果。
+func flattenJevosModelDirectory(modelDir string) (bool, error) {
+	nestedModelDir := filepath.Join(modelDir, "model")
+	st, err := os.Stat(nestedModelDir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !st.IsDir() {
+		return false, nil
+	}
+
+	entries, err := os.ReadDir(nestedModelDir)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		from := filepath.Join(nestedModelDir, entry.Name())
+		to := filepath.Join(modelDir, entry.Name())
+		if _, err := os.Stat(to); err == nil {
+			return false, fmt.Errorf("目标已存在: %s", entry.Name())
+		} else if !os.IsNotExist(err) {
+			return false, err
+		}
+		if err := os.Rename(from, to); err != nil {
+			return false, err
+		}
+	}
+
+	// 空目录改名归档，遵守安装目录不直接删除的策略并保留排障痕迹。
+	_ = os.Rename(nestedModelDir, nestedModelDir+".empty."+fmt.Sprintf("%d", time.Now().UnixNano()))
+	return true, nil
 }
