@@ -1,6 +1,7 @@
 package engineusage
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -38,5 +39,8 @@ func TestEngineUsageMapCodex(t *testing.T) {
 	}
 	if m.Windows[0].ResetsAt == "" || m.Windows[0].ResetHint == "" {
 		t.Fatalf("reset missing: %+v", m.Windows[0])
+	}
+	if m.Windows[1].ResetsAt == "" || !strings.Contains(m.Windows[1].ResetHint, "2025-01-04") {
+		t.Fatalf("weekly reset should include full date: %+v", m.Windows[1])
 	}
 }

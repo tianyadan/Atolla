@@ -184,13 +184,13 @@ func pickWindowMinutes(obj map[string]any) int {
 	return 0
 }
 
-// resetHint 生成中文重置时间提示。
+// resetHint 生成精确的中文重置时间提示。仅显示时分会让 7 天窗口跨日时产生歧义。
 func resetHint(unixSec int64) string {
 	if unixSec <= 0 {
 		return ""
 	}
 	t := time.Unix(unixSec, 0).In(shanghaiLoc)
-	return "约 " + t.Format("15:04") + " 重置"
+	return "下次重置 " + t.Format("2006-01-02 15:04") + "（北京时间）"
 }
 
 func asObject(v any) map[string]any {

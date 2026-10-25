@@ -1098,6 +1098,10 @@ th { background: #0a0a0a; color: #8a8a8a; }
 .ma-engine-usage-pop-head strong { font-size: 13px; }
 .ma-engine-usage-pop-head span, .ma-engine-usage-source { color: var(--modern-muted, #8b8f9b); font-size: 11px; }
 .ma-engine-usage-pop-head button { border: 0; background: transparent; color: var(--modern-muted, #8b8f9b); font-size: 19px; line-height: 16px; cursor: pointer; }
+.ma-engine-usage-pop-actions { display: flex; align-items: center; gap: 5px; }
+.ma-engine-usage-pop-head .ma-engine-usage-refresh { padding: 3px 6px; border: 1px solid #383c47; border-radius: 6px; font-size: 10px; line-height: 1.2; }
+.ma-engine-usage-pop-head .ma-engine-usage-refresh:hover:not(:disabled) { border-color: #606878; color: var(--modern-text, #f5f5f5); }
+.ma-engine-usage-pop-head .ma-engine-usage-refresh:disabled { opacity: .55; cursor: wait; }
 .ma-engine-usage-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .ma-engine-usage-list li { display: flex; flex-direction: column; gap: 5px; }
 .ma-engine-usage-list li > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
