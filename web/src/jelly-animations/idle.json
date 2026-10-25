@@ -1,0 +1,16 @@
+{
+  "id": "idle",
+  "name": "漂浮",
+  "row": 0,
+  "frames": 8,
+  "fps": 8,
+  "durationMs": 1000,
+  "loop": true,
+  "trigger": "state=idle",
+  "cssHint": {
+    "translateY": "±1cell",
+    "duration": "3s",
+    "easing": "ease-in-out"
+  },
+  "notes": "空闲默认态；帧内触手轻摆，位移用 CSS"
+}
