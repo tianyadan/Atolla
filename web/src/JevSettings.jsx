@@ -73,6 +73,10 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
   const [progressMode, setProgressMode] = useState(null)
   const [err, setErr] = useState('')
   const [pick, setPick] = useState('')
+	const [chinaMirror, setChinaMirror] = useState(false)
+	const [slowInstall, setSlowInstall] = useState(false)
+	const [installFailed, setInstallFailed] = useState(false)
+	const slowTimerRef = useRef(0)
   /** 点击「安装」后再展开下载列表，避免未装就铺开选项 */
   const [showPkgList, setShowPkgList] = useState(false)
   const [st, setSt] = useState({
@@ -158,11 +162,14 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
     setBusy(true)
     setProgressMode('install')
     setErr('')
+	setSlowInstall(false)
+	setInstallFailed(false)
+	slowTimerRef.current = window.setTimeout(() => setSlowInstall(true), 120_000)
     try {
       const res = await fetch(`${API}/admin/jevos/settings/install`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ package_id: pick }),
+        body: JSON.stringify({ package_id: pick, china_mirror: chinaMirror }),
       })
       if (res.status === 401) {
         onUnauthorized?.()
@@ -180,8 +187,13 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
       await endProgress(true)
     } catch (e) {
       setErr(String(e.message || e))
+	  setInstallFailed(true)
       setProgressMode(null)
       setBusy(false)
+	} finally {
+	  if (slowTimerRef.current) window.clearTimeout(slowTimerRef.current)
+	  slowTimerRef.current = 0
+	  setSlowInstall(false)
     }
   }
 
@@ -354,6 +366,18 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
               </li>
             ))}
           </ul>
+		  <label className="jev-mirror-option">
+			<input
+			  type="checkbox"
+			  checked={chinaMirror}
+			  disabled={busy}
+			  onChange={(e) => setChinaMirror(e.target.checked)}
+			/>
+			<span>
+			  <strong>中国大陆网络：使用镜像源加速下载</strong>
+			  <small>将优先从 GitHub 镜像获取，失败时自动回退到官方源</small>
+			</span>
+		  </label>
           <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -376,6 +400,11 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
             <div className="island-boot-fill" style={{ width: `${progress.pct}%` }} />
           </div>
           <p className="island-boot-label">{progress.label}</p>
+		  {progressMode === 'install' && slowInstall ? (
+			<p className="jev-slow-hint">
+			  安装已超过 2 分钟，大模型仍在下载。可继续等待；若最终超时，开启镜像源后重试。
+			</p>
+		  ) : null}
         </div>
       ) : null}
 
@@ -441,6 +470,18 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
               </li>
             ))}
           </ul>
+		  <label className="jev-mirror-option">
+			<input
+			  type="checkbox"
+			  checked={chinaMirror}
+			  disabled={busy}
+			  onChange={(e) => setChinaMirror(e.target.checked)}
+			/>
+			<span>
+			  <strong>中国大陆网络：使用镜像源加速下载</strong>
+			  <small>将优先从 GitHub 镜像获取，失败时自动回退到官方源</small>
+			</span>
+		  </label>
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
             <button type="button" className="gc-meet-btn" disabled={busy || !pick} onClick={() => void install()}>
               {busy && progressMode === 'install' ? '安装中…' : '下载并安装'}
@@ -453,9 +494,16 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
       ) : null}
 
       {err ? (
-        <pre className="error" style={{ marginTop: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>
-          {err}
-        </pre>
+		<>
+		  <pre className="error" style={{ marginTop: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>
+			{err}
+		  </pre>
+		  {installFailed ? (
+			<button type="button" className="gc-meet-btn" disabled={busy || !pick} onClick={() => void install()}>
+			  重试安装
+			</button>
+		  ) : null}
+		</>
       ) : null}
     </SettingsFold>
   )

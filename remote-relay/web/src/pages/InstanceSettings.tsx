@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   clearToken,
@@ -25,6 +25,10 @@ export function InstanceSettingsPage() {
   const [jev, setJev] = useState<JevosSettings | null>(null)
   const [jevBusy, setJevBusy] = useState(false)
   const [pick, setPick] = useState('')
+	const [chinaMirror, setChinaMirror] = useState(false)
+	const [jevSlow, setJevSlow] = useState(false)
+	const [installFailed, setInstallFailed] = useState(false)
+	const slowTimerRef = useRef<number | null>(null)
   /** 点击「安装」后再展开下载列表 */
   const [showPkgList, setShowPkgList] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -70,6 +74,10 @@ export function InstanceSettingsPage() {
     void load()
   }, [load])
 
+	useEffect(() => () => {
+	  if (slowTimerRef.current != null) window.clearTimeout(slowTimerRef.current)
+	}, [])
+
   /** 切换通知开关 */
   async function togglePref(key: keyof NotifyPrefs, next: boolean) {
     if (!prefs || !instanceId || prefsBusy) return
@@ -114,15 +122,22 @@ export function InstanceSettingsPage() {
     setJevBusy(true)
     setErr(null)
     setOkMsg('正在电脑上下载安装（约 600MB），请保持电脑在线…')
+	setJevSlow(false)
+	setInstallFailed(false)
+	slowTimerRef.current = window.setTimeout(() => setJevSlow(true), 120_000)
     try {
-      const st = await installJevos(instanceId, pick)
+	  const st = await installJevos(instanceId, pick, chinaMirror)
       setJev(st)
       setShowPkgList(false)
       setOkMsg('安装完成，请打开上方胶囊启用')
     } catch (e) {
       if (!handleAuth(e)) setErr(e instanceof Error ? e.message : '安装失败')
+	  setInstallFailed(true)
       setOkMsg(null)
     } finally {
+	  if (slowTimerRef.current != null) window.clearTimeout(slowTimerRef.current)
+	  slowTimerRef.current = null
+	  setJevSlow(false)
       setJevBusy(false)
     }
   }
@@ -154,6 +169,22 @@ export function InstanceSettingsPage() {
     <PageShell title="设置" backTo={hub}>
       {err ? <p className="error-banner">{err}</p> : null}
       {okMsg ? <p className="ok-banner">{okMsg}</p> : null}
+	  {jevSlow ? (
+		<p
+		  style={{
+			margin: '0 0 12px',
+			padding: '10px 12px',
+			border: '1px solid #e8c784',
+			borderRadius: 12,
+			background: '#fff8e8',
+			color: '#8a5a12',
+			fontSize: 13,
+			lineHeight: 1.5,
+		  }}
+		>
+		  安装已超过 2 分钟，大模型仍在下载。可继续等待；若最终超时，开启镜像源后重试。
+		</p>
+	  ) : null}
 
       <h2 className="settings-section-title">通知</h2>
       <p className="settings-section-hint">与电脑端同一开关。离开对话后是否推送到手机。</p>
@@ -268,6 +299,24 @@ export function InstanceSettingsPage() {
                 </li>
               ))}
             </ul>
+			<label
+			  className="settings-row settings-toggle-row"
+			  style={{ marginTop: 12, border: '1px solid var(--border)', borderRadius: 12 }}
+			>
+			  <span>
+				<span className="settings-label">中国大陆网络：使用镜像源</span>
+				<span className="settings-hint">优先从 GitHub 镜像下载，失败时自动回退官方源</span>
+			  </span>
+			  <span className={`settings-switch${jevBusy ? ' busy' : ''}`}>
+				<input
+				  type="checkbox"
+				  checked={chinaMirror}
+				  disabled={jevBusy}
+				  onChange={(e) => setChinaMirror(e.target.checked)}
+				/>
+				<span />
+			  </span>
+			</label>
             <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
                 type="button"
@@ -275,7 +324,7 @@ export function InstanceSettingsPage() {
                 disabled={jevBusy || !pick}
                 onClick={() => void onInstall()}
               >
-                {jevBusy ? '安装中…' : '下载并安装'}
+				{jevBusy ? '安装中…' : installFailed ? '重试安装' : '下载并安装'}
               </button>
               <button
                 type="button"
@@ -346,6 +395,24 @@ export function InstanceSettingsPage() {
                 </li>
               ))}
             </ul>
+			<label
+			  className="settings-row settings-toggle-row"
+			  style={{ marginTop: 12, border: '1px solid var(--border)', borderRadius: 12 }}
+			>
+			  <span>
+				<span className="settings-label">中国大陆网络：使用镜像源</span>
+				<span className="settings-hint">优先从 GitHub 镜像下载，失败时自动回退官方源</span>
+			  </span>
+			  <span className={`settings-switch${jevBusy ? ' busy' : ''}`}>
+				<input
+				  type="checkbox"
+				  checked={chinaMirror}
+				  disabled={jevBusy}
+				  onChange={(e) => setChinaMirror(e.target.checked)}
+				/>
+				<span />
+			  </span>
+			</label>
             <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
               <button
                 type="button"
@@ -353,7 +420,7 @@ export function InstanceSettingsPage() {
                 disabled={jevBusy || !pick}
                 onClick={() => void onInstall()}
               >
-                {jevBusy ? '安装中…' : '下载并安装'}
+				{jevBusy ? '安装中…' : installFailed ? '重试安装' : '下载并安装'}
               </button>
               <button
                 type="button"

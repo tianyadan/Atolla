@@ -24,22 +24,31 @@ func handleJevosSettingsGet(ec *ExecContext) (any, error) {
 	return ec.Runtime.JevosSettingsGet(force)
 }
 
-// handleJevosSettingsInstall payload.package_id 必填。
+// handleJevosSettingsInstall payload.package_id 必填，china_mirror 可选。
 func handleJevosSettingsInstall(ec *ExecContext) (any, error) {
 	if ec.Runtime == nil {
 		return nil, fmt.Errorf("runtime not configured")
 	}
 	pkg := ""
+	chinaMirror := false
 	if ec.Payload != nil {
 		pkg = strings.TrimSpace(fmt.Sprint(ec.Payload["package_id"]))
 		if pkg == "<nil>" {
 			pkg = ""
 		}
+		switch v := ec.Payload["china_mirror"].(type) {
+		case bool:
+			chinaMirror = v
+		case string:
+			chinaMirror = v == "1" || v == "true" || v == "yes"
+		case float64:
+			chinaMirror = v != 0
+		}
 	}
 	if pkg == "" {
 		return nil, fmt.Errorf("package_id required")
 	}
-	return ec.Runtime.JevosSettingsInstall(pkg)
+	return ec.Runtime.JevosSettingsInstall(pkg, chinaMirror)
 }
 
 // handleJevosSettingsSet payload.enabled 胶囊开关。

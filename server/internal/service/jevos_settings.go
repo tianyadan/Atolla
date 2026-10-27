@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,10 +23,12 @@ import (
 )
 
 const (
-	jevosReleaseRepo = "feder-cr/jev"
-	jevosReleaseTag  = "jevos-v5" // 默认；可被 GitHub latest 覆盖
-	jevosLaunchLabel = "com.atolla.jevos"
-	jevosModelAsset  = "jevos-v5-openvino-int8.zip"
+	jevosReleaseRepo    = "feder-cr/jev"
+	jevosReleaseTag     = "jevos-v5" // 默认；可被 GitHub latest 覆盖
+	jevosLaunchLabel    = "com.atolla.jevos"
+	jevosModelAsset     = "jevos-v5-openvino-int8.zip"
+	jevosInstallTimeout = 30 * time.Minute
+	jevosSourceTimeout  = 12 * time.Minute
 )
 
 // JevosPackage 可下载安装包（运行时 + 模型）。
@@ -71,8 +74,8 @@ func (s *Service) JevosSettingsGet(force bool) (any, error) {
 }
 
 // JevosSettingsInstall implements remotebridge.AgentRuntime。
-func (s *Service) JevosSettingsInstall(packageID string) (any, error) {
-	st, err := s.InstallJevos(packageID)
+func (s *Service) JevosSettingsInstall(packageID string, chinaMirror bool) (any, error) {
+	st, err := s.InstallJevos(packageID, chinaMirror)
 	return st, err
 }
 
@@ -115,7 +118,7 @@ func (s *Service) GetJevosSettingsStatus(force bool) (JevosSettingsStatus, error
 }
 
 // InstallJevos 从 GitHub Release 下载并安装所选包。
-func (s *Service) InstallJevos(packageID string) (JevosSettingsStatus, error) {
+func (s *Service) InstallJevos(packageID string, chinaMirror bool) (JevosSettingsStatus, error) {
 	pkgs := s.jevosPackageCatalog(jevosReleaseTag)
 	var pkg *JevosPackage
 	for i := range pkgs {
@@ -146,12 +149,15 @@ func (s *Service) InstallJevos(packageID string) (JevosSettingsStatus, error) {
 	}
 	modelPath := filepath.Join(tmp, "model.zip")
 
-	if err := downloadJevosReleaseAsset(pkg.RuntimeURL, runtimePath); err != nil {
+	// 整次安装设置硬上限，避免某个下载源无响应时界面永久卡住。
+	installCtx, cancelInstall := context.WithTimeout(context.Background(), jevosInstallTimeout)
+	defer cancelInstall()
+	if err := downloadJevosReleaseAsset(installCtx, pkg.RuntimeURL, runtimePath, chinaMirror); err != nil {
 		st := s.probeJevosSettings()
 		st.Detail = "下载运行时失败: " + err.Error()
 		return st, fmt.Errorf("%s", st.Detail)
 	}
-	if err := downloadJevosReleaseAsset(pkg.ModelURL, modelPath); err != nil {
+	if err := downloadJevosReleaseAsset(installCtx, pkg.ModelURL, modelPath, chinaMirror); err != nil {
 		st := s.probeJevosSettings()
 		st.Detail = "下载模型失败: " + err.Error()
 		return st, fmt.Errorf("%s", st.Detail)
@@ -709,23 +715,26 @@ func jevosMacSystemHTTPSProxy() *url.URL {
 	return jevosProxyURL
 }
 
-// downloadJevosReleaseAsset：gh → 直连重试 → 镜像；解决 TLS handshake timeout。
-func downloadJevosReleaseAsset(rawURL, dest string) error {
+// downloadJevosReleaseAsset：国内模式优先镜像；默认模式保持 gh → 直连 → 镜像兜底。
+func downloadJevosReleaseAsset(ctx context.Context, rawURL, dest string, chinaMirror bool) error {
 	var errs []string
-	if tag, asset, ok := parseGitHubReleaseDownloadURL(rawURL); ok {
-		if err := downloadJevosViaGh(tag, asset, dest); err == nil {
-			return nil
-		} else {
-			errs = append(errs, "gh: "+shortJevosDownloadErr(err))
+	if !chinaMirror {
+		if tag, asset, ok := parseGitHubReleaseDownloadURL(rawURL); ok {
+			if err := downloadJevosViaGh(ctx, tag, asset, dest); err == nil {
+				return nil
+			} else {
+				errs = append(errs, "gh: "+shortJevosDownloadErr(err))
+			}
 		}
 	}
-	candidates := []string{rawURL}
-	candidates = append(candidates, jevosReleaseMirrorURLs(rawURL)...)
-	for _, u := range candidates {
-		if err := downloadFileResilient(u, dest, 3); err == nil {
+	for _, u := range jevosReleaseCandidates(rawURL, chinaMirror) {
+		if err := downloadFileResilient(ctx, u, dest, 2); err == nil {
 			return nil
 		} else {
 			errs = append(errs, shortJevosDownloadErr(err))
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("安装超过 %d 分钟未完成，已停止本次安装，请检查网络或切换镜像源后重试", int(jevosInstallTimeout/time.Minute))
 		}
 	}
 	if len(errs) == 0 {
@@ -733,6 +742,14 @@ func downloadJevosReleaseAsset(rawURL, dest string) error {
 	}
 	hint := "（可开启系统 HTTPS 代理，或设置 HTTPS_PROXY / ATOLLA_HTTPS_PROXY）"
 	return fmt.Errorf("%s%s", errs[0], hint)
+}
+
+func jevosReleaseCandidates(rawURL string, chinaMirror bool) []string {
+	mirrors := jevosReleaseMirrorURLs(rawURL)
+	if chinaMirror {
+		return append(mirrors, rawURL)
+	}
+	return append([]string{rawURL}, mirrors...)
 }
 
 func parseGitHubReleaseDownloadURL(raw string) (tag, asset string, ok bool) {
@@ -774,7 +791,7 @@ func jevosReleaseMirrorURLs(githubURL string) []string {
 	return out
 }
 
-func downloadJevosViaGh(tag, assetName, dest string) error {
+func downloadJevosViaGh(parent context.Context, tag, assetName, dest string) error {
 	gh, err := exec.LookPath("gh")
 	if err != nil {
 		return fmt.Errorf("gh 不可用")
@@ -787,7 +804,7 @@ func downloadJevosViaGh(tag, assetName, dest string) error {
 	defer func() {
 		_ = os.Rename(stage, stage+".done."+fmt.Sprintf("%d", time.Now().Unix()))
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, jevosSourceTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, gh, "release", "download", tag,
 		"--repo", jevosReleaseRepo,
@@ -839,17 +856,21 @@ func copyFileBytes(src, dest string) error {
 	return err
 }
 
-func downloadFileResilient(rawURL, dest string, attempts int) error {
+func downloadFileResilient(ctx context.Context, rawURL, dest string, attempts int) error {
 	if attempts < 1 {
 		attempts = 1
 	}
 	var last error
 	for i := 0; i < attempts; i++ {
 		if i > 0 {
-			time.Sleep(time.Duration(i) * 2 * time.Second)
+			select {
+			case <-time.After(time.Duration(i) * 2 * time.Second):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		_ = os.Rename(dest, dest+".partial."+fmt.Sprintf("%d", time.Now().UnixNano()))
-		last = downloadFileOnce(rawURL, dest)
+		last = downloadFileOnceWithTimeout(ctx, rawURL, dest, jevosSourceTimeout)
 		if last == nil {
 			return nil
 		}
@@ -860,8 +881,8 @@ func downloadFileResilient(rawURL, dest string, attempts int) error {
 	return last
 }
 
-func downloadFileOnce(rawURL, dest string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+func downloadFileOnceWithTimeout(parent context.Context, rawURL, dest string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -871,6 +892,9 @@ func downloadFileOnce(rawURL, dest string) error {
 	req.Header.Set("Accept", "*/*")
 	resp, err := jevosDownloadClient().Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("下载源超过 %d 分钟无法完成: %w", int(timeout/time.Minute), context.DeadlineExceeded)
+		}
 		return err
 	}
 	defer resp.Body.Close()
@@ -887,6 +911,9 @@ func downloadFileOnce(rawURL, dest string) error {
 	_, copyErr := io.Copy(f, resp.Body)
 	closeErr := f.Close()
 	if copyErr != nil {
+		if errors.Is(copyErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("下载源超过 %d 分钟无法完成: %w", int(timeout/time.Minute), context.DeadlineExceeded)
+		}
 		return copyErr
 	}
 	return closeErr

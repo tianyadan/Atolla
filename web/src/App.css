@@ -599,6 +599,21 @@ th { background: #0a0a0a; color: #8a8a8a; }
 }
 /* 灵动岛启停/安装等待进度 */
 .island-boot-progress { margin-top: 12px; max-width: 420px; }
+.jev-mirror-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.jev-mirror-option input { margin-top: 3px; }
+.jev-mirror-option span { display: flex; flex-direction: column; gap: 3px; }
+.jev-mirror-option strong { font-size: 13px; }
+.jev-mirror-option small { color: #8b949e; line-height: 1.45; }
+.jev-slow-hint { margin: 8px 0 0; color: #eab866; font-size: 12px; line-height: 1.5; }
 .island-boot-track {
   height: 4px; border-radius: 999px; background: #1f1f1f; overflow: hidden;
 }

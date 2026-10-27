@@ -16,6 +16,8 @@ type stubRuntime struct {
 	approveAll *bool
 	decideID   string
 	decideBeh  string
+	jevosPkg   string
+	jevosChina bool
 }
 
 func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string, _ []ChatAtt) error {
@@ -68,10 +70,14 @@ func (s *stubRuntime) UninstallAgentSkill(context.Context, int64, string) ([]sto
 	return nil, nil
 }
 
-func (s *stubRuntime) JevosSettingsGet(bool) (any, error)             { return map[string]any{}, nil }
-func (s *stubRuntime) JevosSettingsInstall(string) (any, error)        { return map[string]any{}, nil }
-func (s *stubRuntime) JevosSettingsSet(bool) (any, error)              { return map[string]any{}, nil }
-func (s *stubRuntime) JevosSettingsUninstall() (any, error)            { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsGet(bool) (any, error) { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsInstall(pkg string, chinaMirror bool) (any, error) {
+	s.jevosPkg = pkg
+	s.jevosChina = chinaMirror
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) JevosSettingsSet(bool) (any, error)   { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsUninstall() (any, error) { return map[string]any{}, nil }
 func (s *stubRuntime) ListAgentLegacyMounts(context.Context, int64) ([]store.AgentLegacyMemoryMount, error) {
 	return nil, nil
 }
@@ -99,6 +105,20 @@ func TestHandleAgentAskRequiresRuntime(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error without runtime")
+	}
+}
+
+func TestHandleJevosSettingsInstallPassesChinaMirror(t *testing.T) {
+	rt := &stubRuntime{}
+	_, err := handleJevosSettingsInstall(&ExecContext{
+		Payload: map[string]interface{}{"package_id": "macos-arm64", "china_mirror": true},
+		Runtime: rt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.jevosPkg != "macos-arm64" || !rt.jevosChina {
+		t.Fatalf("unexpected install options: pkg=%q china=%v", rt.jevosPkg, rt.jevosChina)
 	}
 }
 

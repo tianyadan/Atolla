@@ -17,24 +17,25 @@ func (h *Handler) AdminJevosSettingsGet(c *gin.Context) {
 	c.JSON(http.StatusOK, st)
 }
 
-// AdminJevosSettingsInstall POST /api/admin/jevos/settings/install — body: { package_id }
+// AdminJevosSettingsInstall POST /api/admin/jevos/settings/install — body: { package_id, china_mirror }
 func (h *Handler) AdminJevosSettingsInstall(c *gin.Context) {
 	var body struct {
-		PackageID string `json:"package_id"`
+		PackageID   string `json:"package_id"`
+		ChinaMirror bool   `json:"china_mirror"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.PackageID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "package_id required"})
 		return
 	}
-	st, err := h.svc.InstallJevos(body.PackageID)
+	st, err := h.svc.InstallJevos(body.PackageID, body.ChinaMirror)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":      err.Error(),
-			"installed":  st.Installed,
-			"enabled":    st.Enabled,
-			"healthy":    st.Healthy,
-			"detail":     st.Detail,
-			"packages":   st.Packages,
+			"error":       err.Error(),
+			"installed":   st.Installed,
+			"enabled":     st.Enabled,
+			"healthy":     st.Healthy,
+			"detail":      st.Detail,
+			"packages":    st.Packages,
 			"release_url": st.ReleaseURL,
 		})
 		return

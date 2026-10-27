@@ -1020,12 +1020,19 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         res.status(400).json({ error: 'Invalid instance id' })
         return
       }
-      const packageId = String((req.body as { package_id?: string })?.package_id || '').trim()
+      const body = req.body as { package_id?: string; china_mirror?: boolean }
+      const packageId = String(body?.package_id || '').trim()
       if (!packageId) {
         res.status(400).json({ error: 'package_id required' })
         return
       }
-      await respondRpc(res, instanceId, 'jevos.settings.install', { package_id: packageId }, 2_700_000)
+      await respondRpc(
+        res,
+        instanceId,
+        'jevos.settings.install',
+        { package_id: packageId, china_mirror: body?.china_mirror === true },
+        31 * 60_000,
+      )
     },
   )
 

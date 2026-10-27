@@ -181,11 +181,14 @@ function instanceIdFromPath(path: string): string | null {
 }
 
 /** JSON fetch with bearer auth (+ unlock header for instance detail); throws on non-OK */
+type ApiRequestInit = RequestInit & { nativeReadTimeout?: number }
+
 async function request<T>(
   path: string,
-  init: RequestInit = {},
+  init: ApiRequestInit = {},
 ): Promise<T> {
-  const headers = new Headers(init.headers)
+	const { nativeReadTimeout, ...fetchInit } = init
+	const headers = new Headers(init.headers)
   if (!headers.has('Content-Type') && init.body) {
     headers.set('Content-Type', 'application/json')
   }
@@ -226,7 +229,7 @@ async function request<T>(
         headers: headerMap,
         data: dataBody,
         connectTimeout: 20_000,
-        readTimeout: 120_000,
+        readTimeout: nativeReadTimeout ?? 120_000,
       })
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e)
@@ -254,7 +257,7 @@ async function request<T>(
 
   let res: Response
   try {
-    res = await fetch(url, { ...init, headers })
+    res = await fetch(url, { ...fetchInit, headers })
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e)
     const err = new Error(
@@ -752,12 +755,15 @@ export async function fetchJevosSettings(
 export async function installJevos(
   instanceId: string,
   packageId: string,
+  chinaMirror = false,
 ): Promise<JevosSettings> {
   return request<JevosSettings>(
     `/api/instances/${encodeURIComponent(instanceId)}/jevos/settings/install`,
     {
       method: 'POST',
-      body: JSON.stringify({ package_id: packageId }),
+      body: JSON.stringify({ package_id: packageId, china_mirror: chinaMirror }),
+      // JEV 模型约 600MB，不沿用普通 API 的 120s 读取超时。
+      nativeReadTimeout: 31 * 60_000,
     },
   )
 }

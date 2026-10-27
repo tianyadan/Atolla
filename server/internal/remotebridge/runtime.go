@@ -36,7 +36,7 @@ type AgentRuntime interface {
 
 	// JEV（本机 jevos）：状态 / 安装 / 启停 / 卸载，供手机设置页与自动审核前置。
 	JevosSettingsGet(force bool) (any, error)
-	JevosSettingsInstall(packageID string) (any, error)
+	JevosSettingsInstall(packageID string, chinaMirror bool) (any, error)
 	JevosSettingsSet(enabled bool) (any, error)
 	JevosSettingsUninstall() (any, error)
 }
