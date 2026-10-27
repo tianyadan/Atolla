@@ -6,6 +6,7 @@ import {
   fetchNotifyPrefs,
   installJevos,
   setJevosEnabled,
+  uninstallJevos,
   updateNotifyPrefs,
   type JevosSettings,
   type NotifyPrefs,
@@ -120,6 +121,26 @@ export function InstanceSettingsPage() {
       setOkMsg('安装完成，请打开上方胶囊启用')
     } catch (e) {
       if (!handleAuth(e)) setErr(e instanceof Error ? e.message : '安装失败')
+      setOkMsg(null)
+    } finally {
+      setJevBusy(false)
+    }
+  }
+
+  /** 卸载平台安装的 JEV */
+  async function onUninstall() {
+    if (!instanceId || jevBusy) return
+    if (!window.confirm('确认卸载电脑上的平台 JEV？将停止常驻并归档安装目录。')) return
+    setJevBusy(true)
+    setErr(null)
+    setOkMsg('正在卸载…')
+    try {
+      const st = await uninstallJevos(instanceId)
+      setJev(st)
+      setShowPkgList(false)
+      setOkMsg(st.detail || '已卸载')
+    } catch (e) {
+      if (!handleAuth(e)) setErr(e instanceof Error ? e.message : '卸载失败')
       setOkMsg(null)
     } finally {
       setJevBusy(false)
@@ -280,6 +301,11 @@ export function InstanceSettingsPage() {
               onClick={() => setShowPkgList(true)}
             >
               重新安装
+            </button>
+          ) : null}
+          {jev?.can_uninstall || jev?.installed ? (
+            <button type="button" className="btn outline" disabled={jevBusy} onClick={() => void onUninstall()}>
+              卸载
             </button>
           ) : null}
         </div>

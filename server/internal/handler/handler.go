@@ -43,6 +43,8 @@ func (h *Handler) Register(r *gin.Engine) {
 		api.POST("/auth/logout", h.Logout)
 		api.GET("/auth/me", auth.RequireAdminJWT(h.svc.Cfg.JWTSecret), h.Me)
 		api.GET("/setup/status", h.SetupStatus)
+		api.GET("/setup/db-status", h.SetupDBStatus)
+		api.POST("/setup/db-choose", h.SetupDBChoose)
 
 		// 公开:对话必需（旧首页接口保留兼容）
 		api.POST("/question", h.Question)
@@ -140,6 +142,10 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/browser-use/ensure", h.AdminBrowserUseEnsure)
 			adm.GET("/admin/engines/usage", h.AdminEnginesUsage)
 
+			adm.GET("/admin/db/status", h.AdminDBStatus)
+			adm.POST("/admin/db/switch", h.AdminDBSwitch)
+			adm.GET("/admin/db/migrate-progress", h.AdminDBMigrateProgress)
+
 			adm.GET("/admin/notify-prefs", h.AdminNotifyPrefsGet)
 			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)
 
@@ -158,6 +164,7 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/jevos/settings", h.AdminJevosSettingsGet)
 			adm.POST("/admin/jevos/settings/install", h.AdminJevosSettingsInstall)
+			adm.POST("/admin/jevos/settings/uninstall", h.AdminJevosSettingsUninstall)
 			adm.PUT("/admin/jevos/settings", h.AdminJevosSettingsPut)
 
 			adm.GET("/admin/network-allowlist", h.AdminNetworkAllowlistGet)

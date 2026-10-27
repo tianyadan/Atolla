@@ -36,27 +36,39 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 		if a.FolderID > 0 {
 			fn = folderName[a.FolderID]
 		}
-		// 与 PC /admin/agents/:id/context 同源：会话 meta + PercentOf / InferEstimated
+		// 与 PC /admin/agents/:id/context 同源；无可用占用时 window=0，App/Web 隐藏圆环（不推默认窗导致假 0%/!）。
 		usedTokens := int64(0)
-		windowTokens := a.ContextWindowTokens
+		windowTokens := int64(0)
 		ctxSource := ""
 		ctxUpdated := int64(0)
 		anomaly := ""
 		if a.ConversationID > 0 {
 			if meta, merr := ec.Store.GetConversationEngineMeta(ec.Context, a.ConversationID); merr == nil {
 				usedTokens = meta.UsedTokens
-				if meta.WindowTokens > 0 {
-					windowTokens = meta.WindowTokens
-				}
-				ctxSource = meta.ContextSource
+				windowTokens = meta.WindowTokens
+				ctxSource = strings.TrimSpace(meta.ContextSource)
 				ctxUpdated = meta.ContextUpdatedAt
 			}
 		}
+		if strings.EqualFold(ctxSource, "unavailable") {
+			usedTokens, windowTokens, ctxSource, anomaly = 0, 0, "unavailable", ""
+		} else if usedTokens > 0 || (ctxSource != "" && !strings.EqualFold(ctxSource, "unavailable")) {
+			// 有占用或已知来源时才补员工配置窗口作分母
+			if windowTokens <= 0 {
+				windowTokens = a.ContextWindowTokens
+			}
+			if windowTokens > 0 && usedTokens > windowTokens {
+				anomaly = fmt.Sprintf("current_context_exceeds_window: used=%d window=%d", usedTokens, windowTokens)
+				usedTokens = windowTokens
+			}
+			if ctxSource == "" && usedTokens > 0 {
+				ctxSource = "cached"
+			}
+		} else {
+			usedTokens, windowTokens, anomaly = 0, 0, ""
+		}
 		estimated := agent.InferEstimated(a.Engine, ctxSource)
 		usedPercent := agent.PercentOf(usedTokens, windowTokens)
-		if usedPercent > 100 {
-			anomaly = fmt.Sprintf("current_context_exceeds_window: used=%d window=%d", usedTokens, windowTokens)
-		}
 		payload := buildAgentMirrorPayload(a, fn, agentMirrorUsage{
 			UsedTokens:       usedTokens,
 			WindowTokens:     windowTokens,

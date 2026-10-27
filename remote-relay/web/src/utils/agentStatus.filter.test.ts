@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentRunStartedAt,
   filterAgentGroupsByQuery,
+  formatBusyElapsed,
   listBusyAgents,
   listUnreadAgents,
   type AgentFolderGroup,
@@ -108,5 +110,24 @@ describe('listUnreadAgents', () => {
       },
     ]
     expect(listUnreadAgents(pool).map((a) => a.agent_id)).toEqual(['new', 'old'])
+  })
+})
+
+describe('agent run timer', () => {
+  it('repairs legacy local wall time parsed as UTC', () => {
+    const nowSec = Date.parse('2026-10-27T03:27:10Z') / 1000
+    const legacySec = Date.parse('2026-10-27T11:25:23Z') / 1000
+    const startedAt = agentRunStartedAt(
+      { run_started_at: legacySec },
+      nowSec,
+      -480,
+    )
+    expect(startedAt).toBe(Date.parse('2026-10-27T03:25:23Z') / 1000)
+    expect(formatBusyElapsed(startedAt, nowSec)).toBe('1分47秒')
+  })
+
+  it('accepts unix milliseconds from mixed-version mirrors', () => {
+    const nowSec = 1_800_000_000
+    expect(agentRunStartedAt({ run_started_at: (nowSec - 12) * 1000 }, nowSec, 0)).toBe(nowSec - 12)
   })
 })

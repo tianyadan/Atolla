@@ -114,40 +114,22 @@ func (s *Store) EnsureSkillSchema(ctx context.Context) error {
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	}
 	for _, q := range stmts {
-		if _, err := s.db.ExecContext(ctx, q); err != nil {
+		if err := s.execDDL(ctx, q); err != nil {
 			return fmt.Errorf("ensure skill schema: %w", err)
 		}
 	}
 	// Upgrade columns if an older partial table exists.
 	for _, col := range []struct{ name, ddl string }{
-		{"author", `ALTER TABLE skill_catalog ADD COLUMN author VARCHAR(128) NOT NULL DEFAULT 'Atolla' AFTER publisher_name`},
-		{"risk", `ALTER TABLE skill_catalog ADD COLUMN risk VARCHAR(16) NOT NULL DEFAULT 'mid' AFTER category`},
+		{"author", `ALTER TABLE skill_catalog ADD COLUMN author VARCHAR(128) NOT NULL DEFAULT 'Atolla'`},
+		{"risk", `ALTER TABLE skill_catalog ADD COLUMN risk VARCHAR(16) NOT NULL DEFAULT 'mid'`},
 	} {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'skill_catalog' AND COLUMN_NAME = ?`, col.name,
-		).Scan(&n); err != nil {
-			return err
-		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
-				return fmt.Errorf("add skill_catalog.%s: %w", col.name, err)
-			}
+		if err := s.addColumnIfMissing(ctx, "skill_catalog", col.name, col.ddl); err != nil {
+			return fmt.Errorf("add skill_catalog.%s: %w", col.name, err)
 		}
 	}
-	var enCol int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'agent_skill_installs' AND COLUMN_NAME = 'enabled'`,
-	).Scan(&enCol); err != nil {
-		return err
-	}
-	if enCol == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE agent_skill_installs ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER skill_id`); err != nil {
-			return fmt.Errorf("add agent_skill_installs.enabled: %w", err)
-		}
+	if err := s.addColumnIfMissing(ctx, "agent_skill_installs", "enabled",
+		`ALTER TABLE agent_skill_installs ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1`); err != nil {
+		return fmt.Errorf("add agent_skill_installs.enabled: %w", err)
 	}
 	if err := s.seedBuiltinSkills(ctx); err != nil {
 		return err
@@ -156,25 +138,28 @@ func (s *Store) EnsureSkillSchema(ctx context.Context) error {
 }
 
 func (s *Store) seedBuiltinSkills(ctx context.Context) error {
-	for _, seed := range BuiltinSkillSeeds() {
-		_, err := s.db.ExecContext(ctx, `
+	jsonPH := "CAST(? AS JSON)"
+	upsert := `ON DUPLICATE KEY UPDATE
+  name=VALUES(name), summary=VALUES(summary), description=VALUES(description),
+  icon_key=VALUES(icon_key), icon_url=VALUES(icon_url), author=VALUES(author),
+  category=VALUES(category), risk=VALUES(risk), rules_json=VALUES(rules_json),
+  capabilities_json=VALUES(capabilities_json), version=VALUES(version), enabled=1`
+	if s.IsSQLite() {
+		jsonPH = "?"
+		upsert = `ON CONFLICT(id) DO UPDATE SET
+  name=excluded.name, summary=excluded.summary, description=excluded.description,
+  icon_key=excluded.icon_key, icon_url=excluded.icon_url, author=excluded.author,
+  category=excluded.category, risk=excluded.risk, rules_json=excluded.rules_json,
+  capabilities_json=excluded.capabilities_json, version=excluded.version, enabled=1`
+	}
+	q := fmt.Sprintf(`
 INSERT INTO skill_catalog (
   id, name, summary, description, icon_key, icon_url, source, author, category, risk,
   rules_json, capabilities_json, version, enabled
-) VALUES (?, ?, ?, ?, ?, ?, 'builtin', ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, 1)
-ON DUPLICATE KEY UPDATE
-  name=VALUES(name),
-  summary=VALUES(summary),
-  description=VALUES(description),
-  icon_key=VALUES(icon_key),
-  icon_url=VALUES(icon_url),
-  author=VALUES(author),
-  category=VALUES(category),
-  risk=VALUES(risk),
-  rules_json=VALUES(rules_json),
-  capabilities_json=VALUES(capabilities_json),
-  version=VALUES(version),
-  enabled=1`,
+) VALUES (?, ?, ?, ?, ?, ?, 'builtin', ?, ?, ?, %s, %s, ?, 1)
+%s`, jsonPH, jsonPH, upsert)
+	for _, seed := range BuiltinSkillSeeds() {
+		_, err := s.db.ExecContext(ctx, q,
 			seed.ID, seed.Name, seed.Summary, seed.Description, seed.IconKey, nullIfEmpty(seed.IconURL),
 			seed.Author, seed.Category, seed.Risk,
 			seed.RulesJSON, seed.CapabilitiesJSON, seed.Version,
@@ -436,14 +421,14 @@ func (s *Store) InstallAgentSkill(ctx context.Context, agentID int64, skillID, i
 		caps = NormalizeCapabilities(caps, skill.Capabilities)
 	}
 	raw, _ := json.Marshal(caps)
-	res, err := s.db.ExecContext(ctx, `
-INSERT INTO agent_skill_installs (agent_id, skill_id, enabled, enabled_capabilities_json, installed_by)
-VALUES (?, ?, 1, CAST(? AS JSON), ?)
-ON DUPLICATE KEY UPDATE
-  enabled=1,
-  enabled_capabilities_json=VALUES(enabled_capabilities_json),
-  installed_by=VALUES(installed_by),
-  updated_at=CURRENT_TIMESTAMP(3)`, agentID, skillID, string(raw), nullIfEmpty(installedBy))
+	q := s.insertOnConflictUpdate(
+		`agent_skill_installs (agent_id, skill_id, enabled, enabled_capabilities_json, installed_by)`,
+		`(?, ?, 1, `+s.jsonParam()+`, ?)`,
+		`agent_id, skill_id`,
+		`enabled=1, enabled_capabilities_json=VALUES(enabled_capabilities_json), installed_by=VALUES(installed_by), updated_at=`+s.tsNow(),
+		`enabled=1, enabled_capabilities_json=excluded.enabled_capabilities_json, installed_by=excluded.installed_by, updated_at=`+s.tsNow(),
+	)
+	res, err := s.db.ExecContext(ctx, q, agentID, skillID, string(raw), nullIfEmpty(installedBy))
 	if err != nil {
 		return err
 	}
@@ -474,14 +459,14 @@ func (s *Store) UpdateAgentSkillInstall(ctx context.Context, agentID int64, skil
 	if caps != nil {
 		norm := NormalizeCapabilities(caps, skill.Capabilities)
 		raw, _ := json.Marshal(norm)
-		sets = append(sets, "enabled_capabilities_json=CAST(? AS JSON)")
+		sets = append(sets, s.jsonColAssign("enabled_capabilities_json"))
 		args = append(args, string(raw))
 	}
 	if len(sets) == 0 {
 		return nil
 	}
 	args = append(args, agentID, skillID)
-	q := `UPDATE agent_skill_installs SET ` + strings.Join(sets, ", ") + `, updated_at=CURRENT_TIMESTAMP(3) WHERE agent_id=? AND skill_id=?`
+	q := `UPDATE agent_skill_installs SET ` + strings.Join(sets, ", ") + `, updated_at=` + s.tsNow() + ` WHERE agent_id=? AND skill_id=?`
 	res, err := s.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return err
@@ -536,11 +521,12 @@ func (s *Store) CreateCustomSkill(ctx context.Context, item SkillCatalogItem) (S
 	item.Enabled = true
 	rulesJSON, _ := json.Marshal(item.Rules)
 	capsJSON, _ := json.Marshal(item.Capabilities)
+	jp := s.jsonParam()
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO skill_catalog (
   id, name, summary, description, icon_key, icon_url, source, publisher_id, publisher_name, author, category, risk,
   rules_json, capabilities_json, version, enabled
-) VALUES (?, ?, ?, ?, ?, ?, 'custom', ?, ?, ?, ?, ?, CAST(? AS JSON), CAST(? AS JSON), ?, 1)`,
+) VALUES (?, ?, ?, ?, ?, ?, 'custom', ?, ?, ?, ?, ?, `+jp+`, `+jp+`, ?, 1)`,
 		item.ID, item.Name, item.Summary, item.Description, item.IconKey, nullIfEmpty(item.IconURL),
 		nullIfEmpty(item.PublisherID), nullIfEmpty(item.PublisherName), item.Author, item.Category, item.Risk,
 		string(rulesJSON), string(capsJSON), item.Version,

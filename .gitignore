@@ -12,6 +12,10 @@ bin/
 .env
 .env.local
 
+# 本地运行数据库（禁止提交真实业务数据）
+/data/
+/server/*@tcp*/
+
 # OS
 .DS_Store
 

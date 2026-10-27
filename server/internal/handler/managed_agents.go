@@ -466,31 +466,49 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 		return
 	}
 
+	// 引擎进程必须脱离 HTTP Request.Context：浏览器刷新/关页会取消请求，
+	// 若绑在同一 ctx 上会 CommandContext→SIGKILL 整组进程。终止只走 /stop（StopManaged）。
+	clientCtx := c.Request.Context()
+	var sinkMu sync.Mutex
+	live := true
 	var wmu sync.Mutex
 	sendEvent := func(payload any) {
+		sinkMu.Lock()
+		okLive := live
+		sinkMu.Unlock()
+		if !okLive {
+			return
+		}
 		wmu.Lock()
 		defer wmu.Unlock()
 		b, _ := json.Marshal(payload)
 		_, _ = c.Writer.Write([]byte("data: " + string(b) + "\n\n"))
 		flusher.Flush()
 	}
+	detachSink := func() {
+		sinkMu.Lock()
+		live = false
+		sinkMu.Unlock()
+	}
 
 	sub := h.svc.Perms.Subscribe()
 	defer h.svc.Perms.Unsubscribe(sub)
-	done := make(chan struct{})
+	fwdDone := make(chan struct{})
 	var fwd sync.WaitGroup
 	fwd.Add(1)
 	go func() {
 		defer fwd.Done()
 		for {
 			select {
-			case <-done:
+			case <-fwdDone:
+				return
+			case <-clientCtx.Done():
 				return
 			case ev := <-sub:
 				var payload map[string]interface{}
 				if (ev.Kind == "request" || ev.Kind == "auto") && ev.Req != nil {
 					// 会话重建后 hook 可能用新 ConvID；同属本数字人仍应展示审批卡。
-					if !h.permEventForAgent(c.Request.Context(), ev.Req.ConvID, convID, id) {
+					if !h.permEventForAgent(context.Background(), ev.Req.ConvID, convID, id) {
 						continue
 					}
 					typ := "permission_request"
@@ -504,7 +522,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 					}
 				} else if ev.Kind == "command" && ev.Req != nil {
 					// 必须按会话隔离：ConvID 缺失或与本轮不符时丢弃，避免串到其他数字人窗口。
-					if !h.permEventForAgent(c.Request.Context(), ev.Req.ConvID, convID, id) {
+					if !h.permEventForAgent(context.Background(), ev.Req.ConvID, convID, id) {
 						continue
 					}
 					payload = map[string]interface{}{
@@ -529,30 +547,46 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	}()
 	var stopOnce sync.Once
 	stopForward := func() {
-		stopOnce.Do(func() { close(done); fwd.Wait() })
+		stopOnce.Do(func() { close(fwdDone); fwd.Wait() })
 	}
 	defer stopForward()
 
-	msg, askErr := h.svc.AskManagedWith(c.Request.Context(), id, body.Question, atts, func(ev map[string]any) {
-		if ev == nil {
+	askDone := make(chan struct{})
+	go func() {
+		defer close(askDone)
+		msg, askErr := h.svc.AskManagedWith(context.Background(), id, body.Question, atts, func(ev map[string]any) {
+			if ev == nil {
+				return
+			}
+			if t, _ := ev["type"].(string); t == "chunk" {
+				if ctn, ok := ev["content"].(string); ok {
+					ev["content"] = strings.ReplaceAll(ctn, "\n", "\\n")
+				}
+			}
+			sendEvent(ev)
+		})
+		if askErr != nil {
+			sendEvent(map[string]interface{}{"type": "error", "message": askErr.Error()})
 			return
 		}
-		if t, _ := ev["type"].(string); t == "chunk" {
-			if c, ok := ev["content"].(string); ok {
-				ev["content"] = strings.ReplaceAll(c, "\n", "\\n")
-			}
+		if msg == nil {
+			sendEvent(map[string]interface{}{"type": "error", "message": "empty response"})
+			return
 		}
-		sendEvent(ev)
-	})
-	stopForward()
-	if askErr != nil {
-		sendEvent(map[string]interface{}{"type": "error", "message": askErr.Error()})
-		return
+		sendEvent(map[string]interface{}{
+			"type": "done", "conversation_id": msg.ConversationID,
+			"reply_ms": msg.ReplyMs, "status": msg.Status,
+		})
+	}()
+
+	select {
+	case <-clientCtx.Done():
+		// 刷新/关页：停 SSE，引擎继续跑；仅 StopManaged 可杀进程
+		detachSink()
+		stopForward()
+	case <-askDone:
+		stopForward()
 	}
-	sendEvent(map[string]interface{}{
-		"type": "done", "conversation_id": msg.ConversationID,
-		"reply_ms": msg.ReplyMs, "status": msg.Status,
-	})
 }
 
 // AdminAgentsMarkRead POST /api/admin/agents/:id/mark-read — 清除任务完成未读。

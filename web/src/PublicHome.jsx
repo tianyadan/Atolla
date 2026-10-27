@@ -507,9 +507,11 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
                 rows={2}
               />
               <div className="ph-composer-bar">
-                <div className="ph-ctx" title={ctxTip} aria-label={ctxTip}>
-                  <div className="ph-ring" style={{ '--p': ctxPct }} />
-                </div>
+                {ctxWindow > 0 ? (
+                  <div className="ph-ctx" title={ctxTip} aria-label={ctxTip}>
+                    <div className="ph-ring" style={{ '--p': ctxPct }} />
+                  </div>
+                ) : null}
                 <div className="ph-actions">
                   {loading ? (
                     <button

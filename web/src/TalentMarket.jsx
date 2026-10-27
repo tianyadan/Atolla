@@ -159,7 +159,7 @@ export default function TalentMarket({
                       <JellyAvatar
                         className="tm-avatar"
                         color={resolveJellyColor({ id: t.id })}
-                        size={48}
+                        size={36}
                         state="idle"
                       />
                     </span>
@@ -182,7 +182,7 @@ export default function TalentMarket({
                 <JellyAvatar
                   className="tm-avatar tm-avatar-lg"
                   color={jellyColor}
-                  size={64}
+                  size={44}
                   state="idle"
                 />
                 <div>

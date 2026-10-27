@@ -30,8 +30,8 @@ import { CmdBlock } from '../components/CmdBlock'
 import { ContextRing } from '../components/ContextRing'
 import { MarkdownBody } from '../components/MarkdownBody'
 import { Modal } from '../components/Modal'
+import { MobileChatHeader } from '../components/MobileChatHeader'
 import { PageShell } from '../components/PageShell'
-import { SettingsIcon } from '../components/SettingsIcon'
 import { byLabel, parseCommandMessage } from '../utils/commandMessage'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import { tapHaptic } from '../haptics'
@@ -52,23 +52,17 @@ import {
   SendIcon,
   StopIcon,
 } from '../components/ComposerIcons'
-import { EngineTag } from '../components/EngineTag'
-import { EngineUsageChip } from '../components/EngineUsageChip'
-import {
-  loadChatHeaderExpanded,
-  saveChatHeaderExpanded,
-} from '../utils/chatHeaderCollapse'
+import { rememberChatSelection } from '../utils/chatResume'
 import { syncIslandOptimisticAgent } from '../islandLiveActivity'
 import { invalidateIslandSync } from '../islandSyncInvalidation'
 import { JellyAvatar } from '../jelly/JellyAvatar'
-import { jellyStateFromAgent, resolveMirrorJellyColor } from '../jelly/jellyColor'
+import { resolveMirrorJellyColor } from '../jelly/jellyColor'
 import {
   agentAutoApproveAll,
   agentAutoReview,
   agentBusy,
   agentContextUsage,
   agentRunStartedAt,
-  agentStatusLabel,
   agentTaskPlanEnabled,
 } from '../utils/agentStatus'
 
@@ -172,18 +166,6 @@ export function ChatHistoryPage() {
   const [lightboxSrc, setLightboxSrc] = useState('')
   /** Album / screenshot picker (no capture) */
   const albumInputRef = useRef<HTMLInputElement | null>(null)
-  /** 顶栏展开；默认展开，localStorage 记住 */
-  const [headerExpanded, setHeaderExpanded] = useState(() => loadChatHeaderExpanded())
-
-  /** 切换顶栏展开并持久化 */
-  function toggleHeaderExpanded() {
-    setHeaderExpanded((prev) => {
-      const next = !prev
-      saveChatHeaderExpanded(next)
-      return next
-    })
-  }
-
   const threadRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLDivElement | null>(null)
@@ -201,8 +183,6 @@ export function ChatHistoryPage() {
   /** 当前路由数字人；异步 sync/refresh 返回后必须仍匹配，否则会把 A 的消息灌进 B */
   const routeAgentRef = useRef(agentId)
   routeAgentRef.current = agentId
-
-  const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
 
   /** Reload draft when route agent changes; clear pending images */
   useEffect(() => {
@@ -226,6 +206,15 @@ export function ChatHistoryPage() {
   useEffect(() => {
     saveChatDraft(instanceId, agentId, question)
   }, [instanceId, agentId, question])
+
+  /** 当前路由就是恢复依据；conversation_id 仅随同记录，不跨实例复用。 */
+  useEffect(() => {
+    rememberChatSelection(
+      instanceId,
+      agentId,
+      agent?.payload?.conversation_id as string | number | undefined,
+    )
+  }, [agent?.payload?.conversation_id, agentId, instanceId])
 
   /** Shared auth / unlock redirect */
   function handleApiError(err: unknown): boolean {
@@ -823,91 +812,44 @@ export function ChatHistoryPage() {
 
   const title = agent?.display_name || agentId || '对话'
   const jellyColor = resolveMirrorJellyColor(agent)
-  const jellyState = jellyStateFromAgent(agent, {
-    loading: awaitingReply,
-    streaming: awaitingReply,
-  })
   const ctxUsage = agentContextUsage(agent?.payload)
   return (
-    <PageShell title={title} backTo={agentsPath} bodyClassName="page-body-chat">
+    <PageShell
+      title={title}
+      bodyClassName="page-body-chat"
+      header={
+        <MobileChatHeader
+          key={instanceId}
+          instanceId={instanceId}
+          agent={agent}
+          busy={busy}
+          onOpenAgentSettings={() => setAgentSettingsOpen(true)}
+        />
+      }
+    >
       <div className="chat-layout" style={{ ['--kbd-inset' as string]: `${kbdInset}px` }}>
-        <div className={`chat-sticky-top${headerExpanded ? '' : ' is-collapsed'}`}>
-          {headerExpanded ? (
-            <>
-              <div className="chat-header-card">
-                <JellyAvatar
-                  className="agent-avatar lg"
-                  color={jellyColor}
-                  size={48}
-                  state={jellyState}
-                />
-                <div className="chat-header-meta">
-                  <div className="list-title">{title}</div>
-                  <div className="chat-header-tags">
-                    <span className={`status-pill compact ${busy ? 'busy' : 'idle'}`}>
-                      {agentStatusLabel(agent?.status)}
-                    </span>
-                    <EngineTag engine={agent?.engine} />
-                    {instanceId ? (
-                      <EngineUsageChip instanceId={instanceId} engine={agent?.engine} />
-                    ) : null}
-                  </div>
+        {taskPlanOn || error ? (
+          <div className="chat-sticky-top chat-status-strip">
+            {taskPlanOn ? (
+              <button
+                type="button"
+                className="progress-strip"
+                onClick={() => setProgressOpen(true)}
+              >
+                <div className="progress-strip-label">
+                  {activeTask
+                    ? String(activeTask.payload?.task_name || activeTask.task_id)
+                    : '暂无进行中的任务'}
+                  {activeTask ? ` · ${activeProgress}%` : ''}
                 </div>
-                <button
-                  type="button"
-                  className="icon-btn chat-agent-settings-btn"
-                  aria-label="员工设置"
-                  onClick={() => setAgentSettingsOpen(true)}
-                >
-                  <SettingsIcon size={22} />
-                </button>
-              </div>
-
-              {taskPlanOn ? (
-                <button
-                  type="button"
-                  className="progress-strip"
-                  onClick={() => setProgressOpen(true)}
-                >
-                  <div className="progress-strip-label">
-                    {activeTask
-                      ? String(activeTask.payload?.task_name || activeTask.task_id)
-                      : '暂无进行中的任务'}
-                    {activeTask ? ` · ${activeProgress}%` : ''}
-                  </div>
-                  <div className="agent-progress-bar">
-                    <div style={{ width: `${activeTask ? activeProgress : 0}%` }} />
-                  </div>
-                </button>
-              ) : null}
-
-              {error ? <p className="error-banner">{error}</p> : null}
-
-              <button
-                type="button"
-                className="chat-header-fold-tri"
-                aria-label="收起状态栏"
-                title="收起状态栏"
-                onClick={toggleHeaderExpanded}
-              >
-                ▲
+                <div className="agent-progress-bar">
+                  <div style={{ width: `${activeTask ? activeProgress : 0}%` }} />
+                </div>
               </button>
-            </>
-          ) : (
-            <>
-              {error ? <p className="error-banner">{error}</p> : null}
-              <button
-                type="button"
-                className="chat-header-fold-tri alone"
-                aria-label="展开状态栏"
-                title="展开状态栏"
-                onClick={toggleHeaderExpanded}
-              >
-                ▼
-              </button>
-            </>
-          )}
-        </div>
+            ) : null}
+            {error ? <p className="error-banner">{error}</p> : null}
+          </div>
+        ) : null}
 
         <div
           className="chat-thread"

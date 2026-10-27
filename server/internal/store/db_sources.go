@@ -50,7 +50,7 @@ type DBSourceInput struct {
 
 // EnsureDBSourceSchema creates agent_db_sources.
 func (s *Store) EnsureDBSourceSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS agent_db_sources (
   id BIGINT NOT NULL AUTO_INCREMENT,
   agent_id BIGINT NOT NULL,

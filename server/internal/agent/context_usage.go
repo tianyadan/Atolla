@@ -33,20 +33,49 @@ type ContextBuildInput struct {
 	Probe          func() (used, window int64, raw string, err error)
 }
 
+// EstimateTurnOccupancy 将本轮 input/cache 规范为上下文占用估算。
+// Anthropic 单次请求语义：occupancy ≈ input_tokens + cache_read（cache 不含在 input 内）。
+// 但 CLI / 多工具循环常把「多轮 API 合计」或「input 已含 cache」一并回报，导致虚高超过窗口（曾出现 600%+）。
+func EstimateTurnOccupancy(input, cacheRead, window int64) (used int64, anomaly string) {
+	if input < 0 {
+		input = 0
+	}
+	if cacheRead < 0 {
+		cacheRead = 0
+	}
+	sum := input + cacheRead
+	if sum <= 0 {
+		return 0, ""
+	}
+	if window <= 0 || sum <= window {
+		return sum, ""
+	}
+	// 超窗：优先按「input 已含 cache」去重
+	if input > 0 && cacheRead > 0 {
+		if input <= window {
+			return input, "turn_usage_double_count_suspect"
+		}
+		if cacheRead <= window {
+			return cacheRead, "turn_usage_double_count_suspect"
+		}
+	}
+	if input > 0 && input <= window {
+		return input, "turn_usage_exceeds_window"
+	}
+	return window, fmt.Sprintf("turn_usage_exceeds_window: raw=%d window=%d", sum, window)
+}
+
 // NormalizeRunMetaContext 将本轮官方 usage 规范为「单轮估算上下文」。
 // 重要：绝不累计多轮 token；turn usage ≠ 当前真实 context occupancy。
 func NormalizeRunMetaContext(engine string, m RunMeta, fallbackWindow int64) RunMeta {
-	used := m.UsedTokens
-	if used == 0 {
-		used = m.InputTokens + m.CacheRead
-	}
-	if used == 0 && m.OutputTokens > 0 {
-		used = m.InputTokens + m.OutputTokens
-	}
-	m.UsedTokens = used
 	if m.ContextWindow <= 0 && fallbackWindow > 0 {
 		m.ContextWindow = fallbackWindow
 	}
+	used, _ := EstimateTurnOccupancy(m.InputTokens, m.CacheRead, m.ContextWindow)
+	if used == 0 && m.OutputTokens > 0 {
+		used, _ = EstimateTurnOccupancy(m.InputTokens+m.OutputTokens, 0, m.ContextWindow)
+	}
+	m.UsedTokens = used
 	// 所有引擎的 stream/JSONL usage 都只是本轮回报；Claude 真值靠 /context probe。
 	m.Estimated = true
 	_ = engine // 预留：若某引擎日后 stream 自带 occupancy 可在此分支改 Estimated=false
@@ -83,9 +112,20 @@ func ContextFromCodexSession(c CodexSessionContext) ContextSnapshot {
 }
 
 // EstimatedContextFromCache 用最近一次落库/缓存 usage 做估算快照（Codex/Cursor/Claude 降级）。
+// 分母优先用员工配置窗口；超窗占用就地校正，避免圆环出现 600%+。
 func EstimatedContextFromCache(sessionID string, used, window, fallbackWindow int64) ContextSnapshot {
-	if window <= 0 {
+	if fallbackWindow > 0 {
 		window = fallbackWindow
+	} else if window <= 0 {
+		window = fallbackWindow
+	}
+	anomaly := ""
+	if window > 0 && used > window {
+		anomaly = fmt.Sprintf("cached_usage_exceeds_window: used=%d window=%d", used, window)
+		used = window
+	}
+	if used < 0 {
+		used = 0
 	}
 	s := ContextSnapshot{
 		SessionID:    sessionID,
@@ -93,6 +133,7 @@ func EstimatedContextFromCache(sessionID string, used, window, fallbackWindow in
 		WindowTokens: window,
 		Estimated:    true,
 		Source:       "cached",
+		Anomaly:      anomaly,
 	}
 	s.UsedPercent = PercentOf(used, window)
 	return s
@@ -144,12 +185,13 @@ func BuildEngineContextSnapshot(in ContextBuildInput) ContextSnapshot {
 		return ContextSnapshot{SessionID: in.SessionID, Source: "unavailable", Estimated: true}
 
 	default:
-		// Cursor Agent：无官方 active context API → 固定估算
+		// Cursor Agent：交互式 /context 仅打开 TUI 用量面板，-p 打印模式无法截取；
+		// 无官方 active context API，只能用流式单步峰值估算。
 		if in.CachedUsed > 0 || in.CachedWindow > 0 || in.FallbackWindow > 0 {
 			s := EstimatedContextFromCache(in.SessionID, in.CachedUsed, in.CachedWindow, in.FallbackWindow)
 			switch eng {
 			case "agent":
-				s.TextExtra = "（Cursor Agent：展示最近一轮 turn usage 估算。turn usage ≠ 真实 context occupancy）"
+				s.TextExtra = "（Cursor Agent：/context 仅为终端 UI，无法 CLI 截取；圆环为流式单步占用估算，≠ IDE 面板真值）"
 			}
 			if s.UsedTokens <= 0 && s.WindowTokens <= 0 {
 				s.Source = "unavailable"

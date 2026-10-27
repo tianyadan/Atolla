@@ -19,6 +19,7 @@ import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
 import NotifySettings from './NotifySettings.jsx'
 import EngineOnboarding from './EngineOnboarding.jsx'
 import EngineSettings from './EngineSettings.jsx'
+import DbSettings from './DbSettings.jsx'
 import WatchdogSettings from './WatchdogSettings.jsx'
 import IslandSettings from './IslandSettings.jsx'
 import JevSettings from './JevSettings.jsx'
@@ -1143,6 +1144,11 @@ export default function App() {
                   active={adminMenu === 'settings'}
                 />
                 <EngineSettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
+                <DbSettings
                   authHeaders={authHeaders}
                   onUnauthorized={() => clearAuth('登录已过期')}
                   active={adminMenu === 'settings'}

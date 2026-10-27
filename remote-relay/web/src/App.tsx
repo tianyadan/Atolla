@@ -5,6 +5,7 @@ import { SplashOverlay } from './components/SplashOverlay'
 import { AgentsPage } from './pages/Agents'
 import { ChangelogPage } from './pages/Changelog'
 import { ChatHistoryPage } from './pages/ChatHistory'
+import { HomeRestorePage } from './pages/HomeRestore'
 import { InstanceHubPage } from './pages/InstanceHub'
 import { InstanceSettingsPage } from './pages/InstanceSettings'
 import { InstancesPage } from './pages/Instances'
@@ -20,10 +21,12 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route element={<RequireAuth />}>
+          <Route path="/" element={<HomeRestorePage />} />
           <Route path="/instances" element={<InstancesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/settings/changelog" element={<ChangelogPage />} />
           <Route path="/instances/:instanceId" element={<InstanceHubPage />} />
+          <Route path="/instances/:instanceId/start" element={<HomeRestorePage />} />
           <Route path="/instances/:instanceId/settings" element={<InstanceSettingsPage />} />
           <Route path="/instances/:instanceId/agents" element={<AgentsPage />} />
           <Route
@@ -35,7 +38,7 @@ export default function App() {
             element={<ChatHistoryPage />}
           />
         </Route>
-        <Route path="*" element={<Navigate to="/instances" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )

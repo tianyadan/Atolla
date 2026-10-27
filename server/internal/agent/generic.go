@@ -408,8 +408,10 @@ func ParseCursorPrintOutput(raw string) (text string, meta RunMeta) {
 		}
 		meta.CacheWrite = jsonInt64(u["cacheWriteTokens"])
 	}
-	// Cursor 仅有本轮 usage，无 active context API → 估算。
-	meta.UsedTokens = meta.InputTokens + meta.CacheRead
+	// 无逐步事件时退回单次 usage；NormalizeRunMetaContext 会再按窗口校正。
+	if meta.UsedTokens <= 0 {
+		meta.UsedTokens, _ = EstimateTurnOccupancy(meta.InputTokens, meta.CacheRead, meta.ContextWindow)
+	}
 	meta.Estimated = true
 	if text == "" {
 		text = raw
@@ -488,31 +490,52 @@ func cursorAssistantText(m map[string]interface{}) string {
 	return b.String()
 }
 
-// fillCursorUsage 从 result.usage 填本轮 token。
+// fillCursorUsage 从 stream 事件填本轮 token。
+// 注意：Cursor result.usage 常为「多轮工具循环合计」，≠ 当前上下文占用；
+// UsedTokens 只取单步峰值（更接近真实 occupancy），Input/Output 仍跟最新事件（供任务消耗统计）。
 func fillCursorUsage(meta *RunMeta, m map[string]interface{}) {
 	u, _ := m["usage"].(map[string]interface{})
 	if u == nil || meta == nil {
 		return
 	}
-	if n := jsonInt64(u["inputTokens"]); n != 0 {
-		meta.InputTokens = n
-	} else if n := jsonInt64(u["input_tokens"]); n != 0 {
-		meta.InputTokens = n
+	in := jsonInt64(u["inputTokens"])
+	if in == 0 {
+		in = jsonInt64(u["input_tokens"])
 	}
-	if n := jsonInt64(u["outputTokens"]); n != 0 {
-		meta.OutputTokens = n
-	} else if n := jsonInt64(u["output_tokens"]); n != 0 {
-		meta.OutputTokens = n
+	out := jsonInt64(u["outputTokens"])
+	if out == 0 {
+		out = jsonInt64(u["output_tokens"])
 	}
-	if n := jsonInt64(u["cacheReadTokens"]); n != 0 {
-		meta.CacheRead = n
-	} else if n := jsonInt64(u["cache_read_input_tokens"]); n != 0 {
-		meta.CacheRead = n
+	cr := jsonInt64(u["cacheReadTokens"])
+	if cr == 0 {
+		cr = jsonInt64(u["cache_read_input_tokens"])
 	}
-	if n := jsonInt64(u["cacheWriteTokens"]); n != 0 {
-		meta.CacheWrite = n
+	cw := jsonInt64(u["cacheWriteTokens"])
+	if cw == 0 {
+		cw = jsonInt64(u["cache_write_input_tokens"])
 	}
-	meta.UsedTokens = meta.InputTokens + meta.CacheRead
+	if in != 0 {
+		meta.InputTokens = in
+	}
+	if out != 0 {
+		meta.OutputTokens = out
+	}
+	if cr != 0 {
+		meta.CacheRead = cr
+	}
+	if cw != 0 {
+		meta.CacheWrite = cw
+	}
+	step, _ := EstimateTurnOccupancy(in, cr, meta.ContextWindow)
+	typ := strAny(m["type"])
+	// result 上的合计用量若明显高于已观测单步峰值，视为 loop 聚合，不覆盖占用。
+	if typ == "result" && meta.UsedTokens > 0 && step > meta.UsedTokens*3/2 {
+		meta.Estimated = true
+		return
+	}
+	if step > meta.UsedTokens {
+		meta.UsedTokens = step
+	}
 	meta.Estimated = true
 }
 

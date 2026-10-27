@@ -123,7 +123,7 @@ func (s *Service) FetchEngineContext(ctx context.Context, agentID int64, fresh b
 		if strings.EqualFold(a.Engine, "codex") {
 			snap.TextExtra = "Codex Session 快照不可用：上下文占用未知，未使用本轮或累计 Token 代替。"
 		} else {
-			snap.TextExtra = "Cursor Agent 尚无用量数据：请先完成一轮对话。"
+			snap.TextExtra = "Cursor Agent 尚无用量数据：请先完成一轮对话。说明：Cursor 的 /context 只在交互终端打开用量面板，无法像 Claude 一样用 CLI 截取。"
 		}
 	}
 
@@ -141,14 +141,39 @@ func (s *Service) FetchEngineContext(ctx context.Context, agentID int64, fresh b
 		}
 	}
 
+	// 探测成功必须落 source=probe，否则镜像侧 context_source 为空、App 误判为异常。
 	if snap.Source == "probe" && snap.WindowTokens > 0 {
 		_ = s.Store.UpdateConversationEngineMeta(ctx, a.ConversationID, meta.SessionID, snap.UsedTokens, snap.WindowTokens)
+		_ = s.Store.UpdateConversationContextSnapshot(ctx, a.ConversationID, snap.UsedTokens, snap.WindowTokens, snap.TotalTokens, "probe", time.Now())
+	}
+
+	// 不可用：清零窗口，前端直接隐藏圆环（勿展示 — / !）。
+	if out.Source == "unavailable" {
+		out.WindowTokens = 0
+		out.UsedPercent = 0
+		out.Anomaly = ""
 	}
 
 	// 仅无精确窗口的估算快照才可使用员工配置；Codex session 快照始终使用 CLI 报告窗口。
-	if out.WindowTokens <= 0 && out.Source != "codex_session" && !strings.EqualFold(a.Engine, "codex") {
+	if out.Source != "unavailable" && out.WindowTokens <= 0 && out.Source != "codex_session" && !strings.EqualFold(a.Engine, "codex") {
 		out.WindowTokens = a.ContextWindowTokens
 		out.UsedPercent = agent.PercentOf(out.UsedTokens, out.WindowTokens)
+	}
+	// 估算路径：用员工配置窗口作分母，并纠正历史虚高 used（曾因 input+cache 粘连出现 600%+）。
+	if out.Source == "cached" && a.ContextWindowTokens > 0 {
+		rawUsed := out.UsedTokens
+		out.WindowTokens = a.ContextWindowTokens
+		if out.UsedTokens > out.WindowTokens {
+			if out.Anomaly == "" {
+				out.Anomaly = fmt.Sprintf("cached_usage_exceeds_window: used=%d window=%d", rawUsed, out.WindowTokens)
+			}
+			out.UsedTokens = out.WindowTokens
+		}
+		out.UsedPercent = agent.PercentOf(out.UsedTokens, out.WindowTokens)
+		if rawUsed != out.UsedTokens || meta.WindowTokens != out.WindowTokens {
+			_ = s.Store.UpdateConversationEngineMeta(ctx, a.ConversationID, meta.SessionID, out.UsedTokens, out.WindowTokens)
+			_ = s.Store.UpdateConversationContextSnapshot(ctx, a.ConversationID, out.UsedTokens, out.WindowTokens, out.TotalTokens, "cached", time.Now())
+		}
 	}
 	ctxCacheMu.Lock()
 	ctxCache[agentID] = out
@@ -277,6 +302,10 @@ func (s *Service) RememberEngineMeta(ctx context.Context, agentID, convID int64,
 		meta.ContextWindow = 0
 	}
 	_ = s.Store.UpdateConversationEngineMeta(ctx, convID, meta.SessionID, used, meta.ContextWindow)
+	// 非 Codex：落 source=cached，供镜像/圆环识别为估算占用（勿留空 source 触发 App「!」）。
+	if !strings.EqualFold(engine, "codex") && (used > 0 || meta.ContextWindow > 0) {
+		_ = s.Store.UpdateConversationContextSnapshot(ctx, convID, used, meta.ContextWindow, 0, "cached", time.Now())
+	}
 	if strings.EqualFold(engine, "codex") && strings.TrimSpace(meta.SessionID) != "" {
 		collector := s.CodexContextCollector
 		if strings.TrimSpace(collector.SessionsRoot) == "" {

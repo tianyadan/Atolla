@@ -144,6 +144,7 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
               <strong>{e.name}</strong>
               <i className={`engine-dot ${e.installed ? 'ok' : 'off'}`} aria-hidden="true" />
               <span>{e.installed ? '已安装' : '未安装'}</span>
+              {e.version ? <span className="engine-lock-ver">锁定 {e.version}</span> : null}
               <div className="engine-usage-stack">
                 {windows.length > 0 ? (
                   windows.map((w) => {
@@ -193,6 +194,7 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
             <h2 id="engine-usage-title">{detailed.name} 用量详情</h2>
             <p className="engine-usage-sub">
               {detailed.installed ? `已安装 · ${detailed.path || detailed.bin}` : '本机未检测到 CLI'}
+              {detailed.version ? ` · Atolla 锁定 ${detailed.version}` : ''}
               {detailUsage?.plan ? ` · 套餐 ${detailUsage.plan}` : ''}
             </p>
 
@@ -231,7 +233,10 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
 
             {showInstall && (
               <>
-                <h3 className="engine-usage-install-title">安装命令</h3>
+                <h3 className="engine-usage-install-title">
+                  安装命令
+                  {detailed.version ? `（锁定 ${detailed.version}）` : ''}
+                </h3>
                 <label className="engine-mirror">
                   <input
                     type="checkbox"

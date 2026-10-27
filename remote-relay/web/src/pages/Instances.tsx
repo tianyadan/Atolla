@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   clearToken,
+  fetchAgents,
   fetchInstances,
   fetchUnlockOtpStatus,
   hasUnlockToken,
@@ -44,6 +45,11 @@ import {
   isInstanceOnline,
   tempBarPct,
 } from '../utils/instance'
+import {
+  chatRoute,
+  loadInstanceChatSelection,
+  rememberChatSelection,
+} from '../utils/chatResume'
 
 type StatusFilter = 'online' | 'offline'
 
@@ -52,6 +58,8 @@ export function InstancesPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const unlockTargetId = searchParams.get('unlock') || ''
+  const resumeAfterUnlock = searchParams.get('resume') === '1'
+  const onboarding = searchParams.get('onboarding') === '1'
   const [items, setItems] = useState<PublicInstance[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -93,6 +101,23 @@ export function InstancesPage() {
     }
   }, [navigate])
 
+  /** 解锁后恢复该实例最近数字人；无历史时进入一次性数字人选择。 */
+  const resumeInstanceChat = useCallback(async (instanceId: string) => {
+    const rows = await fetchAgents(instanceId)
+    const saved = loadInstanceChatSelection(instanceId)
+    const selected = saved && rows.find((item) => item.agent_id === saved.agentId)
+    if (!selected) {
+      navigate(`/instances/${encodeURIComponent(instanceId)}/start`, { replace: true })
+      return
+    }
+    rememberChatSelection(
+      instanceId,
+      selected.agent_id,
+      selected.payload?.conversation_id as string | number,
+    )
+    navigate(chatRoute({ instanceId, agentId: selected.agent_id }), { replace: true })
+  }, [navigate])
+
   useEffect(() => {
     void load()
     const tick = window.setInterval(() => setNow(Date.now()), 10_000)
@@ -107,17 +132,22 @@ export function InstancesPage() {
   useEffect(() => {
     if (loading || !unlockTargetId) return
     const target = loadPendingDeepLink()
-    if (!target || target.instanceId !== unlockTargetId) return
+    const deepLinkTarget = target?.instanceId === unlockTargetId ? target : null
+    if (!deepLinkTarget && !resumeAfterUnlock) return
     const instance = items.find((item) => item.instance_id === unlockTargetId)
     if (!instance) {
       setError('目标实例不存在或已被移除')
       return
     }
     if (hasUnlockToken(unlockTargetId)) {
-      navigateToDeepLinkChat(navigate, target, {
-        pathname: window.location.pathname,
-        search: window.location.search,
-      })
+      if (deepLinkTarget) {
+        navigateToDeepLinkChat(navigate, deepLinkTarget, {
+          pathname: window.location.pathname,
+          search: window.location.search,
+        })
+      } else {
+        void resumeInstanceChat(unlockTargetId)
+      }
       return
     }
     if (enterTarget?.instance_id !== instance.instance_id) {
@@ -125,7 +155,7 @@ export function InstancesPage() {
       setEnterPassword('')
       setEnterError(null)
     }
-  }, [enterTarget?.instance_id, items, loading, navigate, unlockTargetId])
+  }, [enterTarget?.instance_id, items, loading, navigate, resumeAfterUnlock, resumeInstanceChat, unlockTargetId])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -283,6 +313,8 @@ export function InstancesPage() {
           pathname: window.location.pathname,
           search: window.location.search,
         })
+      } else if (resumeAfterUnlock) {
+        await resumeInstanceChat(id)
       } else {
         navigate(`/instances/${encodeURIComponent(id)}`)
       }
@@ -541,14 +573,14 @@ export function InstancesPage() {
           <div className="inst-empty">
             <p className="inst-empty-title">
               {items.length === 0
-                ? '暂无实例'
+                ? onboarding ? '先绑定一个实例' : '暂无实例'
                 : statusFilter === 'online'
                   ? '暂无在线实例'
                   : '暂无离线实例'}
             </p>
             <p className="inst-empty-sub">
               {items.length === 0
-                ? '请先在 Mac 管理台启用远程中继并完成注册'
+                ? '请在 Mac 管理台启用远程中继并完成注册；绑定成功后实例会自动出现在这里'
                 : statusFilter === 'online'
                   ? '可切换到「离线」查看其它设备'
                   : '可切换到「在线」查看当前可用设备'}

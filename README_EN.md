@@ -18,7 +18,7 @@ Current release: **v0.5.11**.
 
 ## Quick start
 
-You need Docker, Go 1.22+, Node.js 20+, and at least one of `claude`, `codex`, or `agent` on your `PATH`.
+You need Go 1.22+, Node.js 20+, and at least one of `claude`, `codex`, or `agent` on your `PATH`. SQLite is the default (no Docker). Docker is only needed if you choose MySQL.
 
 ```bash
 cp .env.example .env
@@ -27,10 +27,10 @@ cp .env.example .env
 
 Open http://localhost:5173 . The first visit checks your engines and asks you to register an admin account.
 
-If MySQL is already running:
+Optional MySQL (starts docker compose):
 
 ```bash
-./scripts/start.sh --skip-db
+./scripts/start.sh --mysql
 ```
 
 Stop or restart with `./scripts/shutdown.sh` and `./scripts/restart.sh`.
@@ -39,11 +39,12 @@ Stop or restart with `./scripts/shutdown.sh` and `./scripts/restart.sh`.
 | --- | --- |
 | Web | http://localhost:5173 |
 | API | http://localhost:8080 |
-| MySQL | `127.0.0.1:3307` |
+| SQLite (default) | `./data/atolla.db` |
+| MySQL (optional) | `127.0.0.1:3307` |
 
 ## Stack
 
-Go (Gin) · React (Vite) · MySQL 8 · local CLI engines
+Go (Gin) · React (Vite) · SQLite (default) / MySQL 8 (optional) · local CLI engines
 
 Chat is server-sent events. The phone relay uses HTTP long-poll, not WebSocket. Interactive diagram: [docs/architecture/atolla-architecture.html](docs/architecture/atolla-architecture.html).
 
@@ -54,7 +55,8 @@ Keep secrets in `.env` at the repo root. Do not commit that file.
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `AVATAR_ADDR` | API listen address | `:8080` |
-| `AVATAR_DB_DSN` | MySQL DSN | local port `3307`, database `colleague_avatar` |
+| `AVATAR_DB_DRIVER` | Platform DB `sqlite` / `mysql` | `sqlite` |
+| `AVATAR_DB_DSN` | sqlite file path or mysql DSN | `./data/atolla.db` |
 | `AVATAR_ALLOWED_IPS` | Client IP allowlist | `127.0.0.1` |
 | `AVATAR_ADMIN_USER` / `AVATAR_ADMIN_PASS` | Admin login | change these |
 | `BARK_KEY` | Optional iPhone Bark key | — |

@@ -15,7 +15,7 @@ const (
 
 // EnsureNotifyPrefsSchema 创建实例级键值表，并种子两条通知开关（默认开启）。
 func (s *Store) EnsureNotifyPrefsSchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS app_settings (
 		  k          VARCHAR(64)  NOT NULL,
 		  v          VARCHAR(255) NOT NULL,
@@ -24,12 +24,12 @@ func (s *Store) EnsureNotifyPrefsSchema(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO app_settings (k, v) VALUES
-		  (?, '1'),
-		  (?, '1')
-		ON DUPLICATE KEY UPDATE k = k`,
-		notifyPrefTaskDone, notifyPrefPermission)
+	q := s.insertOnConflictDoNothing(
+		`app_settings (k, v)`,
+		`(?, '1'), (?, '1')`,
+		`k`,
+	)
+	_, err := s.db.ExecContext(ctx, q, notifyPrefTaskDone, notifyPrefPermission)
 	return err
 }
 
@@ -73,9 +73,14 @@ func (s *Store) upsertNotifyPref(ctx context.Context, key string, on bool) (int6
 	if on {
 		v = "1"
 	}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO app_settings (k, v) VALUES (?, ?)
-		ON DUPLICATE KEY UPDATE v = VALUES(v)`, key, v)
+	q := s.insertOnConflictUpdate(
+		`app_settings (k, v)`,
+		`(?, ?)`,
+		`k`,
+		`v = VALUES(v)`,
+		`v = excluded.v`,
+	)
+	res, err := s.db.ExecContext(ctx, q, key, v)
 	if err != nil {
 		return 0, err
 	}

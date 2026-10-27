@@ -197,17 +197,27 @@ func (h *Handler) PublicContext(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"used_tokens": 0, "window_tokens": 0, "estimated": true, "used_percent": 0})
 		return
 	}
-	// 前台占用展示：用访客当前会话 meta，而非数字人主会话
+	// 前台占用展示：用访客当前会话 meta，而非数字人主会话；无占用则 window=0 隐藏圆环
 	v, vok := h.optionalVisitor(c)
 	if vok && v.CurrentConversationID > 0 {
 		meta, _ := h.svc.Store.GetConversationEngineMeta(c.Request.Context(), v.CurrentConversationID)
-		win := recv.ContextWindowTokens
+		used := meta.UsedTokens
+		win := meta.WindowTokens
+		if used > 0 && win <= 0 {
+			win = recv.ContextWindowTokens
+		}
+		if used <= 0 {
+			used, win = 0, 0
+		}
 		pct := 0.0
 		if win > 0 {
-			pct = float64(meta.UsedTokens) * 100 / float64(win)
+			pct = float64(used) * 100 / float64(win)
+			if pct > 100 {
+				pct = 100
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{
-			"used_tokens": meta.UsedTokens, "window_tokens": win,
+			"used_tokens": used, "window_tokens": win,
 			"estimated": true, "used_percent": pct,
 		})
 		return
@@ -217,9 +227,13 @@ func (h *Handler) PublicContext(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"used_tokens": 0, "window_tokens": 0, "estimated": true, "used_percent": 0})
 		return
 	}
+	win := ec.WindowTokens
+	if win <= 0 && ec.UsedTokens > 0 {
+		win = recv.ContextWindowTokens
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"used_tokens": ec.UsedTokens, "window_tokens": recv.ContextWindowTokens,
-		"estimated": true, "used_percent": ec.UsedPercent,
+		"used_tokens": ec.UsedTokens, "window_tokens": win,
+		"estimated": ec.Estimated, "used_percent": ec.UsedPercent,
 	})
 }
 

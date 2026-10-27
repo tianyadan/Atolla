@@ -58,6 +58,7 @@ func RegisteredActions() []string {
 		"jevos.settings.get",
 		"jevos.settings.install",
 		"jevos.settings.set",
+		"jevos.settings.uninstall",
 		"instance.send_unlock_otp",
 	}
 }
@@ -92,5 +93,6 @@ var Handlers = map[string]Handler{
 	"jevos.settings.get":         handleJevosSettingsGet,
 	"jevos.settings.install":     handleJevosSettingsInstall,
 	"jevos.settings.set":         handleJevosSettingsSet,
+	"jevos.settings.uninstall":   handleJevosSettingsUninstall,
 	"instance.send_unlock_otp":   handleInstanceSendUnlockOtp,
 }

@@ -85,16 +85,19 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
     release_tag: '',
     cached: false,
     checked_at: '',
+    can_uninstall: false,
   })
 
   const stepList =
     progressMode === 'install'
       ? INSTALL_STEPS
-      : progressMode === 'disable'
-        ? DISABLE_STEPS
-        : progressMode === 'enable'
-          ? ENABLE_STEPS
-          : EMPTY_STEPS
+      : progressMode === 'uninstall'
+        ? ['正在停止 JEV 常驻…', '正在归档安装目录…', '即将完成…']
+        : progressMode === 'disable'
+          ? DISABLE_STEPS
+          : progressMode === 'enable'
+            ? ENABLE_STEPS
+            : EMPTY_STEPS
   const progress = useStagedProgress(!!progressMode, stepList)
 
   function applyStatus(d) {
@@ -109,6 +112,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
       release_tag: d.release_tag || '',
       cached: !!d.cached,
       checked_at: d.checked_at || '',
+      can_uninstall: !!d.can_uninstall,
     })
     if (!pick) {
       const rec = pkgs.find((p) => p.recommended)
@@ -170,6 +174,45 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
       if (!res.ok) {
         applyStatus(d)
         throw new Error(d.error || d.detail || `安装失败(${res.status})`)
+      }
+      applyStatus(d)
+      setShowPkgList(false)
+      await endProgress(true)
+    } catch (e) {
+      setErr(String(e.message || e))
+      setProgressMode(null)
+      setBusy(false)
+    }
+  }
+
+  /** 卸载平台安装的 JEV（归档 ~/.atolla/jevos，不直接 rm） */
+  async function uninstall() {
+    if (!st.can_uninstall && !st.installed) {
+      setErr('当前没有可卸载的平台安装')
+      return
+    }
+    if (!window.confirm('确认卸载平台安装的 JEV？将停止常驻并把安装目录归档到 ~/.atolla（可清出磁盘占用）。')) {
+      return
+    }
+    setBusy(true)
+    setProgressMode('uninstall')
+    setErr('')
+    try {
+      const res = await fetch(`${API}/admin/jevos/settings/uninstall`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: '{}',
+      })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        setProgressMode(null)
+        setBusy(false)
+        return
+      }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        applyStatus(d)
+        throw new Error(d.error || d.detail || `卸载失败(${res.status})`)
       }
       applyStatus(d)
       setShowPkgList(false)
@@ -348,6 +391,17 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
             onClick={() => setShowPkgList(true)}
           >
             重新安装
+          </button>
+        ) : null}
+        {st.can_uninstall || st.installed ? (
+          <button
+            type="button"
+            className="ghost danger-text"
+            disabled={busy}
+            onClick={() => void uninstall()}
+            title="停止常驻并归档 ~/.atolla/jevos"
+          >
+            {busy && progressMode === 'uninstall' ? '卸载中…' : '卸载'}
           </button>
         ) : null}
       </div>

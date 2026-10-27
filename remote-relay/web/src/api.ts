@@ -734,6 +734,7 @@ export type JevosSettings = {
   release_tag?: string
   cached?: boolean
   checked_at?: string
+  can_uninstall?: boolean
 }
 
 /** 读取该电脑 JEV 状态 */
@@ -772,6 +773,14 @@ export async function setJevosEnabled(
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     },
+  )
+}
+
+/** 卸载平台安装的 JEV */
+export async function uninstallJevos(instanceId: string): Promise<JevosSettings> {
+  return request<JevosSettings>(
+    `/api/instances/${encodeURIComponent(instanceId)}/jevos/settings/uninstall`,
+    { method: 'POST', body: '{}' },
   )
 }
 

@@ -65,3 +65,21 @@ func (h *Handler) AdminJevosSettingsPut(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, st)
 }
+
+// AdminJevosSettingsUninstall POST /api/admin/jevos/settings/uninstall — 卸载平台安装的 JEV
+func (h *Handler) AdminJevosSettingsUninstall(c *gin.Context) {
+	st, err := h.svc.UninstallJevos()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":         err.Error(),
+			"installed":     st.Installed,
+			"enabled":       st.Enabled,
+			"healthy":       st.Healthy,
+			"detail":        st.Detail,
+			"packages":      st.Packages,
+			"can_uninstall": st.CanUninstall,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, st)
+}

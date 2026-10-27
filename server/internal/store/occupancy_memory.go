@@ -22,8 +22,9 @@ type Occupancy struct {
 
 // TryInsertOccupancy 占用成功返回 true；已占用返回 false。
 func (s *Store) TryInsertOccupancy(ctx context.Context, o Occupancy) (bool, error) {
+	// MySQL: INSERT IGNORE；SQLite: INSERT OR IGNORE（无 INSERT IGNORE 语法）
 	res, err := s.db.ExecContext(ctx, `
-		INSERT IGNORE INTO agent_occupancy
+		`+s.insertIgnore()+` INTO agent_occupancy
 		(agent_id, source_type, source_id, source_name, workflow_run_id, node_execution_id, task_name, started_at)
 		VALUES (?,?,?,?,?,?,?,NOW())`,
 		o.AgentID, o.SourceType, o.SourceID, o.SourceName, o.WorkflowRunID, o.NodeExecutionID, o.TaskName)
@@ -105,7 +106,7 @@ func (s *Store) InsertAgentMemory(ctx context.Context, m *AgentMemory) (int64, e
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_memories
 		(agent_id, source_type, source_id, workflow_id, workspace, title, summary, metadata_json)
-		VALUES (?,?,?,?,?,?,?,CAST(? AS JSON))`,
+		VALUES (?,?,?,?,?,?,?,`+s.jsonParam()+`)`,
 		m.AgentID, m.SourceType, m.SourceID, m.WorkflowID, m.Workspace, m.Title, m.Summary, meta)
 	if err != nil {
 		return 0, err
@@ -120,7 +121,7 @@ func (s *Store) ListAgentMemoriesRecent(ctx context.Context, agentID int64, limi
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, agent_id, source_type, source_id, workflow_id, workspace, title, summary,
-		       CAST(metadata_json AS CHAR), created_at
+		       `+s.castCharExpr("metadata_json")+`, created_at
 		FROM agent_memories WHERE agent_id=? ORDER BY created_at DESC LIMIT ?`, agentID, limit)
 	if err != nil {
 		return nil, err

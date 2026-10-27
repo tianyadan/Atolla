@@ -2,14 +2,24 @@ import { useEffect } from 'react'
 
 /**
  * 发送前图片预览条：缩略图 + 删除。
+ * 仅作待发预览，不可点击放大；发送进消息列表后才可 Lightbox。
  */
 export function ChatAttachPreview({ items, onRemove }) {
   if (!items?.length) return null
   return (
     <div className="chat-attach-preview" aria-label="待发送图片">
       {items.map((it) => (
-        <div key={it.localId} className={`chat-attach-thumb ${it.uploading ? 'uploading' : ''} ${it.error ? 'err' : ''}`}>
-          <img src={it.previewUrl || it.uploaded?.url} alt="" />
+        <div
+          key={it.localId}
+          className={`chat-attach-thumb ${it.uploading ? 'uploading' : ''} ${it.error ? 'err' : ''}`}
+          // 预览区禁止打开大图，只保留删除
+          onClick={(e) => e.preventDefault()}
+        >
+          <img
+            src={it.previewUrl || it.uploaded?.url}
+            alt=""
+            draggable={false}
+          />
           {it.uploading && <span className="chat-attach-spin" aria-hidden />}
           {it.error && <span className="chat-attach-err" title={it.error}>!</span>}
           <button
@@ -17,7 +27,10 @@ export function ChatAttachPreview({ items, onRemove }) {
             className="chat-attach-rm"
             aria-label="移除图片"
             title="移除"
-            onClick={() => onRemove?.(it.localId)}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRemove?.(it.localId)
+            }}
           >
             ×
           </button>

@@ -19,6 +19,25 @@ func TestParseCursorPrintOutput(t *testing.T) {
 	}
 }
 
+// Cursor result.usage 常为工具循环合计；占用应保留单步峰值，不能被合计冲掉。
+func TestFillCursorUsageKeepsPeakOverAggregatedResult(t *testing.T) {
+	meta := RunMeta{}
+	fillCursorUsage(&meta, map[string]interface{}{
+		"type":  "assistant",
+		"usage": map[string]interface{}{"inputTokens": 100000.0, "cacheReadTokens": 0.0},
+	})
+	fillCursorUsage(&meta, map[string]interface{}{
+		"type":  "result",
+		"usage": map[string]interface{}{"inputTokens": 600000.0, "cacheReadTokens": 0.0},
+	})
+	if meta.UsedTokens != 100000 {
+		t.Fatalf("used=%d want peak 100000", meta.UsedTokens)
+	}
+	if meta.InputTokens != 600000 {
+		t.Fatalf("billing input should follow latest result, got %d", meta.InputTokens)
+	}
+}
+
 func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
 	raw := `{"result":"ok","sessionId":"chat-xyz"}`
 	_, meta := ParseCursorPrintOutput(raw)

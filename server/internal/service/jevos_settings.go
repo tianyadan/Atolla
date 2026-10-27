@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,20 +42,21 @@ type JevosPackage struct {
 
 // JevosSettingsStatus 设置页 JEV 状态。
 type JevosSettingsStatus struct {
-	Installed   bool           `json:"installed"`
-	Enabled     bool           `json:"enabled"`
-	Healthy     bool           `json:"healthy"`
-	Detail      string         `json:"detail"`
-	BinaryPath  string         `json:"binary_path"`
-	InstallDir  string         `json:"install_dir"`
-	ReleaseTag  string         `json:"release_tag"`
-	ReleaseURL  string         `json:"release_url"`
-	HealthURL   string         `json:"health_url"`
-	Packages    []JevosPackage `json:"packages"`
-	Cached      bool           `json:"cached"`
-	CheckedAt   string         `json:"checked_at"`
-	ModelReady  bool           `json:"model_ready"`
-	LaunchAgent bool           `json:"launch_agent"`
+	Installed    bool           `json:"installed"`
+	Enabled      bool           `json:"enabled"`
+	Healthy      bool           `json:"healthy"`
+	Detail       string         `json:"detail"`
+	BinaryPath   string         `json:"binary_path"`
+	InstallDir   string         `json:"install_dir"`
+	ReleaseTag   string         `json:"release_tag"`
+	ReleaseURL   string         `json:"release_url"`
+	HealthURL    string         `json:"health_url"`
+	Packages     []JevosPackage `json:"packages"`
+	Cached       bool           `json:"cached"`
+	CheckedAt    string         `json:"checked_at"`
+	ModelReady   bool           `json:"model_ready"`
+	LaunchAgent  bool           `json:"launch_agent"`
+	CanUninstall bool           `json:"can_uninstall"` // 平台安装目录存在时可卸载
 }
 
 type jevosSettingsFile struct {
@@ -74,6 +79,12 @@ func (s *Service) JevosSettingsInstall(packageID string) (any, error) {
 // JevosSettingsSet implements remotebridge.AgentRuntime。
 func (s *Service) JevosSettingsSet(enabled bool) (any, error) {
 	st, err := s.SetJevosEnabled(enabled)
+	return st, err
+}
+
+// JevosSettingsUninstall implements remotebridge.AgentRuntime。
+func (s *Service) JevosSettingsUninstall() (any, error) {
+	st, err := s.UninstallJevos()
 	return st, err
 }
 
@@ -135,12 +146,12 @@ func (s *Service) InstallJevos(packageID string) (JevosSettingsStatus, error) {
 	}
 	modelPath := filepath.Join(tmp, "model.zip")
 
-	if err := downloadFile(pkg.RuntimeURL, runtimePath); err != nil {
+	if err := downloadJevosReleaseAsset(pkg.RuntimeURL, runtimePath); err != nil {
 		st := s.probeJevosSettings()
 		st.Detail = "下载运行时失败: " + err.Error()
 		return st, fmt.Errorf("%s", st.Detail)
 	}
-	if err := downloadFile(pkg.ModelURL, modelPath); err != nil {
+	if err := downloadJevosReleaseAsset(pkg.ModelURL, modelPath); err != nil {
 		st := s.probeJevosSettings()
 		st.Detail = "下载模型失败: " + err.Error()
 		return st, fmt.Errorf("%s", st.Detail)
@@ -264,6 +275,51 @@ func (s *Service) SetJevosEnabled(enabled bool) (JevosSettingsStatus, error) {
 	return st, nil
 }
 
+// UninstallJevos 卸载平台安装的 JEV：停常驻、归档安装目录与配置（不 rm，避免留半截/误删）。
+func (s *Service) UninstallJevos() (JevosSettingsStatus, error) {
+	dir := s.jevosInstallDir()
+	bin := filepath.Join(dir, "jev")
+	if runtime.GOOS == "windows" {
+		bin = filepath.Join(dir, "jev.exe")
+	}
+	if !fileExists(bin) {
+		st := s.probeJevosSettings()
+		st.Detail = "未检测到平台安装目录，无需卸载（本机外部 JEV 进程不受影响）"
+		return st, fmt.Errorf("%s", st.Detail)
+	}
+
+	_ = s.stopJevosLaunchAgent()
+	// 非 macOS 无 LaunchAgent：尽量结束本机 8017 上的 jev（失败不阻断归档）
+	if runtime.GOOS != "darwin" {
+		_ = s.stopJevosBackgroundBestEffort()
+	}
+
+	stamp := time.Now().Format("20060102150405")
+	archived := dir + ".uninstalled." + stamp
+	if err := os.Rename(dir, archived); err != nil {
+		st := s.probeJevosSettings()
+		st.Detail = "归档安装目录失败: " + err.Error()
+		return st, fmt.Errorf("%s", st.Detail)
+	}
+
+	// 配置与缓存改名归档，避免下次误判已安装
+	if p := s.jevosSettingsPath(); fileExists(p) {
+		_ = os.Rename(p, p+".off."+stamp)
+	}
+	if p := s.jevosSettingsCachePath(); fileExists(p) {
+		_ = os.Rename(p, p+".off."+stamp)
+	}
+	_ = s.writeJevosSettingsFile(jevosSettingsFile{
+		Enabled:   false,
+		UpdatedAt: time.Now().Format(time.RFC3339),
+	})
+
+	st := s.probeJevosSettings()
+	st.Detail = "已卸载平台 JEV（归档至 " + archived + "）"
+	_ = s.saveJevosSettingsCache(st)
+	return st, nil
+}
+
 // RequireJevosEnabled 自动审核前置：已开启且健康。
 func (s *Service) RequireJevosEnabled() error {
 	st := s.probeJevosSettings()
@@ -307,18 +363,19 @@ func (s *Service) probeJevosSettings() JevosSettingsStatus {
 	}
 
 	return JevosSettingsStatus{
-		Installed:   installed,
-		Enabled:     enabled,
-		Healthy:     healthy,
-		Detail:      detail,
-		BinaryPath:  bin,
-		InstallDir:  dir,
-		ReleaseTag:  tag,
-		ReleaseURL:  "https://github.com/" + jevosReleaseRepo + "/releases/tag/" + tag,
-		HealthURL:   strings.TrimRight(s.Cfg.JevosURL, "/") + "/health",
-		Packages:    s.jevosPackageCatalog(tag),
-		ModelReady:  modelOK,
-		LaunchAgent: agentOn,
+		Installed:    installed,
+		Enabled:      enabled,
+		Healthy:      healthy,
+		Detail:       detail,
+		BinaryPath:   bin,
+		InstallDir:   dir,
+		ReleaseTag:   tag,
+		ReleaseURL:   "https://github.com/" + jevosReleaseRepo + "/releases/tag/" + tag,
+		HealthURL:    strings.TrimRight(s.Cfg.JevosURL, "/") + "/health",
+		Packages:     s.jevosPackageCatalog(tag),
+		ModelReady:   modelOK,
+		LaunchAgent:  agentOn,
+		CanUninstall: binOK, // 只要平台目录有二进制即可卸载归档
 	}
 }
 
@@ -559,37 +616,318 @@ func (s *Service) startJevosBackground() error {
 	return cmd.Start()
 }
 
+// stopJevosBackgroundBestEffort 尽力结束非 LaunchAgent 启动的 jev（卸载用）。
+func (s *Service) stopJevosBackgroundBestEffort() error {
+	if runtime.GOOS == "windows" {
+		return exec.Command("taskkill", "/IM", "jev.exe", "/F").Run()
+	}
+	// 仅匹配本机 serve 8017，避免误杀其它 jev 子命令
+	return exec.Command("pkill", "-f", "jev serve.*--port 8017").Run()
+}
+
 func fileExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
 }
 
-func downloadFile(url, dest string) error {
+var (
+	jevosHTTPOnce   sync.Once
+	jevosHTTPClient *http.Client
+	jevosProxyOnce  sync.Once
+	jevosProxyURL   *url.URL
+)
+
+// jevosDownloadClient：加长 TLS/拨号超时 + 系统代理。DefaultTransport 握手仅 10s，易在 github CDN 失败。
+func jevosDownloadClient() *http.Client {
+	jevosHTTPOnce.Do(func() {
+		jevosHTTPClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy: jevosHTTPProxy,
+				DialContext: (&net.Dialer{
+					Timeout:   45 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout:   90 * time.Second,
+				ResponseHeaderTimeout: 3 * time.Minute,
+				ExpectContinueTimeout: 5 * time.Second,
+				IdleConnTimeout:       90 * time.Second,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          8,
+			},
+		}
+	})
+	return jevosHTTPClient
+}
+
+func jevosHTTPProxy(req *http.Request) (*url.URL, error) {
+	if u, err := http.ProxyFromEnvironment(req); err == nil && u != nil {
+		return u, nil
+	}
+	if u := jevosMacSystemHTTPSProxy(); u != nil {
+		return u, nil
+	}
+	return nil, nil
+}
+
+func jevosMacSystemHTTPSProxy() *url.URL {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	jevosProxyOnce.Do(func() {
+		if raw := strings.TrimSpace(os.Getenv("ATOLLA_HTTPS_PROXY")); raw != "" {
+			if u, err := url.Parse(raw); err == nil && u.Host != "" {
+				jevosProxyURL = u
+				return
+			}
+		}
+		out, err := exec.Command("scutil", "--proxy").Output()
+		if err != nil {
+			return
+		}
+		enable, host, port := false, "", 0
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "HTTPSEnable"):
+				enable = strings.HasSuffix(line, ": 1")
+			case strings.HasPrefix(line, "HTTPSProxy"):
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					host = strings.TrimSpace(parts[1])
+				}
+			case strings.HasPrefix(line, "HTTPSPort"):
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					port, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+				}
+			}
+		}
+		if enable && host != "" && port > 0 {
+			jevosProxyURL = &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(port))}
+		}
+	})
+	return jevosProxyURL
+}
+
+// downloadJevosReleaseAsset：gh → 直连重试 → 镜像；解决 TLS handshake timeout。
+func downloadJevosReleaseAsset(rawURL, dest string) error {
+	var errs []string
+	if tag, asset, ok := parseGitHubReleaseDownloadURL(rawURL); ok {
+		if err := downloadJevosViaGh(tag, asset, dest); err == nil {
+			return nil
+		} else {
+			errs = append(errs, "gh: "+shortJevosDownloadErr(err))
+		}
+	}
+	candidates := []string{rawURL}
+	candidates = append(candidates, jevosReleaseMirrorURLs(rawURL)...)
+	for _, u := range candidates {
+		if err := downloadFileResilient(u, dest, 3); err == nil {
+			return nil
+		} else {
+			errs = append(errs, shortJevosDownloadErr(err))
+		}
+	}
+	if len(errs) == 0 {
+		return fmt.Errorf("无可用下载源")
+	}
+	hint := "（可开启系统 HTTPS 代理，或设置 HTTPS_PROXY / ATOLLA_HTTPS_PROXY）"
+	return fmt.Errorf("%s%s", errs[0], hint)
+}
+
+func parseGitHubReleaseDownloadURL(raw string) (tag, asset string, ok bool) {
+	const marker = "github.com/"
+	i := strings.Index(raw, marker)
+	if i < 0 {
+		return "", "", false
+	}
+	rest := raw[i+len(marker):]
+	// owner/repo/releases/download/<tag>/<asset>
+	parts := strings.Split(rest, "/")
+	if len(parts) < 6 || parts[2] != "releases" || parts[3] != "download" {
+		return "", "", false
+	}
+	tag = parts[4]
+	asset = parts[5]
+	if q := strings.IndexByte(asset, '?'); q >= 0 {
+		asset = asset[:q]
+	}
+	if tag == "" || asset == "" {
+		return "", "", false
+	}
+	return tag, asset, true
+}
+
+func jevosReleaseMirrorURLs(githubURL string) []string {
+	if !strings.Contains(githubURL, "github.com/") {
+		return nil
+	}
+	prefixes := []string{
+		"https://ghfast.top/",
+		"https://ghproxy.net/",
+		"https://mirror.ghproxy.com/",
+	}
+	out := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		out = append(out, p+githubURL)
+	}
+	return out
+}
+
+func downloadJevosViaGh(tag, assetName, dest string) error {
+	gh, err := exec.LookPath("gh")
+	if err != nil {
+		return fmt.Errorf("gh 不可用")
+	}
+	dir := filepath.Dir(dest)
+	stage := filepath.Join(dir, "gh-dl-"+fmt.Sprintf("%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Rename(stage, stage+".done."+fmt.Sprintf("%d", time.Now().Unix()))
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	cmd := exec.CommandContext(ctx, gh, "release", "download", tag,
+		"--repo", jevosReleaseRepo,
+		"--pattern", assetName,
+		"--dir", stage,
+		"--clobber",
+	)
+	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	got := filepath.Join(stage, assetName)
+	if !fileExists(got) {
+		entries, _ := os.ReadDir(stage)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			got = filepath.Join(stage, e.Name())
+			break
+		}
+	}
+	if !fileExists(got) {
+		return fmt.Errorf("gh 下载后未找到 %s", assetName)
+	}
+	return copyFileBytes(got, dest)
+}
+
+func copyFileBytes(src, dest string) error {
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "Atolla-JevosInstaller/1.0")
-	resp, err := http.DefaultClient.Do(req)
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func downloadFileResilient(rawURL, dest string, attempts int) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var last error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			time.Sleep(time.Duration(i) * 2 * time.Second)
+		}
+		_ = os.Rename(dest, dest+".partial."+fmt.Sprintf("%d", time.Now().UnixNano()))
+		last = downloadFileOnce(rawURL, dest)
+		if last == nil {
+			return nil
+		}
+		if !jevosRetryableDownloadErr(last) {
+			return last
+		}
+	}
+	return last
+}
+
+func downloadFileOnce(rawURL, dest string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "Atolla-JevosInstaller/1.1")
+	req.Header.Set("Accept", "*/*")
+	resp, err := jevosDownloadClient().Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP %d %s", resp.StatusCode, url)
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(dest)
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	_, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func jevosRetryableDownloadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "tls handshake timeout") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "deadline exceeded") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "temporary") ||
+		strings.Contains(s, "i/o timeout") ||
+		strings.Contains(s, "eof")
+}
+
+func shortJevosDownloadErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	low := strings.ToLower(s)
+	switch {
+	case strings.Contains(low, "tls handshake timeout"):
+		return "TLS 握手超时"
+	case strings.Contains(low, "timeout") || strings.Contains(low, "deadline exceeded"):
+		return "连接超时"
+	case strings.Contains(low, "connection reset"):
+		return "连接被重置"
+	case strings.Contains(low, "connection refused"):
+		return "连接被拒绝"
+	default:
+		if len(s) > 120 {
+			return s[:120] + "…"
+		}
+		return s
+	}
 }
 
 func untarGzTo(src, dest string) error {

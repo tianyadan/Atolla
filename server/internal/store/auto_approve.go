@@ -18,7 +18,7 @@ type AutoApproveAudit struct {
 
 // EnsureAutoApproveSchema creates auto_approve_audits + managed_agents.auto_approve_all.
 func (s *Store) EnsureAutoApproveSchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS auto_approve_audits (
   id BIGINT NOT NULL AUTO_INCREMENT,
   agent_id BIGINT NOT NULL DEFAULT 0,
@@ -33,20 +33,8 @@ CREATE TABLE IF NOT EXISTS auto_approve_audits (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
 		return err
 	}
-	var n int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'auto_approve_all'`,
-	).Scan(&n); err != nil {
-		return err
-	}
-	if n == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE managed_agents ADD COLUMN auto_approve_all TINYINT NOT NULL DEFAULT 0 AFTER auto_review`); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.addColumnIfMissing(ctx, "managed_agents", "auto_approve_all",
+		`ALTER TABLE managed_agents ADD COLUMN auto_approve_all TINYINT NOT NULL DEFAULT 0`)
 }
 
 // InsertAutoApproveAudit stores one auto-approved command.

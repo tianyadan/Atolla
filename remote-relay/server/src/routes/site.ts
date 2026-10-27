@@ -1045,5 +1045,20 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     },
   )
 
+  /** 卸载平台安装的 JEV（电脑端归档安装目录） */
+  router.post(
+    '/instances/:id/jevos/settings/uninstall',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'jevos.settings.uninstall', {}, 120_000)
+    },
+  )
+
   return router
 }

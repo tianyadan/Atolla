@@ -11,13 +11,21 @@ const ENABLE_STEPS = [
   '即将完成…',
 ]
 
-/** 从 GitHub Release 一键安装 */
+/** 从 GitHub Release 一键安装 / 更新 */
 const INSTALL_STEPS = [
   '正在获取最新 GitHub Release…',
   '正在下载灵动岛组件…',
   '正在解压并写入本机…',
   '正在注册 LaunchAgent…',
   '正在启动灵动岛…',
+  '即将完成…',
+]
+
+const UPDATE_STEPS = [
+  '正在检测最新版本…',
+  '正在下载更新包…',
+  '正在替换本机组件…',
+  '正在重启灵动岛…',
   '即将完成…',
 ]
 
@@ -106,18 +114,22 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
     release_tag: '',
     release_url: '',
     binary_path: '',
+    installed_tag: '',
+    update_available: false,
   })
 
   const stepList =
-    progressMode === 'install'
-      ? INSTALL_STEPS
-      : progressMode === 'uninstall'
-        ? UNINSTALL_STEPS
-        : progressMode === 'disable'
-          ? DISABLE_STEPS
-          : progressMode === 'enable'
-            ? ENABLE_STEPS
-            : EMPTY_STEPS
+    progressMode === 'update'
+      ? UPDATE_STEPS
+      : progressMode === 'install'
+        ? INSTALL_STEPS
+        : progressMode === 'uninstall'
+          ? UNINSTALL_STEPS
+          : progressMode === 'disable'
+            ? DISABLE_STEPS
+            : progressMode === 'enable'
+              ? ENABLE_STEPS
+              : EMPTY_STEPS
   const progress = useStagedProgress(!!progressMode, stepList)
 
   function applyStatus(d) {
@@ -130,6 +142,8 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
       release_tag: d.release_tag || '',
       release_url: d.release_url || '',
       binary_path: d.binary_path || '',
+      installed_tag: d.installed_tag || '',
+      update_available: !!d.update_available,
     })
   }
 
@@ -157,15 +171,24 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
     }
   }
 
+  const busyRef = useRef(false)
+  busyRef.current = busy
+
+  // 进入设置时强制检测最新 Release；之后每 10 分钟自动再检一次
   useEffect(() => {
-    if (active) void load(false)
+    if (!active) return undefined
+    void load(true)
+    const timer = window.setInterval(() => {
+      if (!busyRef.current) void load(true)
+    }, 10 * 60 * 1000)
+    return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
 
-  /** 一键安装：后端拉最新 GitHub Release 并常驻 */
-  async function install() {
+  /** 一键安装 / 更新：后端拉最新 GitHub Release 并常驻 */
+  async function install(asUpdate = false) {
     setBusy(true)
-    setProgressMode('install')
+    setProgressMode(asUpdate ? 'update' : 'install')
     setErr('')
     try {
       const res = await fetch(`${API}/admin/island/settings/install`, {
@@ -182,7 +205,7 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
       const d = await res.json().catch(() => ({}))
       if (!res.ok) {
         applyStatus(d)
-        throw new Error(d.error || d.detail || `安装失败(${res.status})`)
+        throw new Error(d.error || d.detail || `${asUpdate ? '更新' : '安装'}失败(${res.status})`)
       }
       applyStatus(d)
       await endProgress(true)
@@ -279,7 +302,11 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
           </span>
           <p className="ma-capsule-hint">
             {st.detail || '未检测'}
-            {st.release_tag ? ` · ${st.release_tag}` : ''}
+            {st.installed_tag && st.release_tag && st.installed_tag !== st.release_tag
+              ? ` · 最新 ${st.release_tag}`
+              : st.release_tag && !st.installed_tag
+                ? ` · 最新 ${st.release_tag}`
+                : ''}
             {st.cached && st.checked_at ? `（缓存于 ${st.checked_at}）` : ''}
           </p>
         </div>
@@ -289,21 +316,34 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
             type="button"
             className="gc-meet-btn"
             disabled={busy}
-            onClick={() => void install()}
+            onClick={() => void install(false)}
             title="从 GitHub 最新 Release 自动下载并安装"
           >
             {busy && progressMode === 'install' ? '安装中…' : '安装'}
           </button>
         ) : (
-          <label className={`auto-switch ma-capsule ${busy ? 'busy' : ''}`}>
-            <input
-              type="checkbox"
-              checked={!!st.enabled}
-              disabled={busy}
-              onChange={(e) => void toggle(e.target.checked)}
-            />
-            <span className="slider" />
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {st.update_available ? (
+              <button
+                type="button"
+                className="gc-meet-btn"
+                disabled={busy}
+                onClick={() => void install(true)}
+                title={st.release_tag ? `更新到 ${st.release_tag}` : '更新到最新 Release'}
+              >
+                {busy && progressMode === 'update' ? '更新中…' : '更新'}
+              </button>
+            ) : null}
+            <label className={`auto-switch ma-capsule ${busy ? 'busy' : ''}`}>
+              <input
+                type="checkbox"
+                checked={!!st.enabled}
+                disabled={busy}
+                onChange={(e) => void toggle(e.target.checked)}
+              />
+              <span className="slider" />
+            </label>
+          </div>
         )}
       </div>
 
@@ -322,7 +362,7 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
         </button>
         {st.installed ? (
           <>
-            <button type="button" className="ghost" disabled={busy} onClick={() => void install()}>
+            <button type="button" className="ghost" disabled={busy} onClick={() => void install(false)}>
               重新安装
             </button>
             <button type="button" className="ghost" disabled={busy} onClick={() => void uninstall()}>

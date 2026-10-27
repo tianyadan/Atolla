@@ -60,3 +60,11 @@ func handleJevosSettingsSet(ec *ExecContext) (any, error) {
 	}
 	return ec.Runtime.JevosSettingsSet(enabled)
 }
+
+// handleJevosSettingsUninstall 卸载平台安装的 JEV。
+func handleJevosSettingsUninstall(ec *ExecContext) (any, error) {
+	if ec.Runtime == nil {
+		return nil, fmt.Errorf("runtime not configured")
+	}
+	return ec.Runtime.JevosSettingsUninstall()
+}

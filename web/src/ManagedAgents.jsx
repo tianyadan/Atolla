@@ -35,6 +35,7 @@ import { MobileViewerIcon } from './MobileViewerIcon.jsx'
 import GroupChatOfferSheet, { buildGroupMemberSet } from './GroupChatOfferSheet.jsx'
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import EngineUsageChip from './EngineUsageChip.jsx'
+import { runningElapsedSec } from './taskTiming.js'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -264,6 +265,7 @@ export default function ManagedAgentsPanel({
   const [attachBusy, setAttachBusy] = useState(false)
   const composerRef = useRef(null)
   const composerDropRef = useRef(null)
+  const composerFileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
   const [rulesDraft, setRulesDraft] = useState('')
@@ -470,6 +472,8 @@ export default function ManagedAgentsPanel({
     items.forEach((a) => {
       if (a && a.id) patchAgentSession(a.id, { autoOn: !!a.auto_review })
     })
+    // 刷新后服务端仍 running：恢复本地 loading，避免误以为已中断
+    syncLoadingFromAgentStatus(items)
     setSelectedId((cur) => {
       if (forceSelect && preferId && items.some((a) => a.id === preferId)) {
         return preferId
@@ -738,6 +742,36 @@ export default function ManagedAgentsPanel({
     if (el && !selectionInside(el)) el.scrollTop = el.scrollHeight
   }, [chatLog, loading, active, permQueue.length])
 
+  /** 刷新后无本地 SSE：按服务端 running 恢复 loading，并在终态清掉「幽灵忙碌」 */
+  function syncLoadingFromAgentStatus(list) {
+    for (const a of list || []) {
+      const id = a?.id
+      if (!id) continue
+      const local = getAgentSession(id)
+      const remoteBusy =
+        a.status === 'running' ||
+        a.status === 'waiting' ||
+        a.status === 'compressing' ||
+        a.status === 'initializing'
+      // 本页正挂着 Ask SSE（有 abort）时不干涉
+      if (local.abort) continue
+      if (remoteBusy && !local.loading) {
+        const startedMs = a.run_started_at
+          ? (a.run_started_at < 1e12 ? a.run_started_at * 1000 : a.run_started_at)
+          : Date.now()
+        patchAgentSession(id, {
+          loading: true,
+          runStartedAt: startedMs,
+          liveActivity: local.liveActivity || { tool: '', summary: '后台运行中…', at: Date.now() },
+        })
+      } else if (!remoteBusy && local.loading && !local.abort) {
+        patchAgentSession(id, {
+          loading: false, runStartedAt: 0, liveActivity: null, interrupting: false,
+        })
+      }
+    }
+  }
+
   useEffect(() => {
     if (!active) return undefined
     let stopped = false
@@ -762,7 +796,9 @@ export default function ManagedAgentsPanel({
       if (!hasBearerToken(headers)) return
       const sid = viewRef.current.selectedId
       // 只刷新名单，不改选中（避免状态变更时对话窗跳到别人）
-      loadAgents()
+      Promise.resolve(loadAgents()).then(() => {
+        syncLoadingFromAgentStatus(viewRef.current.agents)
+      }).catch(() => {})
       if (sid) {
         fetch(`${API}/admin/agents/${sid}/tasks`, { headers })
           .then((r) => r.json())
@@ -770,8 +806,9 @@ export default function ManagedAgentsPanel({
             if (viewRef.current.selectedId === sid) setTasks(d.items || [])
           })
           .catch(() => {})
-        // 与手机同看时近实时拉消息；本机 SSE 流式中跳过，避免打断打字机
-        if (!getAgentSession(sid).loading) {
+        const local = getAgentSession(sid)
+        // 本机 SSE 流式中跳过；刷新后恢复的 loading（无 abort）仍要轮询消息
+        if (!local.loading || !local.abort) {
           void loadDetail(sid, { force: true })
         }
       }
@@ -1238,8 +1275,8 @@ export default function ManagedAgentsPanel({
         const inv = { ...(getAgentSession(agentId).invokes || {}) }
         Object.keys(inv).forEach((k) => { inv[k] = { ...inv[k], collapsed: true } })
         patchAgentSession(agentId, { invokes: inv, liveActivity: null })
-		// 回合结束后从引擎状态接口刷新；Codex 不可将 SSE 的 turn usage 当上下文。
-		void refreshAgentContext(agentId, false)
+		// 回合结束后强制探测：Claude 走 /context 真值；勿用 turn usage 冒充占用。
+		void refreshAgentContext(agentId, true)
       } else if (ev.type === 'invoke_status') {
         const id = String(ev.callee_id)
         const inv = { ...(getAgentSession(agentId).invokes || {}) }
@@ -1479,7 +1516,8 @@ export default function ManagedAgentsPanel({
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
         interrupting: false, liveActivity: null,
       })
-      await refreshAgentContext(agentId, false)
+      // fresh=true：空闲时拉 Claude /context 或 Codex session 真值，避免一直停在 turn usage 估算
+      await refreshAgentContext(agentId, true)
       if (pending || pendingAtts.length) await sendQuestion(agentId, pending || '', pendingAtts)
     }
   }
@@ -1603,8 +1641,21 @@ export default function ManagedAgentsPanel({
     revokePendingImages(pending)
     setPendingImages([])
     if (s.loading) {
+      // 插话：必须 /stop 杀引擎；刷新后 Ask 已脱离 Request.Context，仅 abort SSE 不会中断进程
+      const hadSSE = !!s.abort
       patchAgentSession(id, { pendingInterrupt: q, pendingAttachments: atts, interrupting: true })
-      s.abort?.abort()
+      try {
+        await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
+      } catch { /* ignore */ }
+      if (hadSSE) {
+        s.abort?.abort() // 走 sendQuestion finally 再发插话
+        return
+      }
+      // 刷新后恢复的忙碌：无本地 SSE，停完后直接发
+      patchAgentSession(id, {
+        pendingInterrupt: '', pendingAttachments: [], interrupting: false, loading: false,
+      })
+      await sendQuestion(id, q, atts)
       return
     }
     // 3～5 人（含当前窗口）→ 5s「生成群聊」岔路；否则直接旧并行
@@ -1715,7 +1766,7 @@ export default function ManagedAgentsPanel({
     const local = getAgentSession(a.id)
     if (local.loading && local.runStartedAt) return Math.max(1, Math.round((Date.now() - local.runStartedAt) / 1000))
     if ((a.status === 'running' || a.status === 'compressing' || local.compressing) && a.run_started_at) {
-      return Math.max(1, Math.round((Date.now() - new Date(a.run_started_at).getTime()) / 1000))
+      return Math.max(1, runningElapsedSec(a.run_started_at))
     }
     return 0
   }
@@ -2332,83 +2383,122 @@ export default function ManagedAgentsPanel({
                 onDragOver={onComposerDragOver}
                 onDrop={onComposerDrop}
               >
-                <CapsuleToggle
-                  label="任务规划"
-                  hint="开启后先拆分步骤并展示进度；关闭则跳过规划、直接执行"
-                  checked={taskPlanOn}
-                  disabled={taskPlanSaving || loading}
-                  onChange={toggleTaskPlan}
-                />
-                <div className="ma-composer-wrap">
-                  <GroupChatOfferSheet
-                    open={!!groupOffer}
-                    agents={agents}
-                    memberIds={groupOffer?.memberIds || []}
-                    creating={groupCreating}
-                    onCreate={resolveGroupOfferCreate}
-                    onTimeout={resolveGroupOfferParallel}
+                <div className="ma-composer-shell">
+                  <CapsuleToggle
+                    label="任务规划"
+                    hint="开启后将先拆分步骤并展示进度"
+                    checked={taskPlanOn}
+                    disabled={taskPlanSaving || loading}
+                    onChange={toggleTaskPlan}
                   />
-                  {mentionOpen && mentionCandidates.length > 0 && (
-                    <ul className="ma-mention-list">
-                      {mentionCandidates.map((a, i) => (
-                        <li key={a.id}>
-                          <button
-                            type="button"
-                            className={i === mentionIdx ? 'active' : ''}
-                            onMouseDown={(e) => { e.preventDefault(); insertMention(a) }}
-                          >
-                            <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
-                            {a.name}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
-                  <textarea
-                    ref={composerRef}
-                    className="ma-composer-input"
-                    value={question}
-                    onChange={onComposerChange}
-                    onKeyDown={onKeyDown}
-                    onPaste={onComposerPaste}
-                    onInput={autosizeComposer}
-                    rows={1}
-                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事；可粘贴图片' : '输入任务，Ctrl+Enter 发送，Enter 换行；@ 协作；可粘贴/拖入图片')}
-                    disabled={initializing || !!groupOffer}
-                  />
-                  <ContextRing
-                    used={sess.contextUsed || 0}
-                    window={sess.contextWindow || 0}
-                    estimated={sess.contextEstimated !== false}
-					source={sess.contextSource || ''}
-					updatedAt={sess.contextUpdatedAt || 0}
-					anomaly={sess.contextAnomaly || ''}
-                  />
-                </div>
-                <div className="ma-composer-actions">
-                  {!loading ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={ask}
-                      disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
-                    >
-                      {attachBusy ? '上传中…' : '发送'}
-                    </button>
-                  ) : (
-                    <>
+                  <div className="ma-composer-wrap">
+                    <GroupChatOfferSheet
+                      open={!!groupOffer}
+                      agents={agents}
+                      memberIds={groupOffer?.memberIds || []}
+                      creating={groupCreating}
+                      onCreate={resolveGroupOfferCreate}
+                      onTimeout={resolveGroupOfferParallel}
+                    />
+                    {mentionOpen && mentionCandidates.length > 0 && (
+                      <ul className="ma-mention-list">
+                        {mentionCandidates.map((a, i) => (
+                          <li key={a.id}>
+                            <button
+                              type="button"
+                              className={i === mentionIdx ? 'active' : ''}
+                              onMouseDown={(e) => { e.preventDefault(); insertMention(a) }}
+                            >
+                              <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
+                              {a.name}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
+                    <textarea
+                      ref={composerRef}
+                      className="ma-composer-input"
+                      value={question}
+                      onChange={onComposerChange}
+                      onKeyDown={onKeyDown}
+                      onPaste={onComposerPaste}
+                      onInput={autosizeComposer}
+                      rows={1}
+                      placeholder={
+                        initializing
+                          ? '初始化中，请稍候…'
+                          : (loading
+                            ? '输入插话内容，@ 协作其他同事…'
+                            : '给数字员工分配任务，@ 协作其他同事…')
+                      }
+                      disabled={initializing || !!groupOffer}
+                    />
+                  </div>
+                  <div className="ma-composer-bar">
+                    <div className="ma-composer-bar-left">
+                      <input
+                        ref={composerFileRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        hidden
+                        onChange={(e) => {
+                          ingestComposerImages(e.target.files)
+                          e.target.value = ''
+                        }}
+                      />
                       <button
                         type="button"
-                        className="primary"
-                        onClick={ask}
-                        disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                        className="ma-composer-plus"
+                        title="添加图片"
+                        aria-label="添加图片"
+                        disabled={initializing || !!groupOffer || attachBusy || pendingImages.length >= 6}
+                        onClick={() => composerFileRef.current?.click()}
                       >
-                        {attachBusy ? '上传中…' : (interrupting ? '插话中…' : '插话')}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
                       </button>
-                      <button type="button" className="stop" onClick={stopRun}>终止</button>
-                    </>
-                  )}
+                      <ContextRing
+                        used={sess.contextUsed || 0}
+                        window={sess.contextWindow || 0}
+                        estimated={sess.contextEstimated !== false}
+                        source={sess.contextSource || ''}
+                        updatedAt={sess.contextUpdatedAt || 0}
+                        anomaly={sess.contextAnomaly || ''}
+                      />
+                      <span className="ma-composer-kbd">Ctrl + Enter 发送</span>
+                    </div>
+                    <div className="ma-composer-actions">
+                      {!loading ? (
+                        <button
+                          type="button"
+                          className="primary ma-composer-send"
+                          onClick={ask}
+                          disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                        >
+                          {attachBusy ? '上传中…' : '发送'}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="ma-composer-interrupt"
+                            onClick={ask}
+                            disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                          >
+                            {attachBusy ? '上传中…' : (interrupting ? '插话中…' : '插话')}
+                          </button>
+                          <button type="button" className="stop ma-composer-stop" onClick={stopRun} title="终止">
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
+                            <span>终止</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
               )}
@@ -3186,37 +3276,52 @@ function RunStatus({ interrupting, activity, runSec, taskTokens, jellyColor = 'b
   )
 }
 
-/** 输入框右下角上下文占比圆环；百分比仅悬停 title 展示 */
+/** 上下文占比圆环：探测不到则整组件隐藏（不展示 — / !） */
 function ContextRing({ used, window: win, estimated = true, source = '', updatedAt = 0, anomaly = '' }) {
-  const size = 22
+  const src = String(source || '').trim().toLowerCase()
+  const known = win > 0 && src !== 'unavailable' && (src !== '' || used > 0)
+  if (!known) return null
+
+  const size = 32
   const stroke = 2.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
-  const rawPct = win > 0 ? (used / win) : 0
-	// SVG 只能画完整圆；原始占比不截断，异常仍在 title 与 class 中完整保留。
-  const dash = c * Math.min(1, Math.max(0, rawPct))
-  const pctNum = Math.round(rawPct * 100)
-	const sourceLabel = source === 'codex_session' ? 'Codex Session 快照' : source
-	const timeLabel = updatedAt > 0 ? `\n更新时间：${new Date(updatedAt * 1000).toLocaleString()}` : ''
-  const title = win > 0
-    ? `${estimated ? '约 ' : ''}${pctNum}%${sourceLabel ? `\n来源：${sourceLabel}` : ''}${timeLabel}${anomaly ? `\n异常：${anomaly}` : ''}`
-    : '上下文用量未知'
+  const rawPct = used / win
+  const over = rawPct > 1 || !!anomaly
+  // 环长始终封顶；超窗数字封顶 100，避免叹号/破环
+  const ringPct = Math.min(1, Math.max(0, rawPct))
+  const dash = c * ringPct
+  const labelPct = Math.min(100, Math.round(ringPct * 100))
+  const sourceLabel = src === 'codex_session'
+    ? 'Codex Session 快照'
+    : (src === 'probe' ? 'Claude /context' : source)
+  const timeLabel = updatedAt > 0 ? `\n更新时间：${new Date(updatedAt * 1000).toLocaleString()}` : ''
+  const overHint = over ? `\n原始占比 ${Math.round(rawPct * 100)}%（环内已按窗口封顶）` : ''
+  const title = `${estimated ? '约 ' : ''}${labelPct}%${overHint}${sourceLabel ? `\n来源：${sourceLabel}` : ''}${timeLabel}${anomaly ? `\n异常：${anomaly}` : ''}`
+  const tone = ringPct > 0.85 ? 'hot' : ringPct > 0.6 ? 'warm' : 'ok'
   return (
-    <div className={`ma-ctx-ring${estimated ? ' is-estimated' : ''}${anomaly || rawPct > 1 ? ' is-anomaly' : ''}`} title={title} aria-label={title}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#333" strokeWidth={stroke} />
+    <div
+      className={`ma-ctx-ring tone-${tone}${estimated ? ' is-estimated' : ''}${over ? ' is-anomaly' : ''}`}
+      title={title}
+      aria-label={title}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#3a3d45" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
           fill="none"
-          stroke="#fff"
+          stroke={tone === 'hot' ? '#ee7676' : tone === 'warm' ? '#e5b75a' : '#8eb4e8'}
           strokeWidth={stroke}
           strokeDasharray={`${dash} ${c - dash}`}
           strokeLinecap="round"
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
+      <span className={`ma-ctx-ring-pct${labelPct >= 100 ? ' is-full' : ''}`}>
+        {labelPct}<small>%</small>
+      </span>
     </div>
   )
 }

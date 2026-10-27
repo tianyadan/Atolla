@@ -41,7 +41,13 @@ fi
 echo "==> 启动 Go 后端 (端口 $PORT)"
 cd "$ROOT/server"
 export AVATAR_ADDR="${AVATAR_ADDR:-:$PORT}"
-export AVATAR_DB_DSN="${AVATAR_DB_DSN:-root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local}"
+export AVATAR_DB_DRIVER="${AVATAR_DB_DRIVER:-sqlite}"
+if [ "$AVATAR_DB_DRIVER" = "mysql" ]; then
+  export AVATAR_DB_DSN="${AVATAR_DB_DSN:-root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local}"
+else
+  mkdir -p "$ROOT/data"
+  export AVATAR_DB_DSN="${AVATAR_DB_DSN:-$ROOT/data/atolla.db}"
+fi
 export AVATAR_CLAUDE_BIN="${AVATAR_CLAUDE_BIN:-claude}"
 export AVATAR_ALLOWED_IPS="${AVATAR_ALLOWED_IPS:-127.0.0.1}"
 export AVATAR_WORKSPACE_ROOT="${AVATAR_WORKSPACE_ROOT:-/Users/tianhaowen/Desktop/code_work_space}"

@@ -4,6 +4,7 @@ import JellyAvatar from './JellyAvatar.jsx'
 import { resolveJellyColor } from './jellyColor.js'
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import DismissAgentModal from './DismissAgentModal.jsx'
+import { CURRENT_VERSION } from './changelog.js'
 import {
   conversationDisplayTitle,
   conversationNeedsActivation,
@@ -15,11 +16,23 @@ import {
 } from './modernWorkspaceModel.js'
 
 const API = '/api'
-const MORE_ITEMS = [
-  ['agents-manage', '数字人管理'], ['group-chats', '群聊'], ['plans', '项目协作'],
-  ['audit', '对话审计'], ['audit-agents', '审计'], ['legacy-memories', '数字员工记忆'],
-  ['remote-relay', '远程中继'], ['network-allowlist', '网络白名单'], ['settings', '设置'],
-  ['manual', '产品手册'], ['changelog', '版本记录'],
+const MORE_GROUPS = [
+  [
+    { id: 'agents-manage', label: '数字人管理', icon: 'robot' },
+    { id: 'group-chats', label: '群聊', icon: 'chat' },
+    { id: 'plans', label: '项目协作', icon: 'folder' },
+    { id: 'audit', label: '对话审计', icon: 'shield' },
+  ],
+  [
+    { id: 'audit-agents', label: '审计', icon: 'document' },
+    { id: 'legacy-memories', label: '数字员工记忆', icon: 'clock' },
+    { id: 'remote-relay', label: '远程中继', icon: 'monitor' },
+    { id: 'network-allowlist', label: '网络白名单', icon: 'globe' },
+  ],
+  [
+    { id: 'settings', label: '设置', icon: 'settings' },
+    { id: 'manual', label: '产品手册', icon: 'book' },
+  ],
 ]
 
 export default function ModernWorkspace({
@@ -56,9 +69,11 @@ export default function ModernWorkspace({
   const [error, setError] = useState('')
   const [hoverAgent, setHoverAgent] = useState(null)
   const accountCloseTimer = useRef(0)
+  const moreMenuRef = useRef(null)
 
   function openAccountMenu() {
     window.clearTimeout(accountCloseTimer.current)
+    setMoreOpen(false)
     setAccountOpen(true)
   }
 
@@ -69,6 +84,27 @@ export default function ModernWorkspace({
   }
 
   useEffect(() => () => window.clearTimeout(accountCloseTimer.current), [])
+
+  useEffect(() => {
+    if (!moreOpen) return undefined
+    function closeOnOutside(event) {
+      if (!moreMenuRef.current?.contains(event.target)) setMoreOpen(false)
+    }
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setMoreOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [moreOpen])
+
+  function openMoreModule(id) {
+    setMoreOpen(false)
+    onOpenMenu?.(id)
+  }
 
   const request = useCallback(async (url, options = {}) => {
     const response = await fetch(url, { ...options, headers: authHeaders(options.headers || {}) })
@@ -174,14 +210,46 @@ export default function ModernWorkspace({
       </button>
       <aside className={`modern-recents${drawerOpen ? ' is-open' : ''}`}>
         <div className="modern-sidebar-top">
-          <button type="button" className="modern-new-chat" onClick={() => setHireGroupOpen(true)} title="招聘新员工"><ModernIcon name="plus" /><span>招聘新员工</span></button>
-          <button type="button" className="modern-collapse-toggle" onClick={() => onSidebarCollapsedChange?.(!sidebarCollapsed)} title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'} aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}><ModernIcon name="panel" /></button>
+          <div className="modern-sidebar-brand" title="数字员工">
+            <ModernIcon name="agents" size={18} />
+            <strong>数字员工</strong>
+          </div>
+          <div className="modern-sidebar-actions">
+            <button
+              type="button"
+              className="modern-icon-btn modern-hire-btn"
+              onClick={() => setHireGroupOpen(true)}
+              title="招聘新员工"
+              aria-label="招聘新员工"
+            >
+              <ModernIcon name="plus" size={18} />
+            </button>
+            <button
+              type="button"
+              className="modern-collapse-toggle"
+              onClick={() => onSidebarCollapsedChange?.(!sidebarCollapsed)}
+              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              <ModernIcon name="panel" size={18} />
+            </button>
+          </div>
         </div>
-        <label className="modern-search"><ModernIcon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索数字人名称" /></label>
-        <select className="modern-group-filter" value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label="选择分组">
-          <option value="">全部分组</option>
-          {groupsAvailable.map((name) => <option key={name} value={name}>{name}</option>)}
-        </select>
+        <label className="modern-search">
+          <ModernIcon name="search" size={16} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索数字人或会话"
+          />
+        </label>
+        <label className="modern-group-filter">
+          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label="选择分组">
+            <option value="">全部分组</option>
+            {groupsAvailable.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <ModernIcon name="chevron-down" size={16} />
+        </label>
         <div className="modern-recent-scroll">
           {groups.map((group) => (
             <div className="modern-recent-group" key={group.label}>
@@ -197,7 +265,7 @@ export default function ModernWorkspace({
                         onMouseEnter={(event) => showAgentTooltip(event, item, state)}
                         onMouseLeave={() => setHoverAgent(null)}
                       >
-                        <JellyAvatar color={resolveJellyColor({ id: item.agent_id, jelly_color: item.jelly_color })} size={28} state={state === 'error' ? 'error' : state === 'approval' ? 'waiting' : state === 'running' ? 'working' : 'idle'} />
+                        <JellyAvatar color={resolveJellyColor({ id: item.agent_id, jelly_color: item.jelly_color })} size={24} state={state === 'error' ? 'error' : state === 'approval' ? 'waiting' : state === 'running' ? 'working' : 'idle'} />
                         <span className={`modern-state state-${state}`} />
                       </span>
                       <span><strong>{conversationDisplayTitle(item)}</strong><small>{item.agent_name} · {item.group_name}</small></span>
@@ -247,12 +315,58 @@ export default function ModernWorkspace({
               </div>
             )}
           </div>
-          <button type="button" className="modern-icon-btn" onClick={() => setMoreOpen((value) => !value)} aria-label="更多功能"><ModernIcon name="menu" /></button>
-          {moreOpen && (
-            <div className="modern-more-menu">
-              {MORE_ITEMS.map(([id, label]) => <button type="button" key={id} onClick={() => { setMoreOpen(false); onOpenMenu?.(id) }}>{label}</button>)}
+          <div className={`modern-more-wrap${moreOpen ? ' is-open' : ''}`} ref={moreMenuRef}>
+            <button
+              type="button"
+              className={`modern-icon-btn modern-more-trigger${moreOpen ? ' is-open' : ''}`}
+              onClick={() => {
+                setAccountOpen(false)
+                setMoreOpen((value) => !value)
+              }}
+              aria-label="更多功能"
+              aria-expanded={moreOpen}
+              aria-controls="modern-more-menu"
+            >
+              <ModernIcon name="menu" />
+            </button>
+            <div
+              id="modern-more-menu"
+              className={`modern-more-menu${moreOpen ? ' is-open' : ''}`}
+              role="menu"
+              aria-hidden={!moreOpen}
+            >
+              {MORE_GROUPS.map((group, groupIndex) => (
+                <div className="modern-more-group" key={group[0].id}>
+                  {group.map((item, itemIndex) => (
+                    <button
+                      type="button"
+                      className="modern-more-item"
+                      role="menuitem"
+                      tabIndex={moreOpen ? 0 : -1}
+                      key={item.id}
+                      style={{ '--menu-index': groupIndex * 4 + itemIndex }}
+                      onClick={() => openMoreModule(item.id)}
+                    >
+                      <ModernIcon name={item.icon} size={18} />
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="modern-more-version"
+                role="menuitem"
+                tabIndex={moreOpen ? 0 : -1}
+                onClick={() => openMoreModule('changelog')}
+                title="查看版本记录"
+              >
+                <ModernIcon name="info" size={17} />
+                <span>Atolla</span>
+                <small>{CURRENT_VERSION}</small>
+              </button>
             </div>
-          )}
+          </div>
         </div>
       </aside>
       {hoverAgent && (

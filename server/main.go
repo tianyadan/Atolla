@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,13 +80,31 @@ func watchPostRoutes(slot *engineSlot, cfg config.Config, h *handler.Handler) {
 	}
 }
 
+// redactDSN 日志里隐藏 MySQL 密码；SQLite 只打路径。
+func redactDSN(driver, dsn string) string {
+	if driver == "sqlite" || driver == "sqlite3" {
+		return dsn
+	}
+	// user:pass@tcp(...) → user:***@tcp(...)
+	at := strings.Index(dsn, "@")
+	if at <= 0 {
+		return dsn
+	}
+	left := dsn[:at]
+	if i := strings.Index(left, ":"); i >= 0 {
+		left = left[:i+1] + "***"
+	}
+	return left + dsn[at:]
+}
+
 func main() {
 	cfg := config.Load()
 
-	st, err := store.New(cfg.DBDSN)
+	st, err := store.NewWithDriver(cfg.DBDriver, cfg.DBDSN)
 	if err != nil {
-		log.Fatalf("connect mysql: %v", err)
+		log.Fatalf("connect db (%s): %v", cfg.DBDriver, err)
 	}
+	log.Printf("db driver=%s dsn=%s", cfg.DBDriver, redactDSN(cfg.DBDriver, cfg.DBDSN))
 
 	svc := service.New(cfg, st)
 	defer svc.Shutdown()

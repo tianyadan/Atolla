@@ -62,7 +62,7 @@ func (s *Store) CreateWorkflowDefinition(ctx context.Context, name, desc, graphJ
 		graphJSON = `{"nodes":[],"edges":[]}`
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO workflow_definitions (name, description, graph_json) VALUES (?,?,CAST(? AS JSON))`,
+		`INSERT INTO workflow_definitions (name, description, graph_json) VALUES (?,?,`+s.jsonParam()+`)`,
 		name, desc, graphJSON)
 	if err != nil {
 		return 0, err
@@ -73,7 +73,7 @@ func (s *Store) CreateWorkflowDefinition(ctx context.Context, name, desc, graphJ
 // UpdateWorkflowDefinition 更新编排。
 func (s *Store) UpdateWorkflowDefinition(ctx context.Context, id int64, name, desc, graphJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE workflow_definitions SET name=?, description=?, graph_json=CAST(? AS JSON), version=version+1
+		UPDATE workflow_definitions SET name=?, description=?, `+s.jsonColAssign("graph_json")+`, version=version+1
 		WHERE id=?`, name, desc, graphJSON, id)
 	return err
 }
@@ -246,8 +246,9 @@ func (s *Store) ListWorkflowRuns(ctx context.Context, defID int64, limit int) ([
 // UpdateWorkflowRunStatus 更新运行状态与失败信息。
 func (s *Store) UpdateWorkflowRunStatus(ctx context.Context, id int64, status, failNode, failReason string, currentJSON, progressJSON, parallelJSON string) error {
 	fin := status == "success" || status == "failed" || status == "stopped" || status == "interrupted"
+	jp := s.jsonParam()
 	q := `UPDATE workflow_runs SET status=?, fail_node_id=?, fail_reason=?,
-		current_node_ids_json=CAST(? AS JSON), progress_json=CAST(? AS JSON), parallel_state_json=CAST(? AS JSON)`
+		current_node_ids_json=` + jp + `, progress_json=` + jp + `, parallel_state_json=` + jp
 	args := []any{status, failNode, failReason, nullJSON(currentJSON), nullJSON(progressJSON), nullJSON(parallelJSON)}
 	if fin {
 		q += `, finished_at=NOW()`
@@ -274,7 +275,7 @@ func (s *Store) InsertNodeExecution(ctx context.Context, ne *NodeExecution) (int
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO node_executions
 		(run_id, node_id, attempt, node_type, agent_id, status, conversation_id, input_json, parent_attempt_id, started_at)
-		VALUES (?,?,?,?,?,?,?,CAST(? AS JSON),?,NOW())`,
+		VALUES (?,?,?,?,?,?,?,`+s.jsonParam()+`,?,NOW())`,
 		ne.RunID, ne.NodeID, ne.Attempt, ne.NodeType, ne.AgentID, ne.Status, ne.ConversationID, in,
 		nullInt64(ne.ParentAttemptID))
 	if err != nil {
@@ -297,7 +298,7 @@ func (s *Store) UpdateNodeExecution(ctx context.Context, id int64, status, outJS
 		out = "null"
 	}
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE node_executions SET status=?, output_json=CAST(? AS JSON), error_text=?,
+		UPDATE node_executions SET status=?, `+s.jsonColAssign("output_json")+`, error_text=?,
 		conversation_id=IFNULL(NULLIF(?,0), conversation_id),
 		finished_at=IF(? IN ('success','failed','skipped','stopped','interrupted'), NOW(), finished_at)
 		WHERE id=?`, status, out, errText, convID, status, id)
@@ -310,7 +311,7 @@ func (s *Store) SetNodeExecutionEvents(ctx context.Context, id int64, eventsJSON
 		eventsJSON = "[]"
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE node_executions SET events_json=CAST(? AS JSON) WHERE id=?`, eventsJSON, id)
+		`UPDATE node_executions SET `+s.jsonColAssign("events_json")+` WHERE id=?`, eventsJSON, id)
 	return err
 }
 

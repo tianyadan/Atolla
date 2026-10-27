@@ -319,23 +319,21 @@ func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, que
 			if meta.SessionID != "" {
 				lastMeta.SessionID = StickySessionID(lastMeta.SessionID, meta.SessionID)
 			}
-			if meta.InputTokens > 0 || meta.OutputTokens > 0 || meta.ContextWindow > 0 {
+			// usage 事件一次性对齐字段；允许 cache=0 覆盖旧值，避免多段 assistant 把 cache_read 粘连叠加虚高。
+			hadUsage := meta.InputTokens > 0 || meta.OutputTokens > 0 || meta.CacheRead > 0 || meta.CacheWrite > 0
+			if hadUsage {
 				if meta.InputTokens > 0 {
 					lastMeta.InputTokens = meta.InputTokens
 				}
 				if meta.OutputTokens > 0 {
 					lastMeta.OutputTokens = meta.OutputTokens
 				}
-				if meta.CacheRead > 0 {
-					lastMeta.CacheRead = meta.CacheRead
-				}
-				if meta.CacheWrite > 0 {
-					lastMeta.CacheWrite = meta.CacheWrite
-				}
-				if meta.ContextWindow > 0 {
-					lastMeta.ContextWindow = meta.ContextWindow
-				}
-				lastMeta.UsedTokens = lastMeta.InputTokens + lastMeta.CacheRead
+				lastMeta.CacheRead = meta.CacheRead
+				lastMeta.CacheWrite = meta.CacheWrite
+				lastMeta.UsedTokens = meta.UsedTokens
+			}
+			if meta.ContextWindow > 0 {
+				lastMeta.ContextWindow = meta.ContextWindow
 			}
 			if onMeta != nil {
 				onMeta(lastMeta)

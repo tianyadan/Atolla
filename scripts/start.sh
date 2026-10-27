@@ -1,40 +1,75 @@
 #!/usr/bin/env bash
-# 启动 Atolla: MySQL(docker) + Go 后端 + React 前端
-# 用法: scripts/start.sh [--skip-db]
+# 启动 Atolla: 默认 SQLite（免 Docker）；可选 MySQL
+# 用法:
+#   scripts/start.sh              # SQLite 默认
+#   scripts/start.sh --mysql      # 启动 docker MySQL 并连接
+#   AVATAR_DB_DRIVER=mysql scripts/start.sh --mysql
 set -e
 cd "$(dirname "$0")/.."
 
 # 加载仓库根 .env（密钥等，勿提交）
-if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . ./.env
-  set +a
-fi
+# 不用 source：DSN 等含 tcp(...)、&、? 时会被 shell 解析报错
+load_dotenv() {
+  local file="$1" line key val
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    # 跳过空行与注释
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    # 只接受 KEY=VALUE
+    case "$line" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    # 去掉 KEY 两侧空白
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*) continue ;;
+    esac
+    # 去掉 VALUE 两侧成对引号
+    if [ "${#val}" -ge 2 ]; then
+      case "$val" in
+        \'*\') val="${val:1:${#val}-2}" ;;
+        \"*\") val="${val:1:${#val}-2}" ;;
+      esac
+    fi
+    export "$key=$val"
+  done < "$file"
+}
+load_dotenv .env
 
-MODE="${1:-all}"
+MODE="${1:-}"
+DRIVER="${AVATAR_DB_DRIVER:-sqlite}"
 
-if [ "$MODE" != "--skip-db" ]; then
+if [ "$MODE" = "--mysql" ] || [ "$DRIVER" = "mysql" ]; then
+  DRIVER=mysql
   echo "==> 启动 MySQL (docker compose)"
   docker compose up -d mysql
+  echo "==> 等待 MySQL 就绪"
+  for i in {1..30}; do
+    if docker exec atolla-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1 \
+      || docker exec colleague-avatar-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  export AVATAR_DB_DSN="${AVATAR_DB_DSN:-root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local}"
 else
-  echo "==> 跳过 MySQL (假定已启动)"
+  DRIVER=sqlite
+  mkdir -p data
+  # 绝对路径，避免 cd server 后相对路径漂移
+  export AVATAR_DB_DSN="${AVATAR_DB_DSN:-$(pwd)/data/atolla.db}"
+  echo "==> 使用 SQLite: ${AVATAR_DB_DSN}"
 fi
 
-echo "==> 等待 MySQL 就绪"
-for i in {1..30}; do
-  # 兼容旧容器名 colleague-avatar-mysql
-  if docker exec atolla-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1 \
-    || docker exec colleague-avatar-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-echo "==> 启动 Go 后端 (端口 8080)"
+echo "==> 启动 Go 后端 (端口 8080, driver=${DRIVER})"
 cd server
+export AVATAR_DB_DRIVER="${DRIVER}"
 export AVATAR_ADDR="${AVATAR_ADDR:-:8080}"
-export AVATAR_DB_DSN="${AVATAR_DB_DSN:-root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local}"
 export AVATAR_CLAUDE_BIN="${AVATAR_CLAUDE_BIN:-claude}"
 # 局域网 IP 白名单: 留空=放行全部; 填逗号分隔的 IP,如 AVATAR_ALLOWED_IPS=192.168.1.10,127.0.0.1
 # 本机回环：浏览器/岛可能走 127.0.0.1 或 ::1（localhost）
@@ -79,4 +114,4 @@ trap "kill $SERVER_PID 2>/dev/null" EXIT
 sleep 2
 echo "==> 启动 React 前端 (vite, 局域网可访问)"
 cd ../web
-npm run dev
+npm run dev -- --host 0.0.0.0

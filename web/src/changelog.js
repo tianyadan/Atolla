@@ -1,6 +1,16 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.5.15',
+    date: '2026-10-26',
+    items: [
+      '现代侧栏改为紧凑头栏：标题「数字员工」+ 小加号招聘 / 收起，去掉大块「招聘新员工」按钮',
+      '人才市场弹层与岗位卡片整体缩小（头像/字号/间距），降低招聘流程视觉压迫感',
+      '工作引擎安装命令锁定已验证版本：Claude Code 2.1.185、Codex 0.153.4、Cursor Agent 2026.10.22-27dcf5f（不再安装浮动 latest）',
+      'Cursor Agent 安装改为直连 downloads.cursor.com 指定版本包，避免 cursor.com/install 脚本漂移',
+    ],
+  },
+  {
     version: 'v0.5.14',
     date: '2026-10-24',
     items: [

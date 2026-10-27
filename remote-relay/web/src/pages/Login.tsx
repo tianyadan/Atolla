@@ -8,11 +8,11 @@ import {
   navigateToDeepLinkChat,
 } from '../utils/deepLink'
 
-/** 已登录时的落地：有待处理深链则进对话（带列表返回栈），否则进实例列表 */
+/** 已登录时的落地：有待处理深链则进目标对话，否则交给首页恢复最近对话。 */
 function resumeAfterAuth(navigate: ReturnType<typeof useNavigate>): void {
   const target = loadPendingDeepLink()
   if (!target) {
-    navigate('/instances', { replace: true })
+    navigate('/', { replace: true })
     return
   }
   if (!hasUnlockToken(target.instanceId)) {

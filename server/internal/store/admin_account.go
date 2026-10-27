@@ -14,7 +14,7 @@ type AdminAccount struct {
 
 // EnsureAdminAccountSchema 创建管理员账号表。
 func (s *Store) EnsureAdminAccountSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS admin_account (
 		  id            BIGINT       NOT NULL AUTO_INCREMENT,
 		  username      VARCHAR(64)  NOT NULL,

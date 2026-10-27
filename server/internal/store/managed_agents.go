@@ -645,24 +645,15 @@ func (s *Store) EnsureTaskUnreadSchema(ctx context.Context) error {
 		name string
 		ddl  string
 	}{
-		{"task_unread", `ALTER TABLE managed_agents ADD COLUMN task_unread TINYINT NOT NULL DEFAULT 0 AFTER last_run_ms`},
-		{"task_unread_kind", `ALTER TABLE managed_agents ADD COLUMN task_unread_kind VARCHAR(16) NOT NULL DEFAULT '' AFTER task_unread`},
-		{"task_unread_at", `ALTER TABLE managed_agents ADD COLUMN task_unread_at DATETIME NULL AFTER task_unread_kind`},
-		{"task_unread_duration_ms", `ALTER TABLE managed_agents ADD COLUMN task_unread_duration_ms INT NULL AFTER task_unread_at`},
-		{"task_unread_summary", `ALTER TABLE managed_agents ADD COLUMN task_unread_summary TEXT NULL AFTER task_unread_duration_ms`},
+		{"task_unread", `ALTER TABLE managed_agents ADD COLUMN task_unread TINYINT NOT NULL DEFAULT 0`},
+		{"task_unread_kind", `ALTER TABLE managed_agents ADD COLUMN task_unread_kind VARCHAR(16) NOT NULL DEFAULT ''`},
+		{"task_unread_at", `ALTER TABLE managed_agents ADD COLUMN task_unread_at DATETIME NULL`},
+		{"task_unread_duration_ms", `ALTER TABLE managed_agents ADD COLUMN task_unread_duration_ms INT NULL`},
+		{"task_unread_summary", `ALTER TABLE managed_agents ADD COLUMN task_unread_summary TEXT NULL`},
 	}
 	for _, col := range columns {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = ?`, col.name,
-		).Scan(&n); err != nil {
+		if err := s.addColumnIfMissing(ctx, "managed_agents", col.name, col.ddl); err != nil {
 			return err
-		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
-				return err
-			}
 		}
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE managed_agents

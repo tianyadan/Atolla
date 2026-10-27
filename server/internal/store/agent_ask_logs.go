@@ -116,7 +116,7 @@ type AgentAskErrorRow struct {
 
 // ensureAgentAskAuditSchema 创建数字员工审计表。
 func (s *Store) ensureAgentAskAuditSchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_ask_logs (
 		  id                BIGINT        NOT NULL AUTO_INCREMENT,
 		  agent_id          BIGINT        NOT NULL,
@@ -140,7 +140,7 @@ func (s *Store) ensureAgentAskAuditSchema(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_ask_tool_calls (
 		  id           BIGINT       NOT NULL AUTO_INCREMENT,
 		  ask_log_id   BIGINT       NOT NULL,

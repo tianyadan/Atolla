@@ -64,7 +64,7 @@ type AgentLegacyMemoryMount struct {
 
 // EnsureLegacyMemorySchema creates tables for dismiss memory books.
 func (s *Store) EnsureLegacyMemorySchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS legacy_memories (
   id BIGINT NOT NULL AUTO_INCREMENT,
   source_agent_id BIGINT NOT NULL DEFAULT 0,
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS legacy_memories (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS agent_legacy_memory_mounts (
   id BIGINT NOT NULL AUTO_INCREMENT,
   agent_id BIGINT NOT NULL,
@@ -162,7 +162,7 @@ func (s *Store) InsertLegacyMemory(ctx context.Context, m *LegacyMemory) (int64,
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO legacy_memories
  (source_agent_id, agent_name, job_title, avatar_url, engine, sections_json, body_markdown, materials_json, status, error_message)
-VALUES (?,?,?,?,?,CAST(? AS JSON),?,?,?,?)`,
+VALUES (?,?,?,?,?,`+s.jsonParam()+`,?,?,?,?)`,
 		m.SourceAgentID, m.AgentName, m.JobTitle, m.AvatarURL, m.Engine,
 		sec, body, nullIfEmpty(mats), m.Status, m.ErrorMessage)
 	if err != nil {
