@@ -913,8 +913,6 @@ export function ChatHistoryPage() {
           instanceId={instanceId}
           agent={agent}
           busy={busy}
-          queueBadge={tqActive}
-          onOpenQueue={() => setTqListOpen(true)}
           onOpenAgentSettings={() => setAgentSettingsOpen(true)}
         />
       }
@@ -1105,6 +1103,19 @@ export function ChatHistoryPage() {
             >
               命令审批设置
               {(approveAllOn || autoReviewOn) && <span className="approve-dot" aria-hidden />}
+            </button>
+            {/* 队列入口：与审批设置同高小按钮，避免挤歪顶栏实例切换 */}
+            <button
+              type="button"
+              className={`btn outline small tq-composer-btn${tqActive > 0 ? ' has-badge' : ''}`}
+              disabled={!agent}
+              aria-label={t('tq.badge')}
+              onClick={() => setTqListOpen(true)}
+            >
+              Q
+              {tqActive > 0 ? (
+                <em className="tq-composer-count">{tqActive > 9 ? '9+' : tqActive}</em>
+              ) : null}
             </button>
           </div>
           <div className="chat-composer-shell">

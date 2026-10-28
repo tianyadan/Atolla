@@ -4100,18 +4100,25 @@ html.force-light .instances-dark {
   background: #1a1a1a;
   color: #e9e5ff;
 }
-.tq-badge-btn {
+/* 输入区旁队列小按钮：高度对齐「命令审批设置」 */
+.tq-composer-btn {
   position: relative;
-}
-.tq-badge-label {
-  font-size: 12px;
+  width: auto;
+  min-width: 2rem;
+  font-size: 0.8rem;
   font-weight: 700;
+  padding: 0.25rem 0.55rem;
   color: #c4b5fd;
+  border-color: #4c3b78;
 }
-.tq-badge-count {
+.tq-composer-btn.has-badge {
+  border-color: #7c3aed;
+  color: #e9e5ff;
+}
+.tq-composer-count {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: -5px;
+  right: -5px;
   min-width: 14px;
   height: 14px;
   padding: 0 3px;
@@ -4121,6 +4128,7 @@ html.force-light .instances-dark {
   font-size: 9px;
   line-height: 14px;
   font-style: normal;
+  font-weight: 600;
   text-align: center;
 }
 .tq-list-mask {

@@ -1,37 +1,60 @@
 /**
- * 结束后用 DB 校准聊天时，若库被延迟 compact 清短，保留本地更长的 assistant。
- * 本地命令轨迹更完整时也优先本地，避免过程气泡被短页 DB 冲掉。
- * 若本地因「流式 + result 双推」把同一段拼了两遍，则回退 DB。
+ * 结束后用 DB 校准聊天时：
+ * - 按 id 合并，保证手机新写入的消息能进 PC 轨（不再因本地命令气泡更多而整段丢弃 DB）
+ * - 同 id 的 assistant：本地更长则保留本地（DB 被 compact 清短时）
+ * - 本地流式重复拼接时回退 DB
+ * - 无 id 的本地气泡（流式 assistant / status）挂在末尾
  */
 export function coalesceChatLog(local = [], fromDb = []) {
-  const isRealAsst = (m) =>
-    m?.role === 'assistant'
-    && (m.content || '').trim()
-    && !(m.content || '').includes('上下文已由引擎压缩')
+  if (!local.length) return fromDb
+  if (!fromDb.length) return local
 
-  const lastLocal = [...local].reverse().find(isRealAsst)
-  const lastDb = [...fromDb].reverse().find(isRealAsst)
-  const localText = (lastLocal?.content || '').trim()
-  const dbText = (lastDb?.content || '').trim()
-  const localLen = localText.length
-  const dbLen = dbText.length
-  const localCmds = local.filter((m) => m?.role === 'command').length
-  const dbCmds = fromDb.filter((m) => m?.role === 'command').length
-
-  // 本地把同一段结论拼了两遍（或本地 = DB正文 + 再拼一遍）→ 信 DB
-  if (looksLikeDuplicatedAssistant(localText, dbText)) {
-    return fromDb
+  const byId = new Map()
+  for (const m of fromDb) {
+    if (m?.id == null) continue
+    byId.set(m.id, m)
   }
 
-  // 本地流式正文更长：说明 DB 被 compact 清掉或尚未写入完整回复
-  if (localLen > 0 && localLen > dbLen) {
-    return local
+  const localOnlyNoId = []
+  for (const m of local) {
+    if (m?.id == null) {
+      // 流式中的无 id 气泡；已落库同内容时不必重复挂
+      localOnlyNoId.push(m)
+      continue
+    }
+    const db = byId.get(m.id)
+    if (!db) {
+      // 当前页 DB 未带回的更早消息（本地曾 loadOlder / 完整轨）
+      byId.set(m.id, m)
+      continue
+    }
+    if (m.role === 'assistant') {
+      const localText = (m.content || '').trim()
+      const dbText = (db.content || '').trim()
+      if (looksLikeDuplicatedAssistant(localText, dbText)) {
+        byId.set(m.id, db)
+      } else if (localText.length > dbText.length) {
+        byId.set(m.id, { ...db, content: m.content, replySec: m.replySec ?? db.replySec })
+      }
+    }
   }
-  // 本地命令过程更完整（且回复不更短）：保留执行轨迹
-  if (localCmds > dbCmds && localLen >= dbLen) {
-    return local
+
+  const merged = [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id))
+
+  // 无 id 本地气泡：仅保留尚未被末尾同角色正文覆盖的（流式中）
+  const lastMerged = merged[merged.length - 1]
+  for (const m of localOnlyNoId) {
+    if (
+      m.role === 'assistant'
+      && lastMerged?.role === 'assistant'
+      && (lastMerged.content || '').includes((m.content || '').trim().slice(0, 40))
+      && (m.content || '').trim().length <= (lastMerged.content || '').trim().length
+    ) {
+      continue
+    }
+    merged.push(m)
   }
-  return fromDb
+  return merged
 }
 
 /** 检测流式重复拼接：同一长句块出现两次，或本地 = 结论 +（过程+结论/DB） */

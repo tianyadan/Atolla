@@ -27,9 +27,6 @@ type Props = {
   instanceId: string
   agent: PublicMirrorAgent | null
   busy?: boolean
-  /** 任务队列活跃数角标 */
-  queueBadge?: number
-  onOpenQueue?: () => void
   onOpenAgentSettings?: () => void
 }
 
@@ -38,8 +35,6 @@ export function MobileChatHeader({
   instanceId,
   agent,
   busy,
-  queueBadge = 0,
-  onOpenQueue,
   onOpenAgentSettings,
 }: Props) {
   const navigate = useNavigate()
@@ -199,20 +194,6 @@ export function MobileChatHeader({
             ) : null}
           </button>
         </div>
-
-        {queueBadge > 0 || onOpenQueue ? (
-          <button
-            type="button"
-            className={`mobile-chat-nav-button tq-badge-btn${queueBadge > 0 ? ' has-badge' : ''}`}
-            aria-label="任务队列"
-            onClick={() => onOpenQueue?.()}
-          >
-            <span className="tq-badge-label">Q</span>
-            {queueBadge > 0 ? (
-              <em className="tq-badge-count">{queueBadge > 9 ? '9+' : queueBadge}</em>
-            ) : null}
-          </button>
-        ) : null}
 
         <button
           type="button"
