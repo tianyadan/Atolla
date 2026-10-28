@@ -124,6 +124,7 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agents/:id/task-queue/continue", h.AdminAgentTaskQueueContinue)
 			adm.POST("/admin/agents/:id/task-queue/clear-done", h.AdminAgentTaskQueueClearDone)
 			adm.POST("/admin/agents/:id/task-queue/:taskId/cancel", h.AdminAgentTaskQueueCancel)
+			adm.POST("/admin/agents/:id/task-queue/:taskId/update", h.AdminAgentTaskQueueUpdate)
 			adm.POST("/admin/agents/:id/mark-read", h.AdminAgentsMarkRead)
 			adm.POST("/admin/agents/:id/ensure-conversation", h.AdminAgentsEnsureConversation)
 			adm.POST("/admin/agents/:id/clear", h.AdminAgentsClear)

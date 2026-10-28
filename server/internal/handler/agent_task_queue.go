@@ -121,6 +121,22 @@ func (h *Handler) AdminAgentTaskQueueCancel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// AdminAgentTaskQueueUpdate 改写未执行项文案（queued/paused）。
+func (h *Handler) AdminAgentTaskQueueUpdate(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	taskID, _ := strconv.ParseInt(c.Param("taskId"), 10, 64)
+	var body taskQueueBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if err := h.svc.UpdateAgentTaskQueueQuestion(c.Request.Context(), id, taskID, body.Question); err != nil {
+		taskQueueHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // AdminAgentTaskQueueClearDone 清除终态展示。
 func (h *Handler) AdminAgentTaskQueueClearDone(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)

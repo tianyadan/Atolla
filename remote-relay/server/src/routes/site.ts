@@ -63,6 +63,21 @@ const receiveEmailBodySchema = z.object({
 
 const askBodySchema = z.object({
   question: z.string().optional().default(''),
+  mode: z.enum(['direct', 'enqueue', 'interrupt']).optional(),
+  attachments: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        url: z.string().optional(),
+        mime: z.string().optional(),
+        name: z.string().optional(),
+      }),
+    )
+    .optional(),
+})
+
+const taskQueueQuestionBodySchema = z.object({
+  question: z.string().optional().default(''),
   attachments: z
     .array(
       z.object({
@@ -465,6 +480,8 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         question,
       }
       if (attachments.length) payload.attachments = attachments
+      const mode = (parsed.data.mode || '').trim()
+      if (mode) payload.mode = mode
       const result = enqueueCommand(db, instanceId, 'agent.ask', payload)
       if (!result.ok) {
         res.status(result.status).json({ error: result.error })
@@ -767,6 +784,162 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     }
     res.json(result.body ?? {})
   }
+
+  /** 任务队列：列表（等 Mac 结果） */
+  router.get(
+    '/instances/:id/agents/:agentId/task-queue',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.list', { agent_id: agentId })
+    },
+  )
+
+  /** 任务队列：入队 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = taskQueueQuestionBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid task-queue payload' })
+        return
+      }
+      const question = (parsed.data.question || '').trim()
+      const attachments = (parsed.data.attachments || []).filter(
+        (a) => (a.url && a.url.trim()) || (a.id && a.id.trim()),
+      )
+      if (!question && attachments.length === 0) {
+        res.status(400).json({ error: 'question or attachments required' })
+        return
+      }
+      const payload: Record<string, unknown> = { agent_id: agentId, question }
+      if (attachments.length) payload.attachments = attachments
+      await respondRpc(res, instanceId, 'agent.task_queue.enqueue', payload)
+    },
+  )
+
+  /** 任务队列：打断优先（fire-and-forget 亦可；等待确认 accepted） */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/interrupt',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = taskQueueQuestionBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid interrupt payload' })
+        return
+      }
+      const question = (parsed.data.question || '').trim()
+      const attachments = (parsed.data.attachments || []).filter(
+        (a) => (a.url && a.url.trim()) || (a.id && a.id.trim()),
+      )
+      if (!question && attachments.length === 0) {
+        res.status(400).json({ error: 'question or attachments required' })
+        return
+      }
+      const payload: Record<string, unknown> = { agent_id: agentId, question }
+      if (attachments.length) payload.attachments = attachments
+      await respondRpc(res, instanceId, 'agent.task_queue.interrupt', payload, 60_000)
+    },
+  )
+
+  /** 任务队列：继续 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/continue',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.continue', { agent_id: agentId })
+    },
+  )
+
+  /** 任务队列：取消一项 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/:taskId/cancel',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      const taskId = routeParam(req.params.taskId)
+      if (!instanceId || !agentId || !taskId) {
+        res.status(400).json({ error: 'Invalid instance, agent or task id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.cancel', {
+        agent_id: agentId,
+        task_id: taskId,
+      })
+    },
+  )
+
+  /** 任务队列：改写未执行文案 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/:taskId/update',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      const taskId = routeParam(req.params.taskId)
+      if (!instanceId || !agentId || !taskId) {
+        res.status(400).json({ error: 'Invalid instance, agent or task id' })
+        return
+      }
+      const question = typeof req.body?.question === 'string' ? req.body.question.trim() : ''
+      if (!question) {
+        res.status(400).json({ error: 'question required' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.update', {
+        agent_id: agentId,
+        task_id: taskId,
+        question,
+      })
+    },
+  )
+
+  /** 任务队列：清除已完成 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/clear-done',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.clear_done', { agent_id: agentId })
+    },
+  )
 
   /** Mobile settings: load agent rules / engine (read-only engine) */
   router.get(

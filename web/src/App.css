@@ -3267,10 +3267,11 @@ body.tq-resizing iframe { pointer-events: none; }
   outline-offset: 2px;
   animation: tq-breathe-idle 2.4s ease-in-out infinite;
 }
+/* 执行中：橙色呼吸灯（对齐菜单 modern-running），与排队紫灯区分 */
 .tq-dot.st-running {
   width: 9px; height: 9px;
-  background: #7c3aed;
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, .14);
+  background: #f0ad67;
+  box-shadow: 0 0 0 3px rgba(240, 173, 103, .14);
   animation: tq-breathe-run 1.45s ease-in-out infinite;
 }
 .tq-dot.st-done {
@@ -3290,8 +3291,8 @@ body.tq-resizing iframe { pointer-events: none; }
   50% { opacity: 1; box-shadow: 0 0 0 3px rgba(124, 58, 237, .2); }
 }
 @keyframes tq-breathe-run {
-  0%, 100% { opacity: .62; box-shadow: 0 0 0 2px rgba(124, 58, 237, .12); }
-  50% { opacity: 1; box-shadow: 0 0 0 5px rgba(124, 58, 237, .22); }
+  0%, 100% { opacity: .62; box-shadow: 0 0 0 2px rgba(240, 173, 103, .12); }
+  50% { opacity: 1; box-shadow: 0 0 0 5px rgba(240, 173, 103, .28); }
 }
 /* fixed 气泡：不受抽屉 overflow 裁切，完整展示在灯点旁 */
 .tq-tooltip {
@@ -3310,8 +3311,17 @@ body.tq-resizing iframe { pointer-events: none; }
   max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word;
 }
 .tq-status { font-size: 10px; color: #a78bfa; text-transform: none; }
+.tq-status.st-running { color: #f0ad67; }
 .tq-status.st-done { color: #4ade80; }
 .tq-status.st-failed { color: #f87171; }
+.tq-tooltip-edit {
+  width: 100%; min-height: 72px; max-height: 160px; margin: 6px 0 8px;
+  padding: 8px; box-sizing: border-box; resize: vertical;
+  border: 1px solid #333; border-radius: 8px; background: #0f0f0f; color: #eee;
+  font-size: 12px; line-height: 1.45; font-family: inherit;
+}
+.tq-tooltip-edit:focus { outline: none; border-color: #a78bfa; }
+.tq-tooltip-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* 忙碌二选一：贴在输入框上方，不遮挡 composer；进出场补帧 */
 .tq-sheet-anchor {
   position: absolute;
@@ -3416,12 +3426,20 @@ body.tq-resizing iframe { pointer-events: none; }
   font-weight: 500;
 }
 .tq-sheet-actions .outline {
-  background: transparent; border: 1px solid #444; color: #eee;
+  background: #1a1a1a;
+  border: 1px solid #a78bfa;
+  color: #e9e5ff;
+  font-weight: 600;
 }
-.tq-sheet-actions .outline:hover:not(:disabled) { border-color: #777; }
+.tq-sheet-actions .outline:hover:not(:disabled) {
+  border-color: #c4b5fd;
+  background: #221f2e;
+}
 .tq-sheet-actions .primary {
   border: 1px solid #6d28d9;
 }
+/* 仅一键时（隐藏入队）打断占满宽 */
+.tq-sheet-actions .tq-sheet-btn:only-child { flex: 1 1 100%; }
 @keyframes tq-sheet-btn-in {
   from { opacity: 0; transform: translate3d(0, 8px, 0); }
   to { opacity: 1; transform: translate3d(0, 0, 0); }

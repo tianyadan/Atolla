@@ -16,10 +16,20 @@ type ChatAtt struct {
 
 // AgentRuntime lets the bridge invoke managed-agent Ask/Stop without importing service (avoids cycles).
 type AgentRuntime interface {
-	AskManagedBackground(ctx context.Context, agentID int64, question string, atts []ChatAtt) error
+	// AskManagedBackground 手机 Ask；mode: ""|enqueue|interrupt|direct（忙碌时 "" 默认入队）。
+	AskManagedBackground(ctx context.Context, agentID int64, question string, atts []ChatAtt, mode string) error
 	// SaveChatImageFromBytes compresses and stores an uploaded image (local + optional OSS).
 	SaveChatImageFromBytes(ctx context.Context, raw []byte, filename string) (*ChatAtt, error)
 	StopManaged(agentID int64) bool
+
+	// 任务队列（手机轨 / 弹层）
+	ListAgentTaskQueue(ctx context.Context, agentID int64) (any, error)
+	EnqueueAgentTaskQueue(ctx context.Context, agentID int64, question string, atts []ChatAtt) (any, error)
+	InterruptAgentTaskQueue(ctx context.Context, agentID int64, question string, atts []ChatAtt) (any, error)
+	ContinueAndRunAgentTaskQueue(ctx context.Context, agentID int64) (any, error)
+	CancelAgentTaskQueue(ctx context.Context, agentID int64, taskID int64) error
+	UpdateAgentTaskQueue(ctx context.Context, agentID int64, taskID int64, question string) error
+	ClearAgentTaskQueueDone(ctx context.Context, agentID int64) error
 	// SetAutoReview persists AI auto-review and updates the live Hub for the agent conversation.
 	SetAutoReview(ctx context.Context, agentID int64, enabled bool) error
 	// SetAutoApproveAll persists「命令全部审批通过」.

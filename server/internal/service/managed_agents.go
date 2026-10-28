@@ -15,8 +15,8 @@ import (
 )
 
 // AskManagedBackground validates the agent then runs AskManagedWith on a detached goroutine (remote-relay).
-// 忙碌时默认入队（避免手机静默插话打乱 PC 任务队列）。
-func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt) error {
+// mode: interrupt=打断优先；enqueue 或空=忙碌入队；direct=强制直发（忙碌则报错）。
+func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt, mode string) error {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return err
@@ -35,6 +35,7 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 	if q == "" {
 		q = "请查看图片"
 	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
 	s.runMu.Lock()
 	_, liveAsk := s.runs[agentID]
 	s.runMu.Unlock()
@@ -44,11 +45,38 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		for _, x := range chatAtts {
 			tqAtts = append(tqAtts, TaskQueueAttachment{ID: x.ID, URL: x.URL, Mime: x.Mime, Name: x.Name})
 		}
-		if _, err := s.EnqueueAgentTask(ctx, agentID, q, tqAtts); err != nil {
-			return err
+		switch mode {
+		case "interrupt":
+			item, ierr := s.InterruptPreferAgentTask(ctx, agentID, q, tqAtts)
+			if ierr != nil {
+				return ierr
+			}
+			taskID := int64(0)
+			if item != nil {
+				taskID = item.ID
+			}
+			go func() {
+				bg := context.Background()
+				_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{TaskID: taskID})
+				if askErr != nil {
+					log.Printf("remotebridge agent.ask interrupt agent=%d: %v", agentID, askErr)
+				}
+				if s.RemoteBridge != nil {
+					s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
+				}
+			}()
+			log.Printf("remotebridge agent.ask agent=%d: busy -> interrupt task=%d", agentID, taskID)
+			return nil
+		case "direct":
+			return fmt.Errorf("agent busy")
+		default:
+			// enqueue 或旧客户端缺省 mode
+			if _, err := s.EnqueueAgentTask(ctx, agentID, q, tqAtts); err != nil {
+				return err
+			}
+			log.Printf("remotebridge agent.ask agent=%d: busy -> enqueued", agentID)
+			return nil
 		}
-		log.Printf("remotebridge agent.ask agent=%d: busy -> enqueued", agentID)
-		return nil
 	}
 	go func() {
 		bg := context.Background()

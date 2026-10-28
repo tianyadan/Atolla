@@ -32,6 +32,11 @@ function clampSize(w, h) {
   }
 }
 
+/** 未执行项可改文案 */
+function isEditableStatus(status) {
+  return status === 'queued' || status === 'paused'
+}
+
 /** 右侧任务队列轨：三角展开抽屉，可拖拽改宽高。 */
 export default function TaskQueueRail({
   agentId,
@@ -51,10 +56,14 @@ export default function TaskQueueRail({
   const [busy, setBusy] = useState(false)
   const [size, setSize] = useState(() => clampSize(loadSavedSize().w, loadSavedSize().h))
   const dragRef = useRef(null)
+  /** 编辑中锁定气泡，避免 mouseleave 关掉 */
+  const editingRef = useRef(false)
 
   function clearTipSoon() {
+    if (editingRef.current) return
     window.clearTimeout(tipHideTimer.current)
     tipHideTimer.current = window.setTimeout(() => {
+      if (editingRef.current) return
       setHoverId(null)
       setTip(null)
     }, 120)
@@ -64,6 +73,8 @@ export default function TaskQueueRail({
   function showTipFor(item, anchorEl) {
     window.clearTimeout(tipHideTimer.current)
     if (!anchorEl) return
+    // 正在编辑另一项时不切换
+    if (editingRef.current && tip?.id != null && tip.id !== item.id) return
     const r = anchorEl.getBoundingClientRect()
     const width = Math.min(280, Math.max(200, Math.floor(window.innerWidth * 0.26)))
     const gap = 12
@@ -77,15 +88,24 @@ export default function TaskQueueRail({
     const maxTop = window.innerHeight - 24
     const minTop = 24
     top = Math.min(maxTop, Math.max(minTop, top))
+    const st = item.status || 'queued'
     setHoverId(item.id)
-    setTip({
-      id: item.id,
-      status: item.status || 'queued',
-      text: item.question || '',
-      top,
-      left,
-      width,
-      place,
+    setTip((prev) => {
+      // 同一项编辑中：只更新位置，保留 draft
+      if (prev && prev.id === item.id && prev.editing) {
+        return { ...prev, top, left, width, place, status: st }
+      }
+      return {
+        id: item.id,
+        status: st,
+        text: item.question || '',
+        draft: item.question || '',
+        editing: false,
+        top,
+        left,
+        width,
+        place,
+      }
     })
   }
 
@@ -93,6 +113,7 @@ export default function TaskQueueRail({
 
   useEffect(() => {
     if (!open) {
+      editingRef.current = false
       setHoverId(null)
       setTip(null)
     }
@@ -201,16 +222,53 @@ export default function TaskQueueRail({
   async function cancelTask(taskId) {
     if (!agentId || busy) return
     setBusy(true)
+    editingRef.current = false
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/task-queue/${taskId}/cancel`, {
         method: 'POST',
         headers: authHeaders(),
       })
       if (res.status === 401) onUnauthorized?.()
+      setTip(null)
       await load()
     } finally {
       setBusy(false)
     }
+  }
+
+  /** 保存未执行项文案 */
+  async function saveTipText() {
+    if (!agentId || !tip || busy) return
+    const q = String(tip.draft || '').trim()
+    if (!q) return
+    setBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${agentId}/task-queue/${tip.id}/update`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: q }),
+      })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      if (!res.ok) return
+      editingRef.current = false
+      setTip((prev) => (prev ? { ...prev, text: q, draft: q, editing: false } : null))
+      await load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function beginEdit() {
+    editingRef.current = true
+    setTip((prev) => (prev ? { ...prev, editing: true, draft: prev.text || '' } : null))
+  }
+
+  function cancelEdit() {
+    editingRef.current = false
+    setTip((prev) => (prev ? { ...prev, editing: false, draft: prev.text || '' } : null))
   }
 
   async function clearDone() {
@@ -339,12 +397,45 @@ export default function TaskQueueRail({
           onMouseLeave={clearTipSoon}
         >
           <span className={`tq-status st-${tip.status}`}>{t(`tq.status.${tip.status}`)}</span>
-          <p>{tip.text}</p>
-          {(tip.status === 'queued' || tip.status === 'paused') && (
-            <button type="button" className="ghost" disabled={busy} onClick={() => void cancelTask(tip.id)}>
-              {t('tq.cancel')}
-            </button>
+          {tip.editing ? (
+            <textarea
+              className="tq-tooltip-edit"
+              value={tip.draft}
+              rows={4}
+              aria-label={t('tq.edit')}
+              onChange={(e) => setTip((prev) => (prev ? { ...prev, draft: e.target.value } : null))}
+            />
+          ) : (
+            <p>{tip.text}</p>
           )}
+          <div className="tq-tooltip-actions">
+            {isEditableStatus(tip.status) ? (
+              tip.editing ? (
+                <>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || !String(tip.draft || '').trim()}
+                    onClick={() => void saveTipText()}
+                  >
+                    {t('tq.save')}
+                  </button>
+                  <button type="button" className="ghost" disabled={busy} onClick={cancelEdit}>
+                    {t('tq.editCancel')}
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="ghost" disabled={busy} onClick={beginEdit}>
+                  {t('tq.edit')}
+                </button>
+              )
+            ) : null}
+            {isEditableStatus(tip.status) && !tip.editing ? (
+              <button type="button" className="ghost" disabled={busy} onClick={() => void cancelTask(tip.id)}>
+                {t('tq.cancel')}
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

@@ -404,6 +404,19 @@ func (s *Store) CancelAgentTask(ctx context.Context, agentID, taskID int64) (boo
 	return n > 0, nil
 }
 
+// UpdateAgentTaskQuestion 仅允许改尚未执行的 queued / paused 文案。
+func (s *Store) UpdateAgentTaskQuestion(ctx context.Context, agentID, taskID int64, question string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE agent_task_queue SET question = ?
+		WHERE id = ? AND agent_id = ? AND status IN (?, ?)`,
+		question, taskID, agentID, TaskQueued, TaskPaused)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // ClearAgentTaskDone 清除已完成展示项。
 func (s *Store) ClearAgentTaskDone(ctx context.Context, agentID int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `

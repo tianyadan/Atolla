@@ -455,8 +455,58 @@ export type ChatImageAttachment = {
   name?: string
 }
 
-/** Enqueue agent.ask on Mac (optional attachments) */
+export type AskMode = 'direct' | 'enqueue' | 'interrupt'
+
+/** Enqueue agent.ask on Mac (optional attachments + mode) */
 export async function askAgent(
+  instanceId: string,
+  agentId: string,
+  question: string,
+  attachments?: ChatImageAttachment[],
+  mode?: AskMode,
+): Promise<void> {
+  const body: Record<string, unknown> = { question }
+  if (attachments?.length) body.attachments = attachments
+  if (mode) body.mode = mode
+  await request<{ command: unknown }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/ask`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export type TaskQueueItem = {
+  id: number
+  agent_id?: number
+  status: string
+  question: string
+  position?: number
+  silent_notify?: boolean
+  resume_hint?: boolean
+}
+
+export type TaskQueueView = {
+  items: TaskQueueItem[]
+  hold: boolean
+  active: number
+}
+
+/** 拉取任务队列轨 */
+export async function fetchTaskQueue(instanceId: string, agentId: string): Promise<TaskQueueView> {
+  const data = await request<TaskQueueView>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue`,
+  )
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    hold: !!data.hold,
+    active: Number(data.active) || 0,
+  }
+}
+
+/** 入队 */
+export async function enqueueTaskQueue(
   instanceId: string,
   agentId: string,
   question: string,
@@ -464,12 +514,65 @@ export async function askAgent(
 ): Promise<void> {
   const body: Record<string, unknown> = { question }
   if (attachments?.length) body.attachments = attachments
-  await request<{ command: unknown }>(
-    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/ask`,
-    {
-      method: 'POST',
-      body: JSON.stringify(body),
-    },
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+/** 打断优先 */
+export async function interruptTaskQueue(
+  instanceId: string,
+  agentId: string,
+  question: string,
+  attachments?: ChatImageAttachment[],
+): Promise<void> {
+  const body: Record<string, unknown> = { question }
+  if (attachments?.length) body.attachments = attachments
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue/interrupt`,
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+/** 继续队列 */
+export async function continueTaskQueue(instanceId: string, agentId: string): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue/continue`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+/** 取消 queued/paused */
+export async function cancelTaskQueueItem(
+  instanceId: string,
+  agentId: string,
+  taskId: number,
+): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue/${taskId}/cancel`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+/** 改写未执行项文案（queued/paused） */
+export async function updateTaskQueueItem(
+  instanceId: string,
+  agentId: string,
+  taskId: number,
+  question: string,
+): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue/${taskId}/update`,
+    { method: 'POST', body: JSON.stringify({ question }) },
+  )
+}
+
+/** 清除终态展示 */
+export async function clearTaskQueueDone(instanceId: string, agentId: string): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-queue/clear-done`,
+    { method: 'POST', body: JSON.stringify({}) },
   )
 }
 

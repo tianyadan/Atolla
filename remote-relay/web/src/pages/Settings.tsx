@@ -88,7 +88,7 @@ export function SettingsPage() {
         </div>
         <div className="settings-row">
           <span className="settings-label">{t('settings.appUi')}</span>
-          <span className="settings-value">v0.0.25</span>
+          <span className="settings-value">v0.0.26</span>
         </div>
         <label className="settings-row" style={{ alignItems: 'center' }}>
           <span className="settings-label">{t('settings.languageLabel')}</span>

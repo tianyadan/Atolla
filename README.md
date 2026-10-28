@@ -4,7 +4,7 @@
 
 在你自己的电脑上跑一队数字员工。员工背后是本机的 Claude、Codex 或 Cursor Agent，在授权过的工作区里干活，危险操作先问你再执行。
 
-当前版本 **v0.5.11**。
+当前版本 **v0.6.1**。
 
 ![Atolla 系统架构](docs/architecture/atolla-architecture.png)
 

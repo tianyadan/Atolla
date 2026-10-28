@@ -11,6 +11,7 @@ import {
   fetchJevosSettings,
   fetchMessages,
   fetchPendingPermissions,
+  fetchTaskQueue,
   fetchTasks,
   setAgentAutoApproveAll,
   setAgentAutoReview,
@@ -20,11 +21,16 @@ import {
   stopAgent,
   syncMessages,
   uploadChatImage,
+  type AskMode,
+  type ChatImageAttachment,
   type PublicMirrorAgent,
   type PublicMirrorMessage,
   type PublicMirrorPermission,
   type PublicMirrorTask,
 } from '../api'
+import { TaskQueueChoiceSheet } from '../components/TaskQueueChoiceSheet'
+import { TaskQueueListSheet } from '../components/TaskQueueListSheet'
+import { useLocale } from '../i18n/useLocale'
 import { AgentSettingsSheet } from '../components/AgentSettingsSheet'
 import { CmdBlock } from '../components/CmdBlock'
 import { ContextRing } from '../components/ContextRing'
@@ -124,9 +130,17 @@ export function ChatHistoryPage() {
   const approvalRequestId = searchParams.get('approval_request_id') || ''
   useUnlockHeartbeat(instanceId || undefined)
   const navigate = useNavigate()
+  const { t } = useLocale()
   const [agent, setAgent] = useState<PublicMirrorAgent | null>(null)
   const [messages, setMessages] = useState<LocalBubble[]>([])
   const [tasks, setTasks] = useState<PublicMirrorTask[]>([])
+  const [tqActive, setTqActive] = useState(0)
+  const [tqListOpen, setTqListOpen] = useState(false)
+  const [tqChoice, setTqChoice] = useState<{
+    question: string
+    attachments: ChatImageAttachment[]
+  } | null>(null)
+  const [tqChoiceBusy, setTqChoiceBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -529,6 +543,15 @@ export function ChatHistoryPage() {
     void syncIslandOptimisticAgent(agent, { forceBusy: true, instanceId })
   }, [agent, busy, awaitingReply, instanceId])
 
+  /** 队列角标轮询 */
+  useEffect(() => {
+    if (!instanceId || !agentId) return undefined
+    void refreshTaskQueueBadge()
+    const timer = window.setInterval(() => void refreshTaskQueueBadge(), 5000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, agentId, busy])
+
   const activeTask = useMemo(() => {
     const running = tasks.find((t) => {
       const s = String(t.status || '').toLowerCase()
@@ -601,47 +624,57 @@ export function ChatHistoryPage() {
     return out
   }
 
-  /** Send or interrupt — pin to bottom */
-  async function onSend() {
-    const q = question.trim()
-    if (sending) return
-    if (!q && pendingImages.length === 0) return
-    const forAgent = agentId
-    const forInstance = instanceId
-    tapHaptic()
-    setSending(true)
-    setError(null)
+  /** 刷新队列角标 */
+  async function refreshTaskQueueBadge() {
+    if (!instanceId || !agentId) return
+    try {
+      const v = await fetchTaskQueue(instanceId, agentId)
+      setTqActive(Number(v.active) || (v.hold ? 1 : 0))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** 真正发往 Mac；mode 用于忙碌打断/入队 */
+  async function dispatchAsk(
+    forInstance: string,
+    forAgent: string,
+    q: string,
+    atts: ChatImageAttachment[],
+    mode?: AskMode,
+  ) {
+    const displayQ = q || (atts.length ? '请查看图片' : '')
+    const optimisticId = `local-${Date.now()}`
+    const optimistic: LocalBubble = {
+      message_id: optimisticId,
+      agent_id: forAgent,
+      role: 'user',
+      content: displayQ,
+      payload: atts.length ? { attachments: atts } : {},
+      created_at: Date.now(),
+      synced_at: Date.now(),
+      pending: true,
+    }
+    setMessages((prev) => sortMessages([...prev, optimistic]))
     stickToBottomRef.current = true
     awaitSinceRef.current = Date.now()
     replySeenRef.current = new Set(
       messages.filter((m) => m.role === 'assistant' && !m.pending).map((m) => m.message_id),
     )
-    awaitingRef.current = true
-    setAwaitingReply(true)
-    setAgent((prev) => (prev ? { ...prev, status: 'running' } : prev))
-    const optimisticId = `local-${Date.now()}`
+    if (mode !== 'enqueue') {
+      awaitingRef.current = true
+      setAwaitingReply(true)
+      setAgent((prev) => (prev ? { ...prev, status: 'running' } : prev))
+    }
     try {
-      const atts = await ensureUploaded(pendingImages)
+      await askAgent(forInstance, forAgent, q, atts, mode)
       if (routeAgentRef.current !== forAgent) return
-      const displayQ = q || (atts.length ? '请查看图片' : '')
-      const optimistic: LocalBubble = {
-        message_id: optimisticId,
-        agent_id: forAgent,
-        role: 'user',
-        content: displayQ,
-        payload: atts.length ? { attachments: atts } : {},
-        created_at: Date.now(),
-        synced_at: Date.now(),
-        pending: true,
+      if (mode === 'enqueue') {
+        setError(t('tq.enqueuedToast'))
+        void refreshTaskQueueBadge()
       }
-      setMessages((prev) => sortMessages([...prev, optimistic]))
-      setQuestion('')
-      saveChatDraft(forInstance, forAgent, '')
-      revokePendingImages(pendingImages)
-      setPendingImages([])
-      await askAgent(forInstance, forAgent, q, atts)
-      if (routeAgentRef.current !== forAgent) return
       await syncThenRefresh()
+      void refreshTaskQueueBadge()
       followUpTimersRef.current.forEach((id) => window.clearTimeout(id))
       followUpTimersRef.current = [2_000, 6_000, 12_000].map((ms) =>
         window.setTimeout(() => {
@@ -660,9 +693,77 @@ export function ChatHistoryPage() {
           ),
         )
       }
+    }
+  }
+
+  /** Send — 忙碌时先弹队列二选一 */
+  async function onSend() {
+    const q = question.trim()
+    if (sending || tqChoice) return
+    if (!q && pendingImages.length === 0) return
+    const forAgent = agentId
+    const forInstance = instanceId
+    tapHaptic()
+    setSending(true)
+    setError(null)
+    try {
+      const atts = await ensureUploaded(pendingImages)
+      if (routeAgentRef.current !== forAgent) return
+      setQuestion('')
+      saveChatDraft(forInstance, forAgent, '')
+      revokePendingImages(pendingImages)
+      setPendingImages([])
+      if (busy) {
+        setTqChoice({ question: q, attachments: atts })
+        return
+      }
+      await dispatchAsk(forInstance, forAgent, q, atts)
+    } catch (err) {
+      if (routeAgentRef.current !== forAgent) return
+      if (!handleApiError(err)) {
+        setError(err instanceof Error ? err.message : '发送失败')
+      }
     } finally {
       if (routeAgentRef.current === forAgent) setSending(false)
     }
+  }
+
+  /** 弹层：打断 */
+  async function onTqInterrupt() {
+    if (!tqChoice || tqChoiceBusy) return
+    const payload = tqChoice
+    setTqChoiceBusy(true)
+    setTqChoice(null)
+    try {
+      setSending(true)
+      await dispatchAsk(instanceId, agentId, payload.question, payload.attachments, 'interrupt')
+    } finally {
+      setTqChoiceBusy(false)
+      setSending(false)
+    }
+  }
+
+  /** 弹层：入队 */
+  async function onTqEnqueue() {
+    if (!tqChoice || tqChoiceBusy) return
+    const payload = tqChoice
+    setTqChoiceBusy(true)
+    setTqChoice(null)
+    try {
+      setSending(true)
+      await dispatchAsk(instanceId, agentId, payload.question, payload.attachments, 'enqueue')
+    } finally {
+      setTqChoiceBusy(false)
+      setSending(false)
+    }
+  }
+
+  /** 弹层：取消回填 */
+  function onTqCancel() {
+    if (!tqChoice || tqChoiceBusy) return
+    setQuestion(tqChoice.question)
+    saveChatDraft(instanceId, agentId, tqChoice.question)
+    setTqChoice(null)
   }
 
   /** Copy assistant reply body */
@@ -812,6 +913,8 @@ export function ChatHistoryPage() {
           instanceId={instanceId}
           agent={agent}
           busy={busy}
+          queueBadge={tqActive}
+          onOpenQueue={() => setTqListOpen(true)}
           onOpenAgentSettings={() => setAgentSettingsOpen(true)}
         />
       }
@@ -1005,6 +1108,13 @@ export function ChatHistoryPage() {
             </button>
           </div>
           <div className="chat-composer-shell">
+            <TaskQueueChoiceSheet
+              open={!!tqChoice}
+              busy={tqChoiceBusy}
+              onInterrupt={() => void onTqInterrupt()}
+              onEnqueue={() => void onTqEnqueue()}
+              onCancel={onTqCancel}
+            />
             {pendingImages.length > 0 ? (
               <div className="chat-attach-preview" aria-label="待发送图片">
                 {pendingImages.map((it) => (
@@ -1296,6 +1406,17 @@ export function ChatHistoryPage() {
           <img src={lightboxSrc} alt="" onClick={() => setLightboxSrc('')} />
         </div>
       ) : null}
+
+      <TaskQueueListSheet
+        open={tqListOpen}
+        instanceId={instanceId}
+        agentId={agentId}
+        onClose={() => {
+          setTqListOpen(false)
+          void refreshTaskQueueBadge()
+        }}
+        onError={(msg) => setError(msg)}
+      />
     </PageShell>
   )
 }

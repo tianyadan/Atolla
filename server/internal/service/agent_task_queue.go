@@ -272,6 +272,24 @@ func (s *Service) CancelAgentTaskQueueItem(ctx context.Context, agentID, taskID 
 	return nil
 }
 
+// UpdateAgentTaskQueueQuestion 改写未执行项（queued/paused）问题文案。
+func (s *Service) UpdateAgentTaskQueueQuestion(ctx context.Context, agentID, taskID int64, question string) error {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return errTaskQueueEmptyQ
+	}
+	unlock := s.taskQueueLock(agentID)
+	defer unlock()
+	ok, err := s.Store.UpdateAgentTaskQuestion(ctx, agentID, taskID, question)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("task not editable")
+	}
+	return nil
+}
+
 // ClearAgentTaskQueueDone 清除终态展示。
 func (s *Service) ClearAgentTaskQueueDone(ctx context.Context, agentID int64) error {
 	_, err := s.Store.ClearAgentTaskDone(ctx, agentID)

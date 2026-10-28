@@ -20,12 +20,28 @@ type stubRuntime struct {
 	jevosChina bool
 }
 
-func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string, _ []ChatAtt) error {
+func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string, _ []ChatAtt, _ string) error {
 	s.asked = true
 	s.agent = agentID
 	s.q = question
 	return nil
 }
+
+func (s *stubRuntime) ListAgentTaskQueue(context.Context, int64) (any, error) { return map[string]any{}, nil }
+func (s *stubRuntime) EnqueueAgentTaskQueue(context.Context, int64, string, []ChatAtt) (any, error) {
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) InterruptAgentTaskQueue(context.Context, int64, string, []ChatAtt) (any, error) {
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) ContinueAndRunAgentTaskQueue(context.Context, int64) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+func (s *stubRuntime) CancelAgentTaskQueue(context.Context, int64, int64) error { return nil }
+func (s *stubRuntime) UpdateAgentTaskQueue(context.Context, int64, int64, string) error {
+	return nil
+}
+func (s *stubRuntime) ClearAgentTaskQueueDone(context.Context, int64) error { return nil }
 
 func (s *stubRuntime) SaveChatImageFromBytes(context.Context, []byte, string) (*ChatAtt, error) {
 	return &ChatAtt{ID: "x", URL: "https://example.com/x.jpg", Mime: "image/jpeg", Name: "x.jpg"}, nil

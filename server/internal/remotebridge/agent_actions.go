@@ -35,27 +35,6 @@ func payloadAgentID(payload map[string]interface{}) (int64, error) {
 	return id, nil
 }
 
-// handleAgentAsk accepts and runs Ask in background (no SSE to phone).
-func handleAgentAsk(ec *ExecContext) (any, error) {
-	if ec.Runtime == nil {
-		return nil, fmt.Errorf("agent runtime not configured")
-	}
-	agentID, err := payloadAgentID(ec.Payload)
-	if err != nil {
-		return nil, err
-	}
-	q, _ := ec.Payload["question"].(string)
-	q = strings.TrimSpace(q)
-	atts := payloadChatAtts(ec.Payload)
-	if q == "" && len(atts) == 0 {
-		return nil, fmt.Errorf("question required")
-	}
-	if err := ec.Runtime.AskManagedBackground(ec.Context, agentID, q, atts); err != nil {
-		return nil, err
-	}
-	return map[string]any{"accepted": true, "agent_id": strconv.FormatInt(agentID, 10)}, nil
-}
-
 // handleAgentStop stops in-flight Ask for one agent.
 func handleAgentStop(ec *ExecContext) (any, error) {
 	if ec.Runtime == nil {
