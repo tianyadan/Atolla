@@ -3293,27 +3293,88 @@ body.tq-resizing iframe { pointer-events: none; }
   0%, 100% { opacity: .62; box-shadow: 0 0 0 2px rgba(124, 58, 237, .12); }
   50% { opacity: 1; box-shadow: 0 0 0 5px rgba(124, 58, 237, .22); }
 }
+/* fixed 气泡：不受抽屉 overflow 裁切，完整展示在灯点旁 */
 .tq-tooltip {
-  position: absolute; right: calc(50% + 12px); top: 50%; transform: translateY(-50%);
-  width: 200px; padding: 10px; border-radius: 10px; background: #1a1a1a; border: 1px solid #333;
-  z-index: 2; text-align: left;
+  padding: 10px 12px; border-radius: 10px; background: #1a1a1a; border: 1px solid #333;
+  text-align: left; box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  box-sizing: border-box; max-width: min(280px, calc(100vw - 16px));
 }
-.tq-tooltip p { margin: 6px 0 8px; font-size: 12px; color: #ddd; line-height: 1.4; max-height: 120px; overflow: auto; white-space: pre-wrap; }
+.tq-tooltip-fixed {
+  position: fixed;
+  z-index: 80;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+.tq-tooltip p {
+  margin: 6px 0 8px; font-size: 12px; color: #ddd; line-height: 1.45;
+  max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
 .tq-status { font-size: 10px; color: #a78bfa; text-transform: none; }
 .tq-status.st-done { color: #4ade80; }
 .tq-status.st-failed { color: #f87171; }
-.tq-sheet-mask {
-  position: absolute; inset: 0; z-index: 40; background: rgba(0,0,0,.45);
-  display: flex; align-items: flex-end; justify-content: center;
+/* 忙碌二选一：贴在输入框上方，不遮挡 composer；进出场补帧 */
+.tq-sheet-anchor {
+  position: absolute;
+  left: 0; right: 0; bottom: 100%;
+  margin-bottom: 8px;
+  z-index: 22;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(0, 12px, 0) scale(0.985);
+  filter: blur(2px);
+  transition:
+    opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.34s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform, filter;
+}
+.tq-sheet-anchor.is-open {
+  pointer-events: auto;
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  filter: blur(0);
 }
 .tq-sheet {
-  width: min(420px, 100%); margin: 0 12px 16px; padding: 16px;
-  border-radius: 16px; background: #171717; border: 1px solid #2a2a2a;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 14px 12px;
+  border-radius: 14px;
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
 }
-.tq-sheet-title { margin: 0 0 12px; font-size: 14px; color: #f5f5f5; }
+.tq-sheet-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #cfcfcf;
+  letter-spacing: 0.01em;
+}
 .tq-sheet-actions { display: flex; flex-direction: column; gap: 8px; }
+.tq-sheet-btn {
+  opacity: 0;
+  transform: translate3d(0, 8px, 0);
+}
+.tq-sheet-anchor.is-open .tq-sheet-btn {
+  animation: tq-sheet-btn-in 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(0.05s + var(--tq-i, 0) * 0.05s);
+}
 .tq-sheet-actions .outline {
-  background: transparent; border: 1px solid #444; color: #eee; border-radius: 10px; padding: 10px 14px; cursor: pointer;
+  background: transparent; border: 1px solid #444; color: #eee;
+  border-radius: 10px; padding: 10px 14px; cursor: pointer;
 }
 .tq-sheet-actions .outline:hover { border-color: #777; }
+@keyframes tq-sheet-btn-in {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tq-sheet-anchor,
+  .tq-sheet-anchor.is-open .tq-sheet-btn {
+    transition: none !important;
+    animation: none !important;
+    filter: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
 

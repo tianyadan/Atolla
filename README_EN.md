@@ -27,13 +27,23 @@ cp .env.example .env
 
 Open http://localhost:5173 . The first visit checks your engines and asks you to register an admin account.
 
+Foreground keeps the terminal busy. To close the window and keep running:
+
+```bash
+./scripts/start-bg.sh
+# or ./scripts/start.sh --daemon
+```
+
+Logs: `logs/backend.log`, `logs/frontend.log`. Stop with `./scripts/shutdown.sh`.
+
 Optional MySQL (starts docker compose):
 
 ```bash
 ./scripts/start.sh --mysql
+# background: ./scripts/start-bg.sh --mysql
 ```
 
-Stop or restart with `./scripts/shutdown.sh` and `./scripts/restart.sh`.
+Stop or restart with `./scripts/shutdown.sh` and `./scripts/restart.sh` (add `--daemon` to stay in background).
 
 | Service | Address |
 | --- | --- |

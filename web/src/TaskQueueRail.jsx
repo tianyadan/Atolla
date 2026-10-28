@@ -45,9 +45,58 @@ export default function TaskQueueRail({
   const [open, setOpen] = useState(false)
   const [view, setView] = useState({ items: [], hold: false, active: 0 })
   const [hoverId, setHoverId] = useState(null)
+  /** fixed 气泡，避免被抽屉 overflow 裁切 */
+  const [tip, setTip] = useState(null)
+  const tipHideTimer = useRef(0)
   const [busy, setBusy] = useState(false)
   const [size, setSize] = useState(() => clampSize(loadSavedSize().w, loadSavedSize().h))
   const dragRef = useRef(null)
+
+  function clearTipSoon() {
+    window.clearTimeout(tipHideTimer.current)
+    tipHideTimer.current = window.setTimeout(() => {
+      setHoverId(null)
+      setTip(null)
+    }, 120)
+  }
+
+  /** 按灯点位置把气泡固定到视口左侧（或空间不够时右侧） */
+  function showTipFor(item, anchorEl) {
+    window.clearTimeout(tipHideTimer.current)
+    if (!anchorEl) return
+    const r = anchorEl.getBoundingClientRect()
+    const width = Math.min(280, Math.max(200, Math.floor(window.innerWidth * 0.26)))
+    const gap = 12
+    let left = r.left - gap - width
+    let place = 'left'
+    if (left < 8) {
+      left = Math.min(r.right + gap, window.innerWidth - width - 8)
+      place = 'right'
+    }
+    let top = r.top + r.height / 2
+    const maxTop = window.innerHeight - 24
+    const minTop = 24
+    top = Math.min(maxTop, Math.max(minTop, top))
+    setHoverId(item.id)
+    setTip({
+      id: item.id,
+      status: item.status || 'queued',
+      text: item.question || '',
+      top,
+      left,
+      width,
+      place,
+    })
+  }
+
+  useEffect(() => () => window.clearTimeout(tipHideTimer.current), [])
+
+  useEffect(() => {
+    if (!open) {
+      setHoverId(null)
+      setTip(null)
+    }
+  }, [open])
 
   async function load() {
     if (!agentId) return
@@ -148,7 +197,6 @@ export default function TaskQueueRail({
   }, [view.items])
 
   const badge = view.active || (view.hold ? 1 : 0)
-  const tipMaxW = Math.max(160, Math.min(280, size.w - 48))
 
   async function cancelTask(taskId) {
     if (!agentId || busy) return
@@ -224,32 +272,20 @@ export default function TaskQueueRail({
             ) : (
               trackItems.map((item, idx) => {
                 const st = item.status || 'queued'
-                const tip = item.question || ''
+                const q = item.question || ''
                 return (
                   <div
                     key={item.id}
                     className={`tq-node st-${st}${hoverId === item.id ? ' is-hover' : ''}`}
-                    onMouseEnter={() => setHoverId(item.id)}
-                    onMouseLeave={() => setHoverId(null)}
+                    onMouseEnter={(e) => showTipFor(item, e.currentTarget.querySelector('.tq-dot') || e.currentTarget)}
+                    onMouseLeave={clearTipSoon}
                   >
                     {idx > 0 ? <i className="tq-line" aria-hidden="true" /> : null}
                     <button
                       type="button"
                       className={`tq-dot st-${st}`}
-                      title={tip}
-                      aria-label={tip.slice(0, 80)}
+                      aria-label={q.slice(0, 80)}
                     />
-                    {hoverId === item.id ? (
-                      <div className="tq-tooltip" role="tooltip" style={{ width: tipMaxW }}>
-                        <span className={`tq-status st-${st}`}>{t(`tq.status.${st}`)}</span>
-                        <p>{tip}</p>
-                        {(st === 'queued' || st === 'paused') && (
-                          <button type="button" className="ghost" disabled={busy} onClick={() => void cancelTask(item.id)}>
-                            {t('tq.cancel')}
-                          </button>
-                        )}
-                      </div>
-                    ) : null}
                   </div>
                 )
               })
@@ -292,6 +328,24 @@ export default function TaskQueueRail({
             onPointerCancel={endResize}
           />
         </aside>
+      ) : null}
+
+      {tip ? (
+        <div
+          className={`tq-tooltip tq-tooltip-fixed place-${tip.place || 'left'}`}
+          role="tooltip"
+          style={{ top: tip.top, left: tip.left, width: tip.width }}
+          onMouseEnter={() => window.clearTimeout(tipHideTimer.current)}
+          onMouseLeave={clearTipSoon}
+        >
+          <span className={`tq-status st-${tip.status}`}>{t(`tq.status.${tip.status}`)}</span>
+          <p>{tip.text}</p>
+          {(tip.status === 'queued' || tip.status === 'paused') && (
+            <button type="button" className="ghost" disabled={busy} onClick={() => void cancelTask(tip.id)}>
+              {t('tq.cancel')}
+            </button>
+          )}
+        </div>
       ) : null}
     </div>
   )

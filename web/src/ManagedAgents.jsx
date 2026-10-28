@@ -2238,14 +2238,6 @@ export default function ManagedAgentsPanel({
               onContinue={() => void onTqContinue()}
             />
           ) : null}
-          <TaskQueueChoiceSheet
-            open={!!tqChoice}
-            busy={tqChoiceBusy}
-            hideEnqueue={!!tqChoice?.hideEnqueue}
-            onInterrupt={() => void onTqInterrupt()}
-            onEnqueue={() => void onTqEnqueue()}
-            onCancel={() => setTqChoice(null)}
-          />
           {!selected ? (
             <div className="empty ma-empty ma-empty-hero">
               <div className="ma-empty-icon" aria-hidden="true" />
@@ -2536,6 +2528,14 @@ export default function ManagedAgentsPanel({
                       creating={groupCreating}
                       onCreate={resolveGroupOfferCreate}
                       onTimeout={resolveGroupOfferParallel}
+                    />
+                    <TaskQueueChoiceSheet
+                      open={!!tqChoice}
+                      busy={tqChoiceBusy}
+                      hideEnqueue={!!tqChoice?.hideEnqueue}
+                      onInterrupt={() => void onTqInterrupt()}
+                      onEnqueue={() => void onTqEnqueue()}
+                      onCancel={() => setTqChoice(null)}
                     />
                     {mentionOpen && mentionCandidates.length > 0 && (
                       <ul className="ma-mention-list">

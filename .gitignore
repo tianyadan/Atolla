@@ -16,6 +16,9 @@ bin/
 /data/
 /server/*@tcp*/
 
+# 本地前后台启动日志 / pid
+/logs/
+
 # OS
 .DS_Store
 

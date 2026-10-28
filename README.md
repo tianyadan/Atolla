@@ -27,13 +27,23 @@ cp .env.example .env
 
 浏览器打开 http://localhost:5173 。第一次进入会检查引擎，并引导你注册管理员。
 
+前台启动会占住终端；要关窗口仍保持运行，用后台模式：
+
+```bash
+./scripts/start-bg.sh
+# 或 ./scripts/start.sh --daemon
+```
+
+日志在 `logs/backend.log`、`logs/frontend.log`。停止仍用 `./scripts/shutdown.sh`。
+
 改用 MySQL（会起 docker compose）：
 
 ```bash
 ./scripts/start.sh --mysql
+# 后台: ./scripts/start-bg.sh --mysql
 ```
 
-停掉或重启：`./scripts/shutdown.sh`、`./scripts/restart.sh`。
+停掉或重启：`./scripts/shutdown.sh`、`./scripts/restart.sh`（可加 `--daemon`）。
 
 | 服务 | 地址 |
 | --- | --- |
