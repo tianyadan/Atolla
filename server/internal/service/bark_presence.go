@@ -12,7 +12,10 @@ import (
 	"atolla/server/internal/store"
 )
 
-var errNotifyStore = errors.New("通知设置暂不可用")
+var (
+	errNotifyStore          = errors.New("通知设置暂不可用")
+	errNotifyBarkUnverified = errors.New("请先完成 Bark 验证")
+)
 
 // pcViewerTTL 电脑对话页心跳超过此时长视为已离开（后台标签节流仍能续上）。
 const pcViewerTTL = 90 * time.Second
@@ -58,7 +61,7 @@ func (s *Service) agentChatOpen(agentID int64) bool {
 	return false
 }
 
-// GetNotifyPrefs 读取通知开关。没有库时按默认开启返回。
+// GetNotifyPrefs 读取通知开关。没有库时返回关闭且未验证。
 func (s *Service) GetNotifyPrefs(ctx context.Context) (store.NotifyPrefs, error) {
 	if s == nil || s.Store == nil {
 		return defaultNotifyPrefs(), nil
@@ -66,16 +69,28 @@ func (s *Service) GetNotifyPrefs(ctx context.Context) (store.NotifyPrefs, error)
 	return s.Store.GetNotifyPrefs(ctx)
 }
 
-// SaveNotifyPrefs 保存通知开关。
+// SaveNotifyPrefs 保存通知开关；首次开启任一类通知前须已完成 Bark 验证。
 func (s *Service) SaveNotifyPrefs(ctx context.Context, p store.NotifyPrefs) error {
 	if s == nil || s.Store == nil {
 		return errNotifyStore
 	}
-	return s.Store.SaveNotifyPrefs(ctx, p)
+	cur, err := s.Store.GetNotifyPrefs(ctx)
+	if err != nil {
+		return err
+	}
+	enabling := (p.TaskDone && !cur.TaskDone) || (p.Permission && !cur.Permission)
+	if enabling && !cur.BarkVerified {
+		return errNotifyBarkUnverified
+	}
+	p.BarkVerified = cur.BarkVerified
+	if err := s.Store.SaveNotifyPrefs(ctx, p); err != nil {
+		return err
+	}
+	return nil
 }
 
 func defaultNotifyPrefs() store.NotifyPrefs {
-	return store.NotifyPrefs{TaskDone: true, Permission: true}
+	return store.NotifyPrefs{}
 }
 
 // barkKindAllowed 按去重键前缀判断该类通知是否打开。

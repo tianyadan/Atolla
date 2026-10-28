@@ -2,18 +2,20 @@ package store
 
 import "context"
 
-// NotifyPrefs 电脑端通知开关。缺省都打开。
+// NotifyPrefs 电脑端通知开关。新实例默认关闭，开启前需 Bark 验证。
 type NotifyPrefs struct {
-	TaskDone   bool `json:"task_done"`
-	Permission bool `json:"permission"`
+	TaskDone     bool `json:"task_done"`
+	Permission   bool `json:"permission"`
+	BarkVerified bool `json:"bark_verified"`
 }
 
 const (
-	notifyPrefTaskDone   = "notify_task_done"
-	notifyPrefPermission = "notify_permission"
+	notifyPrefTaskDone      = "notify_task_done"
+	notifyPrefPermission    = "notify_permission"
+	notifyPrefBarkVerified  = "notify_bark_verified"
 )
 
-// EnsureNotifyPrefsSchema 创建实例级键值表，并种子两条通知开关（默认开启）。
+// EnsureNotifyPrefsSchema 创建实例级键值表；新实例种子为关闭，已有数据不覆盖。
 func (s *Store) EnsureNotifyPrefsSchema(ctx context.Context) error {
 	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS app_settings (
@@ -26,19 +28,33 @@ func (s *Store) EnsureNotifyPrefsSchema(ctx context.Context) error {
 	}
 	q := s.insertOnConflictDoNothing(
 		`app_settings (k, v)`,
-		`(?, '1'), (?, '1')`,
+		`(?, '0'), (?, '0'), (?, '0')`,
 		`k`,
 	)
-	_, err := s.db.ExecContext(ctx, q, notifyPrefTaskDone, notifyPrefPermission)
+	if _, err := s.db.ExecContext(ctx, q, notifyPrefTaskDone, notifyPrefPermission, notifyPrefBarkVerified); err != nil {
+		return err
+	}
+	// 已开启任一通知的旧实例视为已验证，避免升级后被锁死。
+	var onCount int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM app_settings WHERE k IN (?, ?) AND v != '0'`,
+		notifyPrefTaskDone, notifyPrefPermission,
+	).Scan(&onCount); err != nil {
+		return err
+	}
+	if onCount == 0 {
+		return nil
+	}
+	_, err := s.upsertNotifyPref(ctx, notifyPrefBarkVerified, true)
 	return err
 }
 
-// GetNotifyPrefs 读取完成通知与命令审批通知开关。缺行时视为开启。
+// GetNotifyPrefs 读取完成通知、命令审批通知与 Bark 验证状态。缺行时开关默认关、未验证。
 func (s *Store) GetNotifyPrefs(ctx context.Context) (NotifyPrefs, error) {
-	out := NotifyPrefs{TaskDone: true, Permission: true}
+	out := NotifyPrefs{}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT k, v FROM app_settings WHERE k IN (?, ?)`,
-		notifyPrefTaskDone, notifyPrefPermission)
+		`SELECT k, v FROM app_settings WHERE k IN (?, ?, ?)`,
+		notifyPrefTaskDone, notifyPrefPermission, notifyPrefBarkVerified)
 	if err != nil {
 		return out, err
 	}
@@ -54,17 +70,25 @@ func (s *Store) GetNotifyPrefs(ctx context.Context) (NotifyPrefs, error) {
 			out.TaskDone = on
 		case notifyPrefPermission:
 			out.Permission = on
+		case notifyPrefBarkVerified:
+			out.BarkVerified = on
 		}
 	}
 	return out, rows.Err()
 }
 
-// SaveNotifyPrefs 写入两条通知开关。
+// SaveNotifyPrefs 写入两条通知开关（不改 bark_verified）。
 func (s *Store) SaveNotifyPrefs(ctx context.Context, p NotifyPrefs) error {
 	if _, err := s.upsertNotifyPref(ctx, notifyPrefTaskDone, p.TaskDone); err != nil {
 		return err
 	}
 	_, err := s.upsertNotifyPref(ctx, notifyPrefPermission, p.Permission)
+	return err
+}
+
+// SetBarkVerified 写入 Bark 可达性验证标记。
+func (s *Store) SetBarkVerified(ctx context.Context, ok bool) error {
+	_, err := s.upsertNotifyPref(ctx, notifyPrefBarkVerified, ok)
 	return err
 }
 

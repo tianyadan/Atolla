@@ -975,6 +975,41 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     },
   )
 
+  /** Bark 发送开启通知用的 6 位验证码 */
+  router.post(
+    '/instances/:id/notify-prefs/verify/send',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'notify.bark.verify.send', {})
+    },
+  )
+
+  /** 校验 Bark 验证码并标记已验证 */
+  router.post(
+    '/instances/:id/notify-prefs/verify/confirm',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const code = String((req.body as { code?: string } | undefined)?.code || '').trim()
+      if (!/^\d{6}$/.test(code)) {
+        res.status(400).json({ error: '请输入 6 位验证码' })
+        return
+      }
+      await respondRpc(res, instanceId, 'notify.bark.verify.confirm', { code })
+    },
+  )
+
   /** 读取本机 Claude / Codex / Cursor 订阅额度（Mac 聚合，默认缓存） */
   router.get(
     '/instances/:id/engines/usage',

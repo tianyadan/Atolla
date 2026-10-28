@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   clearToken,
+  confirmNotifyBarkVerify,
   fetchJevosSettings,
   fetchNotifyPrefs,
   installJevos,
+  sendNotifyBarkVerify,
   setJevosEnabled,
   uninstallJevos,
   updateNotifyPrefs,
@@ -13,15 +15,22 @@ import {
 } from '../api'
 import { PageShell } from '../components/PageShell'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
+import { useLocale } from '../i18n/useLocale'
 
 /** 实例内设置：通知 + JEV（数字人对话相关，与全局「中继/版本」分离） */
 export function InstanceSettingsPage() {
   const { instanceId = '' } = useParams()
   const navigate = useNavigate()
+  const { t } = useLocale()
   useUnlockHeartbeat(instanceId || undefined)
 
   const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
+  /** 未验证时点开开关，暂存待开启项 */
+  const [pendingPref, setPendingPref] = useState<keyof NotifyPrefs | null>(null)
+  const [otpCode, setOtpCode] = useState('')
+  const [otpBusy, setOtpBusy] = useState(false)
+  const [otpCooldown, setOtpCooldown] = useState(0)
   const [jev, setJev] = useState<JevosSettings | null>(null)
   const [jevBusy, setJevBusy] = useState(false)
   const [pick, setPick] = useState('')
@@ -78,9 +87,21 @@ export function InstanceSettingsPage() {
 	  if (slowTimerRef.current != null) window.clearTimeout(slowTimerRef.current)
 	}, [])
 
-  /** 切换通知开关 */
-  async function togglePref(key: keyof NotifyPrefs, next: boolean) {
-    if (!prefs || !instanceId || prefsBusy) return
+  useEffect(() => {
+    if (otpCooldown <= 0) return undefined
+    const t = window.setTimeout(() => setOtpCooldown((c) => c - 1), 1000)
+    return () => window.clearTimeout(t)
+  }, [otpCooldown])
+
+  /** 关闭直接保存；开启且未验证则进入验码。 */
+  async function togglePref(key: 'task_done' | 'permission', next: boolean) {
+    if (!prefs || !instanceId || prefsBusy || otpBusy) return
+    if (next && !prefs.bark_verified) {
+      setPendingPref(key)
+      setOtpCode('')
+      setErr(null)
+      return
+    }
     const prev = prefs
     const body = { ...prefs, [key]: next }
     setPrefs(body)
@@ -88,11 +109,54 @@ export function InstanceSettingsPage() {
     setErr(null)
     try {
       setPrefs(await updateNotifyPrefs(instanceId, body))
+      setPendingPref(null)
     } catch (e) {
       setPrefs(prev)
       if (!handleAuth(e)) setErr(e instanceof Error ? e.message : '保存通知失败')
     } finally {
       setPrefsBusy(false)
+    }
+  }
+
+  /** 发送 Bark 验证码 */
+  async function onSendBarkOtp() {
+    if (!instanceId || otpBusy || otpCooldown > 0) return
+    setOtpBusy(true)
+    setErr(null)
+    try {
+      await sendNotifyBarkVerify(instanceId)
+      setOtpCooldown(60)
+    } catch (e) {
+      if (!handleAuth(e)) setErr(e instanceof Error ? e.message : '发送失败')
+    } finally {
+      setOtpBusy(false)
+    }
+  }
+
+  /** 校验验证码并开启待定开关 */
+  async function onConfirmBarkOtp() {
+    if (!prefs || !instanceId || otpBusy) return
+    const code = otpCode.trim()
+    if (!/^\d{6}$/.test(code)) {
+      setErr('请输入 6 位验证码')
+      return
+    }
+    setOtpBusy(true)
+    setErr(null)
+    try {
+      let next = await confirmNotifyBarkVerify(instanceId, code)
+      setPrefs(next)
+      const key = pendingPref
+      setPendingPref(null)
+      setOtpCode('')
+      if (key === 'task_done' || key === 'permission') {
+        next = await updateNotifyPrefs(instanceId, { ...next, [key]: true })
+        setPrefs(next)
+      }
+    } catch (e) {
+      if (!handleAuth(e)) setErr(e instanceof Error ? e.message : '验证失败')
+    } finally {
+      setOtpBusy(false)
     }
   }
 
@@ -166,7 +230,7 @@ export function InstanceSettingsPage() {
   const hub = `/instances/${encodeURIComponent(instanceId)}`
 
   return (
-    <PageShell title="设置" backTo={hub}>
+    <PageShell title={t('instance.settings')} backTo={hub}>
       {err ? <p className="error-banner">{err}</p> : null}
       {okMsg ? <p className="ok-banner">{okMsg}</p> : null}
 	  {jevSlow ? (
@@ -186,19 +250,17 @@ export function InstanceSettingsPage() {
 		</p>
 	  ) : null}
 
-      <h2 className="settings-section-title">通知</h2>
-      <p className="settings-section-hint">与电脑端同一开关。离开对话后是否推送到手机。</p>
+      <h2 className="settings-section-title">{t('settings.notify')}</h2>
       <div className="settings-block">
         <label className="settings-row settings-toggle-row">
           <span>
-            <span className="settings-label">完成通知</span>
-            <span className="settings-hint">任务结束且两端都没看对话时推送</span>
+            <span className="settings-label">{t('settings.notify.taskDone')}</span>
           </span>
-          <span className={`settings-switch${prefsBusy ? ' busy' : ''}`}>
+          <span className={`settings-switch${prefsBusy || otpBusy ? ' busy' : ''}`}>
             <input
               type="checkbox"
               checked={!!prefs?.task_done}
-              disabled={prefsBusy || !prefs}
+              disabled={prefsBusy || otpBusy || !prefs}
               onChange={(e) => void togglePref('task_done', e.target.checked)}
             />
             <span />
@@ -206,19 +268,76 @@ export function InstanceSettingsPage() {
         </label>
         <label className="settings-row settings-toggle-row">
           <span>
-            <span className="settings-label">命令审批通知</span>
-            <span className="settings-hint">有命令待审批且两端都没看对话时推送</span>
+            <span className="settings-label">{t('settings.notify.permission')}</span>
           </span>
-          <span className={`settings-switch${prefsBusy ? ' busy' : ''}`}>
+          <span className={`settings-switch${prefsBusy || otpBusy ? ' busy' : ''}`}>
             <input
               type="checkbox"
               checked={!!prefs?.permission}
-              disabled={prefsBusy || !prefs}
+              disabled={prefsBusy || otpBusy || !prefs}
               onChange={(e) => void togglePref('permission', e.target.checked)}
             />
             <span />
           </span>
         </label>
+        {pendingPref && !prefs?.bark_verified ? (
+          <div
+            style={{
+              marginTop: 12,
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder={t('settings.notify.code')}
+              value={otpCode}
+              disabled={otpBusy}
+              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              style={{
+                width: 96,
+                padding: '8px 10px',
+                borderRadius: 10,
+                border: '1px solid var(--border)',
+                background: 'var(--bg, #fff)',
+                color: 'inherit',
+              }}
+            />
+            <button
+              type="button"
+              className="btn outline"
+              disabled={otpBusy || otpCooldown > 0}
+              onClick={() => void onSendBarkOtp()}
+            >
+              {otpCooldown > 0 ? `${otpCooldown}s` : t('settings.notify.send')}
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={otpBusy || otpCode.length !== 6}
+              onClick={() => void onConfirmBarkOtp()}
+            >
+              {t('settings.notify.confirm')}
+            </button>
+            <button
+              type="button"
+              className="btn outline"
+              disabled={otpBusy}
+              onClick={() => {
+                setPendingPref(null)
+                setOtpCode('')
+                setErr(null)
+              }}
+            >
+              {t('settings.notify.cancel')}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <h2 className="settings-section-title">JEV</h2>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import SettingsFold from './SettingsFold.jsx'
 import { DbLogo } from './dbLogos.jsx'
 import { copyText } from './engineCatalog.js'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
@@ -12,6 +13,7 @@ const OPTIONS = [
 
 /** 设置页「数据库」：紧凑列表 + 迁移切换，视觉对齐其它设置分组。 */
 export default function DbSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(true)
   const [detailOpen, setDetailOpen] = useState(false)
   const [st, setSt] = useState(null)
@@ -148,8 +150,12 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
 
   return (
     <SettingsFold
-      title="数据库"
-      desc={st ? `当前 ${current === 'mysql' ? 'MySQL' : 'SQLite'}` : '平台主库：SQLite / MySQL'}
+      title={t('settings.db')}
+      desc={
+        st
+          ? t('settings.dbCurrent', { name: current === 'mysql' ? 'MySQL' : 'SQLite' })
+          : t('settings.dbDesc')
+      }
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >

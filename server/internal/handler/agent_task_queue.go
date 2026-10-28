@@ -1,0 +1,132 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"atolla/server/internal/service"
+	"github.com/gin-gonic/gin"
+)
+
+type taskQueueBody struct {
+	Question    string `json:"question"`
+	Attachments []struct {
+		ID   string `json:"id"`
+		URL  string `json:"url"`
+		Mime string `json:"mime"`
+		Name string `json:"name"`
+	} `json:"attachments"`
+}
+
+func parseTaskQueueAtts(in []struct {
+	ID   string `json:"id"`
+	URL  string `json:"url"`
+	Mime string `json:"mime"`
+	Name string `json:"name"`
+}) []service.TaskQueueAttachment {
+	out := make([]service.TaskQueueAttachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, service.TaskQueueAttachment{ID: a.ID, URL: a.URL, Mime: a.Mime, Name: a.Name})
+	}
+	return out
+}
+
+func taskQueueHTTPError(c *gin.Context, err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	status := http.StatusBadRequest
+	switch {
+	case errors.Is(err, service.ErrTaskQueueFull) || strings.Contains(msg, "已满"):
+		status = http.StatusConflict
+	case errors.Is(err, service.ErrTaskQueuePauseFull) || strings.Contains(msg, "打断次数"):
+		status = http.StatusConflict
+	case errors.Is(err, service.ErrTaskQueueLocked) || strings.Contains(msg, "占用"):
+		status = http.StatusConflict
+	case strings.Contains(msg, "not found"):
+		status = http.StatusNotFound
+	}
+	c.JSON(status, gin.H{"error": msg})
+}
+
+// AdminAgentTaskQueueList 任务队列轨数据。
+func (h *Handler) AdminAgentTaskQueueList(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	view, err := h.svc.ListTaskQueue(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+// AdminAgentTaskQueueEnqueue 追加队列末尾。
+func (h *Handler) AdminAgentTaskQueueEnqueue(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body taskQueueBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	item, err := h.svc.EnqueueAgentTask(c.Request.Context(), id, body.Question, parseTaskQueueAtts(body.Attachments))
+	if err != nil {
+		taskQueueHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+// AdminAgentTaskQueueInterrupt 打断优先：paused 当前 + 登记紧急 running。
+func (h *Handler) AdminAgentTaskQueueInterrupt(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body taskQueueBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	item, err := h.svc.InterruptPreferAgentTask(c.Request.Context(), id, body.Question, parseTaskQueueAtts(body.Attachments))
+	if err != nil {
+		taskQueueHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+// AdminAgentTaskQueueContinue 继续队列（清 hold 并 claim 下一条）。
+func (h *Handler) AdminAgentTaskQueueContinue(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	item, err := h.svc.ContinueAgentTaskQueue(c.Request.Context(), id)
+	if err != nil {
+		taskQueueHTTPError(c, err)
+		return
+	}
+	if item == nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "task": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "task": item, "resume_prefix": item.ResumeHint})
+}
+
+// AdminAgentTaskQueueCancel 取消 queued/paused。
+func (h *Handler) AdminAgentTaskQueueCancel(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	taskID, _ := strconv.ParseInt(c.Param("taskId"), 10, 64)
+	if err := h.svc.CancelAgentTaskQueueItem(c.Request.Context(), id, taskID); err != nil {
+		taskQueueHTTPError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// AdminAgentTaskQueueClearDone 清除终态展示。
+func (h *Handler) AdminAgentTaskQueueClearDone(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err := h.svc.ClearAgentTaskQueueDone(c.Request.Context(), id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}

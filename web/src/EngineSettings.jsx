@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { copyText, fetchSetupStatus, installCommand } from './engineCatalog.js'
 import { EngineLogo } from './engineLogos.jsx'
 import SettingsFold from './SettingsFold.jsx'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 /** 前端兜底 TTL；以服务端 ttl_seconds 为准。 */
@@ -51,6 +52,7 @@ function rememberUsage(d) {
 
 /** 设置页「工作引擎」：安装状态 + 订阅额度进度条，点击看详情。 */
 export default function EngineSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [engines, setEngines] = useState([])
   const [usageById, setUsageById] = useState(() => ({ ...usageMem.byId }))
   const [detailId, setDetailId] = useState('')
@@ -120,8 +122,8 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
 
   return (
     <SettingsFold
-      title="工作引擎"
-      desc="绿灯表示本机已能调用该 CLI；额度默认缓存 5 分钟，点「重新检查」可强制刷新"
+      title={t('settings.engine')}
+      desc={t('settings.engineDesc')}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >

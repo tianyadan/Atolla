@@ -71,6 +71,11 @@ type Service struct {
 	pcViewAgent int64
 	pcViewAt    time.Time
 
+	notifyOTPMu sync.Mutex
+	notifyOTP   *notifyBarkOTP
+
+	tqLocks *taskQueueLocks
+
 	cloneJobMap    *sync.Map
 	compactPending *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
 	liveAssist     *sync.Map // convID -> *liveAssistantBuf，流式思考在命令前落库
@@ -115,6 +120,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 	}
 	_ = st.ClearAllOccupancy(context.Background())
 	svc.BeginWorkflowRecoveryWindow()
+	svc.RepairAgentTaskQueueOnBoot(context.Background())
 	svc.startRemoteBridge(cfg.WorkspaceRoot)
 	return svc
 }

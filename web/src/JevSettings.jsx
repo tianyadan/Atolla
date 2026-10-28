@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import SettingsFold from './SettingsFold.jsx'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
@@ -68,6 +69,7 @@ function useStagedProgress(active, steps) {
  * 开启是数字人「AI 自动审核」的前置条件。
  */
 export default function JevSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [progressMode, setProgressMode] = useState(null)
@@ -278,8 +280,8 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
 
   return (
     <SettingsFold
-      title="JEV"
-      desc="本地 AI 风险审核引擎（jevos）；开启后数字人才可使用「自动审核」。包来自 GitHub feder-cr/jev"
+      title={t('settings.jev')}
+      desc={t('settings.jevDesc')}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >

@@ -14,26 +14,31 @@ import {
   sortConversationSummaries,
   uniqueLatestAgentConversations,
 } from './modernWorkspaceModel.js'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
-const MORE_GROUPS = [
-  [
-    { id: 'agents-manage', label: '数字人管理', icon: 'robot' },
-    { id: 'group-chats', label: '群聊', icon: 'chat' },
-    { id: 'plans', label: '项目协作', icon: 'folder' },
-    { id: 'audit', label: '对话审计', icon: 'shield' },
-  ],
-  [
-    { id: 'audit-agents', label: '审计', icon: 'document' },
-    { id: 'legacy-memories', label: '数字员工记忆', icon: 'clock' },
-    { id: 'remote-relay', label: '远程中继', icon: 'monitor' },
-    { id: 'network-allowlist', label: '网络白名单', icon: 'globe' },
-  ],
-  [
-    { id: 'settings', label: '设置', icon: 'settings' },
-    { id: 'manual', label: '产品手册', icon: 'book' },
-  ],
-]
+
+/** 更多菜单分组（随界面语言） */
+function buildMoreGroups(t) {
+  return [
+    [
+      { id: 'agents-manage', label: t('nav.agentsManage'), icon: 'robot' },
+      { id: 'group-chats', label: t('nav.groupChats'), icon: 'chat' },
+      { id: 'plans', label: t('nav.plans'), icon: 'folder' },
+      { id: 'audit', label: t('nav.audit'), icon: 'shield' },
+    ],
+    [
+      { id: 'audit-agents', label: t('nav.auditAgents'), icon: 'document' },
+      { id: 'legacy-memories', label: t('nav.legacyMemories'), icon: 'clock' },
+      { id: 'remote-relay', label: t('nav.remoteRelay'), icon: 'monitor' },
+      { id: 'network-allowlist', label: t('nav.networkAllowlist'), icon: 'globe' },
+    ],
+    [
+      { id: 'settings', label: t('nav.settings'), icon: 'settings' },
+      { id: 'manual', label: t('nav.manual'), icon: 'book' },
+    ],
+  ]
+}
 
 export default function ModernWorkspace({
   authHeaders,
@@ -53,6 +58,8 @@ export default function ModernWorkspace({
   sidebarCollapsed = false,
   onSidebarCollapsedChange,
 }) {
+  const { t } = useLocale()
+  const moreGroups = useMemo(() => buildMoreGroups(t), [t])
   const [conversations, setConversations] = useState([])
   const [folders, setFolders] = useState([])
   const [selected, setSelected] = useState(null)
@@ -148,11 +155,42 @@ export default function ModernWorkspace({
     if (target) setSelected(target)
   }, [focusAgentId, conversations])
 
-  const groupsAvailable = useMemo(() => [...new Set(['未分组', ...folders.map((folder) => folder.name), ...conversations.map((item) => item.group_name || '未分组')])], [folders, conversations])
-  const filtered = useMemo(() => sortConversationSummaries(filterConversationSummaries(conversations, query)
-    .filter((item) => !groupFilter || (item.group_name || '未分组') === groupFilter)), [conversations, query, groupFilter])
+  const ungrouped = t('modern.ungrouped')
+  /** 真实分组名；未分组用哨兵值，避免切语言后筛选项错位 */
+  const groupsAvailable = useMemo(() => {
+    const names = new Set()
+    let hasUngrouped = false
+    for (const folder of folders) {
+      if (folder.name) names.add(folder.name)
+    }
+    for (const item of conversations) {
+      if (item.group_name) names.add(item.group_name)
+      else hasUngrouped = true
+    }
+    const list = [...names]
+    if (hasUngrouped) list.unshift('__ungrouped__')
+    return list
+  }, [folders, conversations])
+  const filtered = useMemo(
+    () => sortConversationSummaries(
+      filterConversationSummaries(conversations, query).filter((item) => {
+        if (!groupFilter) return true
+        if (groupFilter === '__ungrouped__') return !item.group_name
+        return item.group_name === groupFilter
+      }),
+    ),
+    [conversations, query, groupFilter],
+  )
   const uniqueAgents = useMemo(() => uniqueLatestAgentConversations(filtered), [filtered])
-  const groups = useMemo(() => groupRecentConversations(uniqueAgents), [uniqueAgents])
+  const groups = useMemo(
+    () => groupRecentConversations(uniqueAgents, new Date(), {
+      today: t('modern.today'),
+      yesterday: t('modern.yesterday'),
+      last7Days: t('modern.last7Days'),
+      earlier: t('modern.earlier'),
+    }),
+    [uniqueAgents, t],
+  )
 
   function showAgentTooltip(event, item, state) {
     const avatarRect = event.currentTarget.getBoundingClientRect()
@@ -166,7 +204,15 @@ export default function ModernWorkspace({
   }
 
   function stateText(state) {
-    return ({ error: '执行报错', approval: '等待审批', running: '运行中', completed: '已完成 · 未读', idle: '空闲' })[state] || '空闲'
+    return (
+      {
+        error: t('modern.state.error'),
+        approval: t('modern.state.approval'),
+        running: t('modern.state.running'),
+        completed: t('modern.state.completed'),
+        idle: t('modern.state.idle'),
+      }[state] || t('modern.state.idle')
+    )
   }
 
   async function activateConversation(item) {
@@ -205,22 +251,22 @@ export default function ModernWorkspace({
 
   return (
     <section className={`modern-workspace${sidebarCollapsed ? ' is-collapsed' : ''}${showChat ? '' : ' is-sidebar-only'}`}>
-      <button className="modern-drawer-toggle" type="button" onClick={() => setDrawerOpen(true)} aria-label="打开最近对话">
+      <button className="modern-drawer-toggle" type="button" onClick={() => setDrawerOpen(true)} aria-label={t('modern.openRecents')}>
         <ModernIcon name="panel" />
       </button>
       <aside className={`modern-recents${drawerOpen ? ' is-open' : ''}`}>
         <div className="modern-sidebar-top">
-          <div className="modern-sidebar-brand" title="数字员工">
+          <div className="modern-sidebar-brand" title={t('modern.brand')}>
             <ModernIcon name="agents" size={18} />
-            <strong>数字员工</strong>
+            <strong>{t('modern.brand')}</strong>
           </div>
           <div className="modern-sidebar-actions">
             <button
               type="button"
               className="modern-icon-btn modern-hire-btn"
               onClick={() => setHireGroupOpen(true)}
-              title="招聘新员工"
-              aria-label="招聘新员工"
+              title={t('modern.hire')}
+              aria-label={t('modern.hire')}
             >
               <ModernIcon name="plus" size={18} />
             </button>
@@ -228,8 +274,8 @@ export default function ModernWorkspace({
               type="button"
               className="modern-collapse-toggle"
               onClick={() => onSidebarCollapsedChange?.(!sidebarCollapsed)}
-              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
-              aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+              title={sidebarCollapsed ? t('modern.expandSidebar') : t('modern.collapseSidebar')}
+              aria-label={sidebarCollapsed ? t('modern.expandSidebar') : t('modern.collapseSidebar')}
             >
               <ModernIcon name="panel" size={18} />
             </button>
@@ -240,13 +286,17 @@ export default function ModernWorkspace({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索数字人或会话"
+            placeholder={t('modern.searchPlaceholder')}
           />
         </label>
         <label className="modern-group-filter">
-          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label="选择分组">
-            <option value="">全部分组</option>
-            {groupsAvailable.map((name) => <option key={name} value={name}>{name}</option>)}
+          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label={t('modern.selectGroup')}>
+            <option value="">{t('modern.allGroups')}</option>
+            {groupsAvailable.map((name) => (
+              <option key={name} value={name}>
+                {name === '__ungrouped__' ? ungrouped : name}
+              </option>
+            ))}
           </select>
           <ModernIcon name="chevron-down" size={16} />
         </label>
@@ -261,7 +311,7 @@ export default function ModernWorkspace({
                     <button type="button" className="modern-recent-main" onClick={() => activateConversation(item)}>
                       <span
                         className="modern-jelly-wrap"
-                        aria-label={`${item.agent_name}，${item.group_name || '未分组'}，${stateText(state)}`}
+                        aria-label={`${item.agent_name}, ${item.group_name || ungrouped}, ${stateText(state)}`}
                         onMouseEnter={(event) => showAgentTooltip(event, item, state)}
                         onMouseLeave={() => setHoverAgent(null)}
                       >
@@ -274,8 +324,8 @@ export default function ModernWorkspace({
                       <button
                         type="button"
                         className="modern-dismiss-agent"
-                        title={`解聘 ${item.agent_name}`}
-                        aria-label={`解聘 ${item.agent_name}`}
+                        title={t('modern.dismiss', { name: item.agent_name })}
+                        aria-label={t('modern.dismiss', { name: item.agent_name })}
                         onClick={(event) => {
                           event.stopPropagation()
                           setHoverAgent(null)
@@ -290,7 +340,7 @@ export default function ModernWorkspace({
               })}
             </div>
           ))}
-          {!groups.length && <p className="modern-empty">还没有对话</p>}
+          {!groups.length && <p className="modern-empty">{t('modern.emptyChats')}</p>}
         </div>
         <div className="modern-account-row">
           <div
@@ -302,16 +352,16 @@ export default function ModernWorkspace({
               if (!event.currentTarget.contains(event.relatedTarget)) scheduleAccountMenuClose()
             }}
           >
-            <button type="button" className="modern-account-trigger" aria-label="账户菜单" aria-expanded={accountOpen} onClick={() => setAccountOpen((value) => !value)}>
+            <button type="button" className="modern-account-trigger" aria-label={t('modern.accountMenu')} aria-expanded={accountOpen} onClick={() => setAccountOpen((value) => !value)}>
               <span className="modern-user-avatar" aria-hidden="true">{String(username || 'U').slice(0, 1).toUpperCase()}</span>
-              <span className="modern-user-name">{username || '用户'}</span>
+              <span className="modern-user-name">{username || t('modern.user')}</span>
             </button>
             {accountOpen && (
               <div className="modern-account-menu">
-                <button type="button" onClick={onOpenFrontend}>前台对话</button>
-                <button type="button" onClick={onUseClassic}>切换经典风格</button>
+                <button type="button" onClick={onOpenFrontend}>{t('top.frontendChat')}</button>
+                <button type="button" onClick={onUseClassic}>{t('top.classicStyle')}</button>
                 <hr />
-                <button type="button" className="danger-item" onClick={onLogout}>退出登录</button>
+                <button type="button" className="danger-item" onClick={onLogout}>{t('top.logoutFull')}</button>
               </div>
             )}
           </div>
@@ -323,7 +373,7 @@ export default function ModernWorkspace({
                 setAccountOpen(false)
                 setMoreOpen((value) => !value)
               }}
-              aria-label="更多功能"
+              aria-label={t('modern.more')}
               aria-expanded={moreOpen}
               aria-controls="modern-more-menu"
             >
@@ -335,7 +385,7 @@ export default function ModernWorkspace({
               role="menu"
               aria-hidden={!moreOpen}
             >
-              {MORE_GROUPS.map((group, groupIndex) => (
+              {moreGroups.map((group, groupIndex) => (
                 <div className="modern-more-group" key={group[0].id}>
                   {group.map((item, itemIndex) => (
                     <button
@@ -359,7 +409,7 @@ export default function ModernWorkspace({
                 role="menuitem"
                 tabIndex={moreOpen ? 0 : -1}
                 onClick={() => openMoreModule('changelog')}
-                title="查看版本记录"
+                title={t('modern.viewChangelog')}
               >
                 <ModernIcon name="info" size={17} />
                 <span>Atolla</span>
@@ -372,11 +422,11 @@ export default function ModernWorkspace({
       {hoverAgent && (
         <div className="modern-agent-tooltip" role="tooltip" style={{ top: hoverAgent.top, left: hoverAgent.left }}>
           <strong>{hoverAgent.item.agent_name}</strong>
-          <span>{hoverAgent.item.group_name || '未分组'}</span>
+          <span>{hoverAgent.item.group_name || ungrouped}</span>
           <em className={`state-${hoverAgent.state}`}><i />{stateText(hoverAgent.state)}</em>
         </div>
       )}
-      {drawerOpen && <button type="button" className="modern-drawer-mask" onClick={() => setDrawerOpen(false)} aria-label="关闭最近对话" />}
+      {drawerOpen && <button type="button" className="modern-drawer-mask" onClick={() => setDrawerOpen(false)} aria-label={t('modern.closeRecents')} />}
       <main className="modern-chat-stage">
         {error && <div className="modern-error">{error}<button type="button" onClick={() => setError('')}>×</button></div>}
         <ManagedAgentsPanel
@@ -400,18 +450,18 @@ export default function ModernWorkspace({
       {hireGroupOpen && (
         <div className="modal-mask" onMouseDown={() => setHireGroupOpen(false)}>
           <div className="modal-card modern-hire-group" onMouseDown={(event) => event.stopPropagation()}>
-            <h2>选择员工分组</h2>
-            <p className="muted">招聘完成后，新员工会自动进入所选工作组。</p>
+            <h2>{t('modern.pickGroupTitle')}</h2>
+            <p className="muted">{t('modern.pickGroupHint')}</p>
             <label>
-              工作组
+              {t('modern.workGroup')}
               <select value={hireFolderId} onChange={(event) => setHireFolderId(event.target.value)}>
-                <option value="0">未分组</option>
+                <option value="0">{ungrouped}</option>
                 {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
               </select>
             </label>
             <div className="modal-actions">
-              <button type="button" onClick={() => setHireGroupOpen(false)}>取消</button>
-              <button type="button" className="primary" onClick={() => { setHireGroupOpen(false); setHireOpen(true) }}>进入人才市场</button>
+              <button type="button" onClick={() => setHireGroupOpen(false)}>{t('modern.cancel')}</button>
+              <button type="button" className="primary" onClick={() => { setHireGroupOpen(false); setHireOpen(true) }}>{t('modern.enterMarket')}</button>
             </div>
           </div>
         </div>

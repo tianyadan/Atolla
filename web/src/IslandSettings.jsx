@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import SettingsFold from './SettingsFold.jsx'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
@@ -101,6 +102,7 @@ function shortErr(msg) {
 
 /** 设置 · 灵动岛：未安装点「安装」自动拉最新 Release；已安装可开关或卸载。 */
 export default function IslandSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(true)
   const [busy, setBusy] = useState(false)
   const [progressMode, setProgressMode] = useState(null) // enable|install|disable|uninstall
@@ -287,8 +289,8 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
 
   return (
     <SettingsFold
-      title="灵动岛"
-      desc="macOS 顶部展示运行中数字人；首次安装自动拉取最新 GitHub Release"
+      title={t('settings.island')}
+      desc={t('settings.islandDesc')}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >

@@ -32,6 +32,7 @@ import { MarkdownBody } from '../components/MarkdownBody'
 import { Modal } from '../components/Modal'
 import { MobileChatHeader } from '../components/MobileChatHeader'
 import { PageShell } from '../components/PageShell'
+import { copyToClipboard } from '../utils/clipboard'
 import { byLabel, parseCommandMessage } from '../utils/commandMessage'
 import { useUnlockHeartbeat } from '../hooks/useUnlockHeartbeat'
 import { tapHaptic } from '../haptics'
@@ -66,19 +67,6 @@ import {
   agentTaskPlanEnabled,
 } from '../utils/agentStatus'
 
-/** Copy plain text (clipboard API with fallback) */
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    ta.remove()
-  }
-}
 
 /** Seconds left until permission deadline */
 function remainSec(deadline: string | null | undefined): number {
@@ -681,7 +669,8 @@ export function ChatHistoryPage() {
   async function onCopyMessage(id: string, text: string) {
     const t = text.trim()
     if (!t) return
-    await copyText(t)
+    const ok = await copyToClipboard(t)
+    if (!ok) return
     setCopiedId(id)
     window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1600)
   }
@@ -1023,7 +1012,14 @@ export function ChatHistoryPage() {
                     key={it.localId}
                     className={`chat-attach-thumb${it.uploading ? ' uploading' : ''}${it.error ? ' err' : ''}`}
                   >
-                    <img src={it.previewUrl} alt="" />
+                    <button
+                      type="button"
+                      className="chat-attach-thumb-open"
+                      aria-label="放大查看图片"
+                      onClick={() => setLightboxSrc(it.previewUrl)}
+                    >
+                      <img src={it.previewUrl} alt="" />
+                    </button>
                     {it.uploading ? <span className="chat-attach-spin" aria-hidden /> : null}
                     {it.error ? <span className="chat-attach-err" title={it.error}>!</span> : null}
                     <button
@@ -1031,7 +1027,10 @@ export function ChatHistoryPage() {
                       className="chat-attach-rm"
                       aria-label="移除图片"
                       disabled={sending}
-                      onClick={() => onRemovePending(it.localId)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onRemovePending(it.localId)
+                      }}
                     >
                       ×
                     </button>
@@ -1073,44 +1072,47 @@ export function ChatHistoryPage() {
                 <ImageIcon />
               </button>
               <div className="chat-composer-toolbar-spacer" />
-              <ContextRing usage={ctxUsage} />
-              {(question || pendingImages.length > 0) && !sending ? (
+              {/* 右簇：上下文环 / 清空 / 终止 / 发送，彼此留间隙 */}
+              <div className="chat-composer-actions">
+                <ContextRing usage={ctxUsage} />
+                {(question || pendingImages.length > 0) && !sending ? (
+                  <button
+                    type="button"
+                    className="composer-icon-btn"
+                    aria-label="清空"
+                    title="清空"
+                    onClick={() => {
+                      setQuestion('')
+                      saveChatDraft(instanceId, agentId, '')
+                      revokePendingImages(pendingImages)
+                      setPendingImages([])
+                    }}
+                  >
+                    <ClearIcon />
+                  </button>
+                ) : null}
+                {busy ? (
+                  <button
+                    type="button"
+                    className="composer-icon-btn is-stop"
+                    aria-label="终止"
+                    title="终止"
+                    onClick={() => void onStop()}
+                  >
+                    <StopIcon />
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="composer-icon-btn"
-                  aria-label="清空"
-                  title="清空"
-                  onClick={() => {
-                    setQuestion('')
-                    saveChatDraft(instanceId, agentId, '')
-                    revokePendingImages(pendingImages)
-                    setPendingImages([])
-                  }}
+                  className={`composer-send-btn${busy ? ' is-interrupt' : ''}`}
+                  aria-label={sending ? '发送中' : busy ? '插话' : '发送'}
+                  title={sending ? '发送中' : busy ? '插话' : '发送'}
+                  disabled={sending || (!question.trim() && pendingImages.length === 0)}
+                  onClick={() => void onSend()}
                 >
-                  <ClearIcon />
+                  <SendIcon />
                 </button>
-              ) : null}
-              {busy ? (
-                <button
-                  type="button"
-                  className="composer-icon-btn is-stop"
-                  aria-label="终止"
-                  title="终止"
-                  onClick={() => void onStop()}
-                >
-                  <StopIcon />
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className={`composer-send-btn${busy ? ' is-interrupt' : ''}`}
-                aria-label={sending ? '发送中' : busy ? '插话' : '发送'}
-                title={sending ? '发送中' : busy ? '插话' : '发送'}
-                disabled={sending || (!question.trim() && pendingImages.length === 0)}
-                onClick={() => void onSend()}
-              >
-                <SendIcon />
-              </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1283,11 +1285,15 @@ export function ChatHistoryPage() {
             type="button"
             className="chat-lightbox-close"
             aria-label="关闭"
-            onClick={() => setLightboxSrc('')}
+            onClick={(e) => {
+              e.stopPropagation()
+              setLightboxSrc('')
+            }}
           >
             ×
           </button>
-          <img src={lightboxSrc} alt="" onClick={(e) => e.stopPropagation()} />
+          {/* 点图也可关闭，避免只能依赖右上角 */}
+          <img src={lightboxSrc} alt="" onClick={() => setLightboxSrc('')} />
         </div>
       ) : null}
     </PageShell>

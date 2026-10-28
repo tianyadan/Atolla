@@ -9,7 +9,7 @@ import {
 } from '../api'
 import { JellyAvatar } from '../jelly/JellyAvatar'
 import { jellyStateFromAgent, resolveMirrorJellyColor } from '../jelly/jellyColor'
-import { agentBusy, agentStatusLabel, groupAgentsByFolder } from '../utils/agentStatus'
+import { agentBusy, groupAgentsByFolder } from '../utils/agentStatus'
 import {
   chatRoute,
   loadInstanceChatSelection,
@@ -153,15 +153,22 @@ export function MobileChatHeader({ instanceId, agent, busy, onOpenAgentSettings 
         <button
           type="button"
           className={`mobile-chat-nav-button avatar${menu === 'agents' ? ' is-active' : ''}`}
-          aria-label="切换数字人"
+          aria-label={`切换数字人，${statusAria}`}
           aria-expanded={menu === 'agents'}
           onClick={() => void toggleMenu('agents')}
         >
-          <JellyAvatar
-            size={40}
-            color={resolveMirrorJellyColor(agent)}
-            state={jellyStateFromAgent(agent, { loading: busy, streaming: busy })}
-          />
+          {/* 头像 + 右下角状态呼吸灯 */}
+          <span className="mobile-chat-avatar-wrap">
+            <JellyAvatar
+              size={40}
+              color={resolveMirrorJellyColor(agent)}
+              state={jellyStateFromAgent(agent, { loading: busy, streaming: busy })}
+            />
+            <i
+              className={`mobile-chat-breath is-on-avatar${agent ? (isWorking ? ' is-busy' : ' is-idle') : ' is-offline'}`}
+              aria-hidden
+            />
+          </span>
         </button>
 
         <div className="mobile-chat-nav-center">
@@ -172,19 +179,15 @@ export function MobileChatHeader({ instanceId, agent, busy, onOpenAgentSettings 
             disabled={!agent}
             onClick={() => agent && onOpenAgentSettings?.()}
           >
-            <strong>
-              <span className="mobile-chat-agent-name">{title}</span>
-              {agent ? <span className="mobile-chat-agent-group">· {currentGroup}</span> : null}
-            </strong>
+            {/* 第一行：数字人名称；第二行：引擎 + 组名 */}
+            <strong className="mobile-chat-agent-name">{title}</strong>
+            {agent ? (
+              <span className="mobile-chat-meta-row">
+                <EngineTag engine={agent.engine} />
+                <span className="mobile-chat-agent-group">{currentGroup}</span>
+              </span>
+            ) : null}
           </button>
-          <div className="mobile-chat-status" aria-label={statusAria}>
-            {/* 忙=橙呼吸灯 / 闲=绿呼吸灯；用量改到数字人菜单，避免顶栏过挤 */}
-            <i
-              className={`mobile-chat-breath${agent ? (isWorking ? ' is-busy' : ' is-idle') : ' is-offline'}`}
-              aria-hidden
-            />
-            {agent ? <EngineTag engine={agent.engine} /> : null}
-          </div>
         </div>
 
         <button
@@ -265,27 +268,29 @@ export function MobileChatHeader({ instanceId, agent, busy, onOpenAgentSettings 
                           <div className="mobile-agent-group-items">
                             {group.agents.map((row) => {
                               const selected = row.agent_id === currentAgentId
+                              const working = agentBusy(row.status)
                               return (
                                 <button
                                   type="button"
                                   className={`mobile-agent-option${selected ? ' is-selected' : ''}`}
                                   key={row.agent_id}
+                                  aria-label={`${row.display_name || row.agent_id}，${working ? '忙碌' : '空闲'}`}
                                   onClick={() => openAgent(row)}
                                 >
-                                  <JellyAvatar
-                                    size={42}
-                                    color={resolveMirrorJellyColor(row)}
-                                    state={jellyStateFromAgent(row)}
-                                  />
+                                  {/* 状态只保留头像右下角呼吸灯，不再跟文字 */}
+                                  <span className="mobile-chat-avatar-wrap">
+                                    <JellyAvatar
+                                      size={42}
+                                      color={resolveMirrorJellyColor(row)}
+                                      state={jellyStateFromAgent(row)}
+                                    />
+                                    <i
+                                      className={`mobile-chat-breath is-on-avatar${working ? ' is-busy' : ' is-idle'}`}
+                                      aria-hidden
+                                    />
+                                  </span>
                                   <span className="mobile-option-copy">
                                     <strong>{row.display_name || row.agent_id}</strong>
-                                    <small>
-                                      <i
-                                        className={agentBusy(row.status) ? 'is-busy' : 'is-idle'}
-                                        aria-hidden
-                                      />
-                                      {agentStatusLabel(row.status)}
-                                    </small>
                                   </span>
                                   <span className="mobile-option-check" aria-hidden>
                                     {selected ? '✓' : ''}

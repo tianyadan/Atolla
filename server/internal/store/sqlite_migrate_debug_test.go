@@ -35,6 +35,7 @@ func TestDebugSQLiteMigrateSteps(t *testing.T) {
 		{"jelly", s.EnsureJellyColorSchema},
 		{"group", s.EnsureGroupChatSchema},
 		{"unread", s.EnsureTaskUnreadSchema},
+		{"taskq", s.EnsureAgentTaskQueueSchema},
 	}
 	for _, st := range steps {
 		if err := st.fn(ctx); err != nil {

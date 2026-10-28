@@ -81,6 +81,12 @@ func (s *stubRuntime) JevosSettingsUninstall() (any, error) { return map[string]
 func (s *stubRuntime) ListAgentLegacyMounts(context.Context, int64) ([]store.AgentLegacyMemoryMount, error) {
 	return nil, nil
 }
+func (s *stubRuntime) SaveNotifyPrefs(context.Context, store.NotifyPrefs) error { return nil }
+func (s *stubRuntime) GetNotifyPrefs(context.Context) (store.NotifyPrefs, error) {
+	return store.NotifyPrefs{}, nil
+}
+func (s *stubRuntime) SendNotifyBarkOTP(context.Context) (int, error) { return 600, nil }
+func (s *stubRuntime) ConfirmNotifyBarkOTP(context.Context, string) error { return nil }
 
 func TestHandleAgentAskAccepts(t *testing.T) {
 	rt := &stubRuntime{}

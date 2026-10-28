@@ -17,6 +17,7 @@ import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
 import RemoteRelayPanel from './RemoteRelayPanel.jsx'
 import NetworkPolicyPanel from './NetworkPolicyPanel.jsx'
 import NotifySettings from './NotifySettings.jsx'
+import LanguageSettings from './LanguageSettings.jsx'
 import EngineOnboarding from './EngineOnboarding.jsx'
 import EngineSettings from './EngineSettings.jsx'
 import DbSettings from './DbSettings.jsx'
@@ -26,6 +27,10 @@ import JevSettings from './JevSettings.jsx'
 import ModernWorkspace from './ModernWorkspace.jsx'
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import { normalizeUIStyle } from './modernWorkspaceModel.js'
+import { initLocale } from './i18n/locale.js'
+import { useLocale } from './i18n/useLocale.js'
+
+initLocale()
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -35,30 +40,35 @@ const UI_STYLE_KEY = 'atolla_ui_style_v1'
 const MODERN_SIDEBAR_KEY = 'atolla_modern_sidebar_collapsed_v1'
 marked.setOptions({ breaks: true, gfm: true })
 
-const ADMIN_MENUS = [
-  {
-    id: 'digital',
-    label: '数字人',
-    children: [
-      { id: 'agents', label: '对话' },
-      { id: 'agents-manage', label: '数字人管理' },
-      { id: 'group-chats', label: '群聊' },
-      { id: 'legacy-memories', label: '数字员工记忆' },
-    ],
-  },
-  { id: 'audit', label: '对话审计' },
-  { id: 'audit-agents', label: '审计' },
-  { id: 'plans', label: '项目协作' },
-  { id: 'memos', label: '备忘录' },
-  { id: 'analytics', label: '数据分析' },
-  { id: 'remote-relay', label: '远程中继' },
-  { id: 'network-allowlist', label: '网络白名单' },
-  { id: 'settings', label: '设置' },
-  { id: 'manual', label: '产品手册' },
-  { id: 'changelog', label: '版本' },
-]
+/** 管理台侧栏菜单（随界面语言切换） */
+function buildAdminMenus(t) {
+  return [
+    {
+      id: 'digital',
+      label: t('nav.digital'),
+      children: [
+        { id: 'agents', label: t('nav.agents') },
+        { id: 'agents-manage', label: t('nav.agentsManage') },
+        { id: 'group-chats', label: t('nav.groupChats') },
+        { id: 'legacy-memories', label: t('nav.legacyMemories') },
+      ],
+    },
+    { id: 'audit', label: t('nav.audit') },
+    { id: 'audit-agents', label: t('nav.auditAgents') },
+    { id: 'plans', label: t('nav.plans') },
+    { id: 'memos', label: t('nav.memos') },
+    { id: 'analytics', label: t('nav.analytics') },
+    { id: 'remote-relay', label: t('nav.remoteRelay') },
+    { id: 'network-allowlist', label: t('nav.networkAllowlist') },
+    { id: 'settings', label: t('nav.settings') },
+    { id: 'manual', label: t('nav.manual') },
+    { id: 'changelog', label: t('nav.changelog') },
+  ]
+}
 
 export default function App() {
+  const { t } = useLocale()
+  const adminMenus = buildAdminMenus(t)
   // 登录 / 视图
   const [authToken, setAuthToken] = useState(() => localStorage.getItem(AUTH_TOKEN_KEY) || '')
   const [username, setUsername] = useState('')
@@ -868,7 +878,7 @@ export default function App() {
   }
 
   function menuLabel(id) {
-    for (const m of ADMIN_MENUS) {
+    for (const m of adminMenus) {
       if (m.id === id) return m.label
       if (m.children) {
         const c = m.children.find((x) => x.id === id)
@@ -878,8 +888,8 @@ export default function App() {
     return ''
   }
 
-  async function copyText(t) {
-    try { await navigator.clipboard.writeText(t) } catch { /* ignore */ }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text) } catch { /* ignore */ }
   }
 
   // v0.0.7 开场白(邀请语不足 200 字)
@@ -916,20 +926,30 @@ export default function App() {
             <span className="admin-ver">{CURRENT_VERSION}</span>
           </h1>
           <div className="topbar-actions">
-            {uiStyle === 'classic' && <button type="button" className="ghost" onClick={() => switchUIStyle('modern')}>现代风格</button>}
-            <button type="button" className="ghost" onClick={() => setView('chat')}>前台对话</button>
+            {uiStyle === 'classic' && (
+              <button type="button" className="ghost" onClick={() => switchUIStyle('modern')}>
+                {t('top.modernStyle')}
+              </button>
+            )}
+            <button type="button" className="ghost" onClick={() => setView('chat')}>
+              {t('top.frontendChat')}
+            </button>
             {uiStyle === 'modern' && (
               <button
                 type="button"
                 className="ghost ui-style-switch"
                 onClick={() => switchUIStyle('classic')}
-                title="切换到经典风格"
-                aria-label="切换到经典风格"
+                title={t('top.classicStyle')}
+                aria-label={t('top.classicStyle')}
               >
                 <ModernIcon name="layout-switch" size={17} />
               </button>
             )}
-            {uiStyle === 'classic' && <button type="button" className="danger" onClick={doLogout}>退出</button>}
+            {uiStyle === 'classic' && (
+              <button type="button" className="danger" onClick={doLogout}>
+                {t('top.logout')}
+              </button>
+            )}
           </div>
         </header>
         <div className={`admin-layout ${adminCollapsed ? 'collapsed' : ''}`}>
@@ -938,11 +958,11 @@ export default function App() {
               type="button"
               className="admin-collapse-btn"
               onClick={() => setAdminCollapsed((v) => !v)}
-              title={adminCollapsed ? '展开菜单' : '折叠菜单'}
+              title={adminCollapsed ? t('top.expand') : t('top.foldMenu')}
             >
-              {adminCollapsed ? '»' : '« 折叠'}
+              {adminCollapsed ? '»' : t('top.collapse')}
             </button>
-            {ADMIN_MENUS.map((m) => {
+            {adminMenus.map((m) => {
               if (m.children) {
                 const childActive = m.children.some((c) => c.id === adminMenu)
                 return (
@@ -1122,7 +1142,8 @@ export default function App() {
               className="settings-page"
               style={{ display: adminMenu === 'settings' ? undefined : 'none' }}
             >
-                <h2 className="settings-page-title">设置</h2>
+                <h2 className="settings-page-title">{t('settings.title')}</h2>
+                <LanguageSettings />
                 <NotifySettings
                   authHeaders={authHeaders}
                   onUnauthorized={() => clearAuth('登录已过期')}

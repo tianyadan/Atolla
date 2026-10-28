@@ -63,8 +63,8 @@ export function SendIcon({ size = 20 }: IconProps) {
   )
 }
 
-/** 终止运行 */
-export function StopIcon({ size = 18 }: IconProps) {
+/** 终止运行（小圆角方块，外层圆由 CSS 提供） */
+export function StopIcon({ size = 14 }: IconProps) {
   return (
     <svg
       width={size}
@@ -73,7 +73,7 @@ export function StopIcon({ size = 18 }: IconProps) {
       fill="currentColor"
       aria-hidden
     >
-      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <rect x="5" y="5" width="14" height="14" rx="3.5" />
     </svg>
   )
 }

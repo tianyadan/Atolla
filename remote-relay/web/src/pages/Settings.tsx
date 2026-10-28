@@ -8,14 +8,17 @@ import {
   saveReceiveEmail,
 } from '../api'
 import { PageShell } from '../components/PageShell'
+import { LOCALES } from '../i18n/locale'
+import { useLocale } from '../i18n/useLocale'
 import { getApiBase, setApiBase } from '../utils/apiBase'
 
 /**
- * 全局 / 实例大门设置：版本、中继地址、接收邮箱、更新记录。
+ * 全局 / 实例大门设置：版本、语言、中继地址、接收邮箱、更新记录。
  * 通知与 JEV 已迁到「进入实例 → 功能 → 设置」。
  */
 export function SettingsPage() {
   const navigate = useNavigate()
+  const { locale, setLocale, t } = useLocale()
   const [version, setVersion] = useState<string>('…')
   const [error, setError] = useState<string | null>(null)
   const [apiBaseDraft, setApiBaseDraft] = useState(() => getApiBase())
@@ -73,30 +76,45 @@ export function SettingsPage() {
   }
 
   return (
-    <PageShell title="设置" backTo="/instances">
+    <PageShell title={t('settings.title')} backTo="/instances">
       {error ? <p className="error-banner">{error}</p> : null}
       {receiveMsg ? <p className="muted">{receiveMsg}</p> : null}
 
-      <h2 className="settings-section-title">应用</h2>
+      <h2 className="settings-section-title">{t('settings.app')}</h2>
       <div className="settings-block">
         <div className="settings-row">
-          <span className="settings-label">中继版本</span>
+          <span className="settings-label">{t('settings.relayVersion')}</span>
           <span className="settings-value">{version}</span>
         </div>
         <div className="settings-row">
-          <span className="settings-label">App 界面</span>
+          <span className="settings-label">{t('settings.appUi')}</span>
           <span className="settings-value">v0.0.25</span>
         </div>
+        <label className="settings-row" style={{ alignItems: 'center' }}>
+          <span className="settings-label">{t('settings.languageLabel')}</span>
+          <select
+            className="settings-locale-select"
+            value={locale}
+            aria-label={t('settings.languageLabel')}
+            onChange={(e) => setLocale(e.target.value)}
+          >
+            {LOCALES.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <h2 className="settings-section-title">验证码登录</h2>
+      <h2 className="settings-section-title">{t('settings.otpLogin')}</h2>
       <p className="settings-section-hint">
-        接收邮箱用于「验证码登录」。还需在 Mac「远程中继」配置并校验发送邮箱 SMTP。
-        {receiveMasked ? ` 当前：${receiveMasked}` : ''}
+        {t('settings.otpHint')}
+        {receiveMasked ? ` ${t('settings.otpCurrent', { email: receiveMasked })}` : ''}
       </p>
       <div className="settings-block">
         <label className="field" style={{ display: 'block', padding: '0.75rem 0' }}>
-          <span className="settings-label">接收邮箱</span>
+          <span className="settings-label">{t('settings.receiveEmail')}</span>
           <input
             type="email"
             inputMode="email"
@@ -114,19 +132,17 @@ export function SettingsPage() {
           disabled={receiveBusy}
           onClick={() => void onSaveReceiveEmail()}
         >
-          {receiveBusy ? '保存中…' : '保存接收邮箱'}
+          {receiveBusy ? t('settings.saving') : t('settings.saveReceive')}
         </button>
       </div>
 
       {showApiBase ? (
         <>
-          <h2 className="settings-section-title">中继服务</h2>
-          <p className="settings-section-hint">
-            App 壳内无浏览器同源代理，请填写可访问的中继根地址（含 https://，不要末尾斜杠）。
-          </p>
+          <h2 className="settings-section-title">{t('settings.relayService')}</h2>
+          <p className="settings-section-hint">{t('settings.relayHint')}</p>
           <div className="settings-block">
             <label className="field" style={{ display: 'block', padding: '0.75rem 0' }}>
-              <span className="settings-label">API 地址</span>
+              <span className="settings-label">{t('settings.apiBase')}</span>
               <input
                 type="url"
                 inputMode="url"
@@ -138,21 +154,19 @@ export function SettingsPage() {
               />
             </label>
             <button type="button" className="btn primary" onClick={saveApiBase}>
-              {apiSaved ? '已保存' : '保存'}
+              {apiSaved ? t('settings.saved') : t('settings.save')}
             </button>
           </div>
         </>
       ) : null}
 
-      <h2 className="settings-section-title">其它</h2>
-      <p className="settings-section-hint">
-        通知、JEV 等与电脑数字人相关的选项，请进入某台电脑后，在「功能 → 设置」中配置。
-      </p>
+      <h2 className="settings-section-title">{t('settings.other')}</h2>
+      <p className="settings-section-hint">{t('settings.otherHint')}</p>
       <ul className="list settings-menu">
         <li className="list-item">
           <Link to="/settings/changelog" className="list-link">
-            <div className="list-title">更新记录</div>
-            <div className="list-sub">查看各版本变更</div>
+            <div className="list-title">{t('settings.changelog')}</div>
+            <div className="list-sub">{t('settings.changelogSub')}</div>
           </Link>
         </li>
       </ul>

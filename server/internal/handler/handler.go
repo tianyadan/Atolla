@@ -118,6 +118,12 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agents/:id/ask", h.AdminAgentsAsk)
 			adm.POST("/admin/chat-images", h.AdminChatImageUpload)
 			adm.POST("/admin/agents/:id/stop", h.AdminAgentsStop)
+			adm.GET("/admin/agents/:id/task-queue", h.AdminAgentTaskQueueList)
+			adm.POST("/admin/agents/:id/task-queue", h.AdminAgentTaskQueueEnqueue)
+			adm.POST("/admin/agents/:id/task-queue/interrupt", h.AdminAgentTaskQueueInterrupt)
+			adm.POST("/admin/agents/:id/task-queue/continue", h.AdminAgentTaskQueueContinue)
+			adm.POST("/admin/agents/:id/task-queue/clear-done", h.AdminAgentTaskQueueClearDone)
+			adm.POST("/admin/agents/:id/task-queue/:taskId/cancel", h.AdminAgentTaskQueueCancel)
 			adm.POST("/admin/agents/:id/mark-read", h.AdminAgentsMarkRead)
 			adm.POST("/admin/agents/:id/ensure-conversation", h.AdminAgentsEnsureConversation)
 			adm.POST("/admin/agents/:id/clear", h.AdminAgentsClear)
@@ -148,6 +154,8 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/notify-prefs", h.AdminNotifyPrefsGet)
 			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)
+			adm.POST("/admin/notify-prefs/verify/send", h.AdminNotifyBarkVerifySend)
+			adm.POST("/admin/notify-prefs/verify/confirm", h.AdminNotifyBarkVerifyConfirm)
 
 			adm.GET("/admin/watchdog/local", h.AdminWatchdogLocalGet)
 			adm.PUT("/admin/watchdog/local", h.AdminWatchdogLocalPut)

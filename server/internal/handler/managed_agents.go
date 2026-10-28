@@ -423,8 +423,10 @@ func (h *Handler) AdminAgentsFile(c *gin.Context) {
 func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
-		Question    string `json:"question"`
-		Attachments []struct {
+		Question     string `json:"question"`
+		TaskID       int64  `json:"task_id"`
+		ResumePrefix bool   `json:"resume_prefix"`
+		Attachments  []struct {
 			ID   string `json:"id"`
 			URL  string `json:"url"`
 			Mime string `json:"mime"`
@@ -436,7 +438,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 		return
 	}
 	atts := parseAskAttachments(body.Attachments)
-	if strings.TrimSpace(body.Question) == "" && len(atts) == 0 {
+	if strings.TrimSpace(body.Question) == "" && len(atts) == 0 && body.TaskID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "question required"})
 		return
 	}
@@ -554,7 +556,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	askDone := make(chan struct{})
 	go func() {
 		defer close(askDone)
-		msg, askErr := h.svc.AskManagedWith(context.Background(), id, body.Question, atts, func(ev map[string]any) {
+		msg, askErr := h.svc.AskManagedWithTask(context.Background(), id, body.Question, atts, func(ev map[string]any) {
 			if ev == nil {
 				return
 			}
@@ -564,7 +566,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 				}
 			}
 			sendEvent(ev)
-		})
+		}, service.AskUserFacingOpts{TaskID: body.TaskID, ResumePrefix: body.ResumePrefix})
 		if askErr != nil {
 			sendEvent(map[string]interface{}{"type": "error", "message": askErr.Error()})
 			return
@@ -668,11 +670,11 @@ func (h *Handler) AdminAgentsTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// AdminAgentsStop 终止当前进行中的数字员工问答。
+// AdminAgentsStop 终止当前进行中的数字员工问答，并挂起任务队列自动续跑。
 func (h *Handler) AdminAgentsStop(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	ok := h.svc.StopManaged(id)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "stopped": ok})
+	ok := h.svc.StopManagedAndHoldQueue(id)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "stopped": ok, "queue_hold": true})
 }
 
 // AdminAgentsCommandAudits 命令审批审计列表。

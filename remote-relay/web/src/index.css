@@ -95,7 +95,23 @@ html.theme-light {
 }
 
 .mobile-chat-nav-button.avatar {
+  position: relative;
   background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+}
+
+.mobile-chat-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-agent-option .mobile-chat-avatar-wrap {
+  width: 2.625rem;
+  height: 2.625rem;
 }
 
 .mobile-chat-nav-button.is-active {
@@ -111,56 +127,66 @@ html.theme-light {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.2rem;
-  padding: 0 0.25rem;
+  align-items: stretch;
+  gap: 0.15rem;
+  padding: 0 0.2rem;
 }
 
 .mobile-chat-nav-title {
   min-width: 0;
   max-width: 100%;
-  padding: 0.1rem 0.35rem;
+  padding: 0.05rem 0.2rem;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
+  gap: 0.18rem;
   background: transparent;
+  text-align: left;
 }
 
 .mobile-chat-nav-title:disabled {
   cursor: default;
 }
 
-.mobile-chat-nav-title strong {
+.mobile-chat-agent-name {
+  display: block;
   width: 100%;
-  max-width: 100%;
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 0.28rem;
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-h);
   font-size: 0.96rem;
   font-weight: 650;
   line-height: 1.25;
 }
 
-.mobile-chat-agent-name {
+/* 引擎标签 + 组名同行，组名可占满剩余宽度 */
+.mobile-chat-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
+  width: 100%;
 }
 
 .mobile-chat-agent-group {
   min-width: 0;
-  max-width: 42%;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 500;
+  line-height: 1.3;
+}
+
+.mobile-chat-meta-row .engine-tag {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
 }
 
 .mobile-chat-status,
@@ -174,6 +200,17 @@ html.theme-light {
   font-size: 0.72rem;
   line-height: 1.35;
   max-width: 100%;
+}
+
+/* 头像右下角状态点 */
+.mobile-chat-breath.is-on-avatar {
+  position: absolute;
+  right: -0.05rem;
+  bottom: -0.05rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 0.12rem solid var(--surface);
+  z-index: 1;
 }
 
 .mobile-chat-status i,
@@ -219,11 +256,6 @@ html.theme-light {
   50% { opacity: 1; box-shadow: 0 0 0 0.28rem color-mix(in srgb, #f59e0b 32%, transparent); }
 }
 
-/* 顶栏引擎标签略收紧，避免挤掉用量条 */
-.mobile-chat-status .engine-tag {
-  font-size: 0.68rem;
-  padding: 0.1rem 0.35rem;
-}
 .mobile-chat-status .engine-usage-chip {
   max-width: 7.5rem;
   padding: 0.12rem 0.35rem;
@@ -1757,6 +1789,13 @@ html.native-app .login-home {
   padding: 0.25rem 0.5rem;
   font-size: 0.72rem;
   cursor: pointer;
+  min-width: 3.2rem;
+}
+
+.cmd-copy.is-copied {
+  color: var(--online, #16a34a);
+  border-color: color-mix(in srgb, var(--online, #16a34a) 45%, var(--border));
+  background: color-mix(in srgb, var(--online, #16a34a) 10%, var(--surface));
 }
 
 .cmd-meaning-bar {
@@ -2000,6 +2039,17 @@ html.native-app .login-home {
 .settings-value {
   font-weight: 600;
   color: var(--text-h);
+}
+
+.settings-locale-select {
+  min-width: 132px;
+  padding: 0.45rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg, #fff);
+  color: var(--text-h);
+  font: inherit;
+  font-size: 0.9rem;
 }
 
 .settings-section-title {
@@ -2821,13 +2871,25 @@ html.native-app .login-home {
 .chat-composer-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.35rem;
   min-height: 2rem;
 }
 
 .chat-composer-toolbar-spacer {
   flex: 1 1 auto;
   min-width: 0.5rem;
+}
+
+/* 上下文环 + 终止 + 发送：统一间距，避免挤在一起 */
+.chat-composer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex: none;
+}
+
+.chat-composer-actions .composer-send-btn {
+  margin-left: 0;
 }
 
 .composer-icon-btn {
@@ -2854,28 +2916,76 @@ html.native-app .login-home {
   cursor: not-allowed;
 }
 
+/* 终止：圆圈套红方块，避免裸红方块 */
 .composer-icon-btn.is-stop {
+  width: 2.1rem;
+  height: 2.1rem;
+  border: 1.5px solid color-mix(in srgb, var(--danger, #ef4444) 70%, transparent);
+  background: color-mix(in srgb, var(--danger, #ef4444) 10%, var(--surface));
   color: var(--danger, #ef4444);
 }
 
+.composer-icon-btn.is-stop:active:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #ef4444) 18%, var(--surface));
+}
+
+/* 正常发送：浅色主题黑底白箭；深色主题白底黑箭 */
 .composer-send-btn {
   flex: none;
   display: grid;
   place-items: center;
-  width: 2.05rem;
-  height: 2.05rem;
+  width: 2.1rem;
+  height: 2.1rem;
   margin-left: 0.15rem;
   padding: 0;
   border: none;
   border-radius: 999px;
-  background: var(--primary, #3b82f6);
-  color: #fff;
+  background: #18181b;
+  color: #ffffff;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
+html.theme-dark .composer-send-btn,
+html:not(.theme-light):not(.theme-dark) .composer-send-btn {
+  background: #fafafa;
+  color: #18181b;
+}
+
+@media (prefers-color-scheme: light) {
+  html:not(.theme-light):not(.theme-dark) .composer-send-btn {
+    background: #18181b;
+    color: #ffffff;
+  }
+}
+
+html.theme-light .composer-send-btn {
+  background: #18181b;
+  color: #ffffff;
+}
+
+/* 插话发送：黄底，突出「打断中」 */
 .composer-send-btn.is-interrupt {
-  background: color-mix(in srgb, var(--primary, #3b82f6) 75%, #22c55e);
+  background: #eab308;
+  color: #18181b;
+}
+
+html.theme-dark .composer-send-btn.is-interrupt,
+html:not(.theme-light):not(.theme-dark) .composer-send-btn.is-interrupt {
+  background: #facc15;
+  color: #18181b;
+}
+
+@media (prefers-color-scheme: light) {
+  html:not(.theme-light):not(.theme-dark) .composer-send-btn.is-interrupt {
+    background: #eab308;
+    color: #18181b;
+  }
+}
+
+html.theme-light .composer-send-btn.is-interrupt {
+  background: #eab308;
+  color: #18181b;
 }
 
 .composer-send-btn:disabled {
@@ -3697,11 +3807,22 @@ html.force-light .instances-dark {
   background: var(--surface-2);
 }
 
+.chat-attach-thumb-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .chat-attach-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  pointer-events: none;
 }
 
 .chat-attach-thumb.uploading {
@@ -3776,27 +3897,38 @@ html.force-light .instances-dark {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  /* 避开刘海 / Home 条，给关闭按钮留空 */
+  padding:
+    calc(3.25rem + env(safe-area-inset-top, 0px))
+    calc(1rem + env(safe-area-inset-right, 0px))
+    calc(1.5rem + env(safe-area-inset-bottom, 0px))
+    calc(1rem + env(safe-area-inset-left, 0px));
+  box-sizing: border-box;
 }
 
 .chat-lightbox img {
-  max-width: 100%;
-  max-height: 100%;
+  /* 略缩小，避免贴满屏难关 */
+  max-width: min(88vw, 36rem);
+  max-height: min(68dvh, 72%);
+  width: auto;
+  height: auto;
   object-fit: contain;
   border-radius: 8px;
 }
 
 .chat-lightbox-close {
   position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
+  top: calc(0.55rem + env(safe-area-inset-top, 0px));
+  right: calc(0.65rem + env(safe-area-inset-right, 0px));
+  z-index: 2;
   border: 0;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.22);
   color: #fff;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.4rem;
+  height: 2.4rem;
   border-radius: 50%;
-  font-size: 1.4rem;
+  font-size: 1.45rem;
+  line-height: 1;
   cursor: pointer;
 }
 

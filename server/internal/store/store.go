@@ -334,6 +334,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureTaskUnreadSchema(ctx); err != nil {
 		return err
 	}
+	// 25) 数字人 PC 任务队列（持久化，禁止仅缓存）
+	if err := s.EnsureAgentTaskQueueSchema(ctx); err != nil {
+		return err
+	}
 	// 25) MySQL→SQLite 迁库曾把 VARCHAR 写成 BLOB，修回 TEXT 以免 role='user' 等比较失败
 	if err := s.repairSQLiteTextAffinity(ctx); err != nil {
 		return err

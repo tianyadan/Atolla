@@ -42,13 +42,14 @@ export function highestAgentState(item = {}) {
   return 'idle'
 }
 
-export function groupRecentConversations(items = [], now = new Date()) {
+/** 按时间桶分组；labels 可注入本地化文案 */
+export function groupRecentConversations(items = [], now = new Date(), labels = {}) {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const groups = [
-    { label: '今天', min: start },
-    { label: '昨天', min: start - 86400000 },
-    { label: '7 天内', min: start - 6 * 86400000 },
-    { label: '更早', min: -Infinity },
+    { label: labels.today || '今天', min: start },
+    { label: labels.yesterday || '昨天', min: start - 86400000 },
+    { label: labels.last7Days || '7 天内', min: start - 6 * 86400000 },
+    { label: labels.earlier || '更早', min: -Infinity },
   ].map((group) => ({ ...group, items: [] }))
   for (const item of items) {
     const time = new Date(item.updated_at || item.created_at || 0).getTime()

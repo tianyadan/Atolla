@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import SettingsFold from './SettingsFold.jsx'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 const DEPLOY_HOST_HISTORY_KEY = 'atolla_relay_deploy_hosts'
@@ -17,6 +18,7 @@ function guessDeployHost() {
 
 /** 设置 · 后台守护：本机后端 / 移动端中继 两个独立胶囊开关 */
 export default function WatchdogSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(true)
   const [busyLocal, setBusyLocal] = useState(false)
   const [busyRelay, setBusyRelay] = useState(false)
@@ -175,8 +177,8 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
 
   return (
     <SettingsFold
-      title="后台守护"
-      desc="防止意外退出：本机与移动端中继分开开关，宽限期避免更新重启叠进程"
+      title={t('settings.watchdog')}
+      desc={t('settings.watchdogDesc')}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >

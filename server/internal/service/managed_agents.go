@@ -15,6 +15,7 @@ import (
 )
 
 // AskManagedBackground validates the agent then runs AskManagedWith on a detached goroutine (remote-relay).
+// 忙碌时默认入队（避免手机静默插话打乱 PC 任务队列）。
 func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt) error {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
@@ -34,9 +35,24 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 	if q == "" {
 		q = "请查看图片"
 	}
+	s.runMu.Lock()
+	_, liveAsk := s.runs[agentID]
+	s.runMu.Unlock()
+	busyStatus := a.Status == "running" || a.Status == "busy" || a.Status == "waiting" || a.Status == "插话中" || a.Status == "compressing" || a.Status == "initializing"
+	if liveAsk || busyStatus {
+		tqAtts := make([]TaskQueueAttachment, 0, len(chatAtts))
+		for _, x := range chatAtts {
+			tqAtts = append(tqAtts, TaskQueueAttachment{ID: x.ID, URL: x.URL, Mime: x.Mime, Name: x.Name})
+		}
+		if _, err := s.EnqueueAgentTask(ctx, agentID, q, tqAtts); err != nil {
+			return err
+		}
+		log.Printf("remotebridge agent.ask agent=%d: busy -> enqueued", agentID)
+		return nil
+	}
 	go func() {
 		bg := context.Background()
-		_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil)
+		_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{})
 		if askErr != nil {
 			log.Printf("remotebridge agent.ask agent=%d: %v", agentID, askErr)
 		}
@@ -107,11 +123,22 @@ func (s *Service) AskManaged(ctx context.Context, agentID int64, question string
 
 // AskManagedWith 同 AskManaged，可附带聊天图片（来源记为后台）。
 func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question string, atts []ChatAttachment, onEvent AskEventSink) (*store.Message, error) {
-	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent)
+	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent, AskUserFacingOpts{})
+}
+
+// AskManagedWithTask 带任务队列节点的 Ask（打断/续跑/直发登记）。
+func (s *Service) AskManagedWithTask(ctx context.Context, agentID int64, question string, atts []ChatAttachment, onEvent AskEventSink, opts AskUserFacingOpts) (*store.Message, error) {
+	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent, opts)
+}
+
+// AskUserFacingOpts 任务队列挂钩。
+type AskUserFacingOpts struct {
+	TaskID       int64
+	ResumePrefix bool
 }
 
 // askManagedUserFacing 后台或手机发起的主会话 Ask，写入数字员工审计。
-func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, question string, atts []ChatAttachment, source string, onEvent AskEventSink) (*store.Message, error) {
+func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, question string, atts []ChatAttachment, source string, onEvent AskEventSink, opts AskUserFacingOpts) (*store.Message, error) {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -127,20 +154,68 @@ func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, quest
 		return nil, &OccupancyBusyError{Occ: occ}
 	}
 	_ = s.Store.ClearOccupancy(ctx, agentID)
+
+	var taskID int64
+	silentNotify := false
+	askQ := strings.TrimSpace(question)
+	if opts.TaskID > 0 {
+		// 仅队列节点（打断紧急 / 出队 / 继续）带 task_id；普通直发不入队
+		taskID = opts.TaskID
+		if it, _ := s.Store.GetAgentTaskQueueItem(ctx, opts.TaskID); it != nil {
+			silentNotify = it.SilentNotify
+			if askQ == "" {
+				askQ = it.Question
+			}
+			if opts.ResumePrefix || it.ResumeHint {
+				askQ = BuildTaskQueueAskQuestion(it, true)
+			}
+		} else if opts.ResumePrefix && askQ != "" {
+			askQ = taskQueueResumePrefix + askQ
+		}
+	} else {
+		// 空闲再发：解除 Stop 的 hold，本轮结束后仍可自动出队
+		_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, false)
+	}
+
 	if err := s.TryAcquireOccupancy(ctx, store.Occupancy{
 		AgentID: agentID, SourceType: SourceDirect, SourceID: fmt.Sprintf("%d", agentID),
-		SourceName: a.Name, TaskName: truncate(question, 120),
+		SourceName: a.Name, TaskName: truncate(askQ, 120),
 	}); err != nil {
 		return nil, err
 	}
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
-	msg, askErr := s.askManagedCore(ctx, a, 0, question, askCoreOpts{
+	msg, askErr := s.askManagedCore(ctx, a, 0, askQ, askCoreOpts{
 		bindMainConv: true,
 		attachments:  NormalizeChatAttachments(atts),
 		agentAudit:   &agentAskAudit{Source: source},
 	}, onEvent)
-	if askErr == nil && msg != nil {
+	ok := askErr == nil
+	errText := ""
+	if askErr != nil {
+		errText = askErr.Error()
+	}
+	next, ferr := s.FinishAgentTaskAndPeekNext(context.WithoutCancel(ctx), agentID, taskID, ok, errText)
+	if ferr != nil {
+		log.Printf("task queue finish agent=%d: %v", agentID, ferr)
+	}
+	if next != nil {
+		if onEvent != nil {
+			// PC SSE：由前端接 task_queue_next 再发 Ask
+			onEvent(map[string]any{
+				"type":            "task_queue_next",
+				"task_id":         next.ID,
+				"question":        next.Question,
+				"attachments":     ParseTaskQueueAttachments(next.AttachmentsJSON),
+				"resume_prefix":   next.ResumeHint,
+				"conversation_id": next.ConversationID,
+			})
+		} else {
+			// 手机/后台无 SSE：服务端自动续跑已 claim 的下一条
+			go s.autoRunClaimedTaskQueueItem(agentID, next)
+		}
+	}
+	if askErr == nil && msg != nil && !silentNotify {
 		s.notifyTaskDone(agentID, question, fmt.Sprintf("%d-%d", agentID, msg.ID))
 	}
 	// Push mirror after PC/SSE ask so mobile chat catches up without waiting for next poll.

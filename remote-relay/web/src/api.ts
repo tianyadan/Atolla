@@ -661,6 +661,7 @@ export type LegacyMount = {
 export type NotifyPrefs = {
   task_done: boolean
   permission: boolean
+  bark_verified?: boolean
 }
 
 /** 读取本机 Claude / Codex / Cursor 订阅额度（默认 5 分钟缓存；fresh 强制刷新） */
@@ -709,7 +710,34 @@ export async function updateNotifyPrefs(
     `/api/instances/${encodeURIComponent(instanceId)}/notify-prefs`,
     {
       method: 'PUT',
-      body: JSON.stringify(prefs),
+      body: JSON.stringify({
+        task_done: prefs.task_done,
+        permission: prefs.permission,
+      }),
+    },
+  )
+}
+
+/** 经 Bark 发送开启通知用的 6 位验证码 */
+export async function sendNotifyBarkVerify(
+  instanceId: string,
+): Promise<{ ok: boolean; expires_in: number }> {
+  return request(`/api/instances/${encodeURIComponent(instanceId)}/notify-prefs/verify/send`, {
+    method: 'POST',
+    body: '{}',
+  })
+}
+
+/** 校验 Bark 验证码 */
+export async function confirmNotifyBarkVerify(
+  instanceId: string,
+  code: string,
+): Promise<NotifyPrefs> {
+  return request<NotifyPrefs>(
+    `/api/instances/${encodeURIComponent(instanceId)}/notify-prefs/verify/confirm`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ code }),
     },
   )
 }

@@ -36,6 +36,9 @@ import GroupChatOfferSheet, { buildGroupMemberSet } from './GroupChatOfferSheet.
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import EngineUsageChip from './EngineUsageChip.jsx'
 import { runningElapsedSec } from './taskTiming.js'
+import { useLocale } from './i18n/useLocale.js'
+import TaskQueueRail from './TaskQueueRail.jsx'
+import TaskQueueChoiceSheet from './TaskQueueChoiceSheet.jsx'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -162,16 +165,16 @@ function emptyPolicy() {
   }
 }
 
-/** 状态英文 → 中文展示 */
-function statusZh(st) {
+/** 状态码 → 本地化展示文案 */
+function statusZh(st, t) {
   const s = String(st || 'idle')
-  if (s === 'initializing') return '初始化中'
-  if (s === 'compressing') return '压缩记忆'
-  if (s === 'running' || s === 'busy' || s === '插话中') return '忙碌中'
-  if (s === 'waiting') return '等待中'
-  if (s === 'error') return '错误'
-  if (s === 'done') return '空闲中'
-  return '空闲中'
+  if (s === 'initializing') return t('status.initializing')
+  if (s === 'compressing') return t('status.compressing')
+  if (s === 'running' || s === 'busy' || s === '插话中') return t('status.busy')
+  if (s === 'waiting') return t('status.waiting')
+  if (s === 'error') return t('status.error')
+  if (s === 'done') return t('status.idle')
+  return t('status.idle')
 }
 
 /** 是否被项目协作占用 */
@@ -219,8 +222,14 @@ export default function ManagedAgentsPanel({
   openHire = false, onHireConsumed, openSettings = false,
   presentation = 'classic', conversationRefreshKey = 0, onAgentHired,
 }) {
+  const { t } = useLocale()
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
+  /** 忙碌发送二选一弹层：{ question, attachments, hideEnqueue } */
+  const [tqChoice, setTqChoice] = useState(null)
+  const [tqChoiceBusy, setTqChoiceBusy] = useState(false)
+  const [tqRefreshKey, setTqRefreshKey] = useState(0)
+  const pendingQueueNextRef = useRef(null)
   const [question, setQuestion] = useState('')
   const [tasks, setTasks] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
@@ -1229,7 +1238,15 @@ export default function ManagedAgentsPanel({
 
   function applyEvents(agentId, events) {
     for (const ev of events) {
-      if (ev.type === 'activity') {
+      if (ev.type === 'task_queue_next') {
+        pendingQueueNextRef.current = {
+          task_id: ev.task_id,
+          question: ev.question || '',
+          attachments: ev.attachments || [],
+          resume_prefix: !!ev.resume_prefix,
+        }
+        setTqRefreshKey((k) => k + 1)
+      } else if (ev.type === 'activity') {
         patchAgentSession(agentId, {
           liveActivity: { tool: ev.tool || '', summary: ev.summary || '运行中…', at: Date.now() },
         })
@@ -1440,8 +1457,10 @@ export default function ManagedAgentsPanel({
     } catch { /* ignore */ }
   }
 
-  async function sendQuestion(agentId, q, attachments = []) {
+  async function sendQuestion(agentId, q, attachments = [], opts = {}) {
     const atts = (attachments || []).filter((a) => a?.url || a?.id)
+    const taskId = Number(opts.taskId) || 0
+    const resumePrefix = !!opts.resumePrefix
     const ac = new AbortController()
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: Date.now(), abort: ac, interrupting: false, invokes: {},
@@ -1453,11 +1472,17 @@ export default function ManagedAgentsPanel({
       { role: 'user', content: q, attachments: atts, time: Date.now() },
     ])
     stickBottomRef.current = true
+    pendingQueueNextRef.current = null
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/ask`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ question: q, attachments: atts }),
+        body: JSON.stringify({
+          question: q,
+          attachments: atts,
+          task_id: taskId || undefined,
+          resume_prefix: resumePrefix || undefined,
+        }),
         signal: ac.signal,
       })
       if (res.status === 401) { onUnauthorized?.(); return }
@@ -1512,12 +1537,24 @@ export default function ManagedAgentsPanel({
     } finally {
       const pending = getAgentSession(agentId).pendingInterrupt
       const pendingAtts = getAgentSession(agentId).pendingAttachments || []
+      const queueNext = pendingQueueNextRef.current
+      pendingQueueNextRef.current = null
       patchAgentSession(agentId, {
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
         interrupting: false, liveActivity: null,
       })
+      setTqRefreshKey((k) => k + 1)
       // fresh=true：空闲时拉 Claude /context 或 Codex session 真值，避免一直停在 turn usage 估算
       await refreshAgentContext(agentId, true)
+      // 旧插话路径兼容；优先走服务端 task_queue_next
+      if (queueNext?.task_id) {
+        const nextAtts = Array.isArray(queueNext.attachments) ? queueNext.attachments : []
+        await sendQuestion(agentId, queueNext.question || '', nextAtts, {
+          taskId: queueNext.task_id,
+          resumePrefix: !!queueNext.resume_prefix,
+        })
+        return
+      }
       if (pending || pendingAtts.length) await sendQuestion(agentId, pending || '', pendingAtts)
     }
   }
@@ -1613,6 +1650,7 @@ export default function ManagedAgentsPanel({
     if (!selected) return
     if (selected.status === 'initializing' || isCloneInitBusy(selected)) return
     if (groupOffer) return // 岔路面板打开时先别叠发
+    if (tqChoice) return
     const q = question.trim()
     const pending = pendingImages
     if (!q && !pending.length) return
@@ -1637,34 +1675,114 @@ export default function ManagedAgentsPanel({
       }
       setAttachBusy(false)
     }
+    // 忙碌：弹层二选一（与 @ 多人群聊互斥：有群聊资格则不提供入队）
+    if (s.loading) {
+      const { canOfferGroup } = buildGroupMemberSet(id, q)
+      setTqChoice({ question: q, attachments: atts, hideEnqueue: !!canOfferGroup })
+      setQuestion('')
+      revokePendingImages(pending)
+      setPendingImages([])
+      return
+    }
     setQuestion('')
     revokePendingImages(pending)
     setPendingImages([])
-    if (s.loading) {
-      // 插话：必须 /stop 杀引擎；刷新后 Ask 已脱离 Request.Context，仅 abort SSE 不会中断进程
-      const hadSSE = !!s.abort
-      patchAgentSession(id, { pendingInterrupt: q, pendingAttachments: atts, interrupting: true })
-      try {
-        await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
-      } catch { /* ignore */ }
-      if (hadSSE) {
-        s.abort?.abort() // 走 sendQuestion finally 再发插话
-        return
-      }
-      // 刷新后恢复的忙碌：无本地 SSE，停完后直接发
-      patchAgentSession(id, {
-        pendingInterrupt: '', pendingAttachments: [], interrupting: false, loading: false,
-      })
-      await sendQuestion(id, q, atts)
-      return
-    }
-    // 3～5 人（含当前窗口）→ 5s「生成群聊」岔路；否则直接旧并行
+    // 3～5 人（含当前窗口）→ 5s「生成群聊」岔路；队列活跃时不做群聊 offer
     const { memberIds, canOfferGroup } = buildGroupMemberSet(id, q)
-    if (canOfferGroup) {
+    let queueActive = false
+    try {
+      const res = await fetch(`${API}/admin/agents/${id}/task-queue`, { headers: authHeaders() })
+      if (res.ok) {
+        const d = await res.json()
+        queueActive = Number(d.active) > 0
+      }
+    } catch { /* ignore */ }
+    if (canOfferGroup && !queueActive) {
       setGroupOffer({ memberIds, question: q, attachments: atts })
       return
     }
     await sendQuestion(id, q, atts)
+  }
+
+  /** 弹层：打断并优先执行 */
+  async function onTqInterrupt() {
+    if (!selected || !tqChoice || tqChoiceBusy) return
+    const id = selected.id
+    const q = tqChoice.question
+    const atts = tqChoice.attachments || []
+    setTqChoiceBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${id}/task-queue/interrupt`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ question: q, attachments: atts }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `打断失败(${res.status})`)
+      setTqChoice(null)
+      const s = getAgentSession(id)
+      s.abort?.abort()
+      setTqRefreshKey((k) => k + 1)
+      await sendQuestion(id, q, atts, { taskId: d.id })
+    } catch (err) {
+      patchAgentSession(id, { error: String(err.message || err) })
+    } finally {
+      setTqChoiceBusy(false)
+    }
+  }
+
+  /** 弹层：加入队列末尾 */
+  async function onTqEnqueue() {
+    if (!selected || !tqChoice || tqChoiceBusy) return
+    const id = selected.id
+    setTqChoiceBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${id}/task-queue`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ question: tqChoice.question, attachments: tqChoice.attachments || [] }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `入队失败(${res.status})`)
+      setTqChoice(null)
+      setTqRefreshKey((k) => k + 1)
+    } catch (err) {
+      patchAgentSession(id, { error: String(err.message || err) })
+    } finally {
+      setTqChoiceBusy(false)
+    }
+  }
+
+  /** 继续被 Stop 挂起的队列 */
+  async function onTqContinue() {
+    if (!selectedId) return
+    try {
+      const res = await fetch(`${API}/admin/agents/${selectedId}/task-queue/continue`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `继续失败(${res.status})`)
+      setTqRefreshKey((k) => k + 1)
+      const task = d.task
+      if (!task?.id) return
+      const atts = (() => {
+        try {
+          return task.attachments_json ? JSON.parse(task.attachments_json) : []
+        } catch {
+          return []
+        }
+      })()
+      await sendQuestion(selectedId, task.question || '', atts, {
+        taskId: task.id,
+        resumePrefix: !!d.resume_prefix || !!task.resume_hint,
+      })
+    } catch (err) {
+      patchAgentSession(selectedId, { error: String(err.message || err) })
+    }
   }
 
   /** 岔路超时 / 选并行：关闭面板并走现有 ask SSE */
@@ -1713,6 +1831,7 @@ export default function ManagedAgentsPanel({
     try {
       await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
     } catch { /* ignore */ }
+    setTqRefreshKey((k) => k + 1)
     patchAgentSession(id, { loading: false, abort: null, runStartedAt: 0, liveActivity: null })
     setAgentChatLog(id, (prev) => {
       const n = [...prev]
@@ -1773,11 +1892,11 @@ export default function ManagedAgentsPanel({
 
   const statusLabel = (a) => {
     const local = getAgentSession(a.id)
-    if (isCloneInitBusy(a)) return '整理记忆'
-    if (local.compressing || a.status === 'compressing') return '压缩记忆'
-    if (a.status === 'initializing') return '初始化中'
-    if (local.loading) return '忙碌中'
-    return statusZh(a.status)
+    if (isCloneInitBusy(a)) return t('status.organizing')
+    if (local.compressing || a.status === 'compressing') return t('status.compressing')
+    if (a.status === 'initializing') return t('status.initializing')
+    if (local.loading) return t('status.busy')
+    return statusZh(a.status, t)
   }
 
   const workflowBusy = isWorkflowBusy(selected)
@@ -2108,7 +2227,25 @@ export default function ManagedAgentsPanel({
           })}
         </aside>
 
-        <div className="ma-main">
+        <div className="ma-main ma-main-with-tq">
+          {selected ? (
+            <TaskQueueRail
+              agentId={selected.id}
+              authHeaders={authHeaders}
+              onUnauthorized={onUnauthorized}
+              active={active && !!selected}
+              refreshKey={tqRefreshKey}
+              onContinue={() => void onTqContinue()}
+            />
+          ) : null}
+          <TaskQueueChoiceSheet
+            open={!!tqChoice}
+            busy={tqChoiceBusy}
+            hideEnqueue={!!tqChoice?.hideEnqueue}
+            onInterrupt={() => void onTqInterrupt()}
+            onEnqueue={() => void onTqEnqueue()}
+            onCancel={() => setTqChoice(null)}
+          />
           {!selected ? (
             <div className="empty ma-empty ma-empty-hero">
               <div className="ma-empty-icon" aria-hidden="true" />
@@ -2259,7 +2396,7 @@ export default function ManagedAgentsPanel({
                     <div key={inv.calleeId} className={`ma-invoke-chip ${inv.collapsed ? 'collapsed' : ''}`}>
                       <div className="ma-invoke-chip-head">
                         <strong>{inv.name}</strong>
-                        <span className={`ma-status st-${statusClass(inv.status)}`}>{statusZh(inv.status)}</span>
+                        <span className={`ma-status st-${statusClass(inv.status)}`}>{statusZh(inv.status, t)}</span>
                       </div>
                       {!inv.collapsed && (
                         <p className="ma-invoke-chip-body">{inv.message || inv.content?.slice(0, 80) || '执行中…'}</p>
@@ -2385,8 +2522,8 @@ export default function ManagedAgentsPanel({
               >
                 <div className="ma-composer-shell">
                   <CapsuleToggle
-                    label="任务规划"
-                    hint="开启后将先拆分步骤并展示进度"
+                    label={t('composer.taskPlan')}
+                    hint={t('composer.taskPlanHint')}
                     checked={taskPlanOn}
                     disabled={taskPlanSaving || loading}
                     onChange={toggleTaskPlan}
@@ -2428,10 +2565,10 @@ export default function ManagedAgentsPanel({
                       rows={1}
                       placeholder={
                         initializing
-                          ? '初始化中，请稍候…'
+                          ? t('composer.placeholderInit')
                           : (loading
-                            ? '输入插话内容，@ 协作其他同事…'
-                            : '给数字员工分配任务，@ 协作其他同事…')
+                            ? t('composer.placeholderBusy')
+                            : t('composer.placeholder'))
                       }
                       disabled={initializing || !!groupOffer}
                     />
@@ -2452,8 +2589,8 @@ export default function ManagedAgentsPanel({
                       <button
                         type="button"
                         className="ma-composer-plus"
-                        title="添加图片"
-                        aria-label="添加图片"
+                        title={t('composer.addImage')}
+                        aria-label={t('composer.addImage')}
                         disabled={initializing || !!groupOffer || attachBusy || pendingImages.length >= 6}
                         onClick={() => composerFileRef.current?.click()}
                       >
@@ -2469,7 +2606,7 @@ export default function ManagedAgentsPanel({
                         updatedAt={sess.contextUpdatedAt || 0}
                         anomaly={sess.contextAnomaly || ''}
                       />
-                      <span className="ma-composer-kbd">Ctrl + Enter 发送</span>
+                      <span className="ma-composer-kbd">{t('composer.kbdSend')}</span>
                     </div>
                     <div className="ma-composer-actions">
                       {!loading ? (
@@ -2479,7 +2616,7 @@ export default function ManagedAgentsPanel({
                           onClick={ask}
                           disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
                         >
-                          {attachBusy ? '上传中…' : '发送'}
+                          {attachBusy ? t('composer.uploading') : t('composer.send')}
                         </button>
                       ) : (
                         <>
@@ -2489,9 +2626,9 @@ export default function ManagedAgentsPanel({
                             onClick={ask}
                             disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
                           >
-                            {attachBusy ? '上传中…' : (interrupting ? '插话中…' : '插话')}
+                            {attachBusy ? t('composer.uploading') : (interrupting ? t('composer.interrupting') : t('composer.interrupt'))}
                           </button>
-                          <button type="button" className="stop ma-composer-stop" onClick={stopRun} title="终止">
+                          <button type="button" className="stop ma-composer-stop" onClick={stopRun} title={t('composer.stop')}>
                             <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
                             <span>终止</span>
                           </button>
@@ -2518,13 +2655,13 @@ export default function ManagedAgentsPanel({
               {taskPlanOn && (
               <div className="ma-progress-panel">
                 <div className="ma-progress-head">
-                  <strong>任务规划</strong>
+                  <strong>{t('composer.taskPlan')}</strong>
                   {activeTask ? (
                     <span className={`ma-status st-${statusClass(activeTask.status)}`}>
-                      {planPhase === 'planning' ? '拆分中' : statusZh(activeTask.status)}
+                      {planPhase === 'planning' ? t('composer.planning') : statusZh(activeTask.status, t)}
                     </span>
                   ) : (
-                    <span className="muted">暂无进行中的任务</span>
+                    <span className="muted">{t('composer.noActiveTask')}</span>
                   )}
                 </div>
                 {activeTask && (

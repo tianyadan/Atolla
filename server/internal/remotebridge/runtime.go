@@ -39,4 +39,10 @@ type AgentRuntime interface {
 	JevosSettingsInstall(packageID string, chinaMirror bool) (any, error)
 	JevosSettingsSet(enabled bool) (any, error)
 	JevosSettingsUninstall() (any, error)
+
+	// 通知偏好：保存前校验 Bark；发码 / 验码供手机设置页。
+	SaveNotifyPrefs(ctx context.Context, prefs store.NotifyPrefs) error
+	GetNotifyPrefs(ctx context.Context) (store.NotifyPrefs, error)
+	SendNotifyBarkOTP(ctx context.Context) (expiresInSec int, err error)
+	ConfirmNotifyBarkOTP(ctx context.Context, code string) error
 }
