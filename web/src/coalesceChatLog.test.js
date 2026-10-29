@@ -147,4 +147,27 @@ function assert(cond, msg) {
   )
 }
 
+// 回合结束：SSE 无 id 命令不得挂在 DB 最终回复后面（否则粘底只看见命令）
+{
+  const local = [
+    { role: 'user', content: '修 bug' },
+    { role: 'assistant', content: '先排查…' },
+    { role: 'command', content: 'rg foo' },
+    { role: 'command', content: 'rg bar' },
+    { role: 'command', content: 'go test' },
+  ]
+  const db = [
+    { id: 1, role: 'user', content: '修 bug' },
+    { id: 2, role: 'assistant', content: '先排查…' },
+    { id: 3, role: 'command', content: 'rg foo' },
+    { id: 4, role: 'command', content: 'rg bar' },
+    { id: 5, role: 'command', content: 'go test' },
+    { id: 6, role: 'assistant', content: '根因是 coalesce 挂尾，已修复。' },
+  ]
+  const got = coalesceChatLog(local, db)
+  const last = got[got.length - 1]
+  assert(last?.role === 'assistant' && last.content.includes('已修复'), 'final assistant must be last')
+  assert(!got.some((m) => m.role === 'command' && m.id == null), 'no orphan SSE commands after db catch-up')
+}
+
 console.log('coalesceChatLog ok')

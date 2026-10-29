@@ -103,6 +103,9 @@ export default function TalentMarket({
     if (!detail || busy) return
     setBusy(true)
     setErr('')
+    // 招聘接口应秒级返回；超时则解除「招聘中…」，避免装依赖把 UI 卡死
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 30000)
     try {
       const res = await fetch(`${API}/admin/talent-market/hire`, {
         method: 'POST',
@@ -114,6 +117,7 @@ export default function TalentMarket({
           context_window_tokens: contextWindow,
           ...jellyColorPayload(jellyColor),
         }),
+        signal: ac.signal,
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json().catch(() => ({}))
@@ -121,8 +125,13 @@ export default function TalentMarket({
       onHired?.(d?.id ? { ...d, jelly_color: d.jelly_color || jellyColor } : d)
       onClose?.()
     } catch (e) {
-      setErr(String(e.message || e))
+      if (e?.name === 'AbortError') {
+        setErr('招聘超时，请刷新列表确认是否已入职；若未入职请重试')
+      } else {
+        setErr(String(e.message || e))
+      }
     } finally {
+      clearTimeout(timer)
       setBusy(false)
     }
   }

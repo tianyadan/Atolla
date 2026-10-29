@@ -344,6 +344,10 @@ func cursorResultAppend(prev, final string) string {
 	}
 	// 空白/标点不一致时的「过程说明 + 近似结论」→ 勿整段补推
 	if cursorMostlyCovered(prev, final) {
+		// 短进度句被长终稿包含：仍须补推终稿，否则前端只剩命令气泡、刷新才见回复
+		if len([]rune(final)) > len([]rune(prev))+80 {
+			return "\n" + final
+		}
 		return ""
 	}
 	// result 尾段已在流式中出现过（常见：改动/提交说明又整节回来）→ 不补

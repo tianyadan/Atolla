@@ -169,6 +169,16 @@ func TestCursorResultAppendFuzzyOverlap(t *testing.T) {
 	}
 }
 
+func TestCursorResultAppendShortProgressThenLongFinal(t *testing.T) {
+	// 短进度被长终稿包含时仍须补推，否则前端只见命令、刷新才见回复
+	prev := "先复现：查 SSE 与落库链路。"
+	final := prev + "\n\n根因是 coalesce 把无 id 命令挂在最终回复后；Ask 结束后 preferDb，并放宽 result 补推。"
+	g := cursorResultAppend(prev, final)
+	if g == "" || !strings.Contains(g, "根因是 coalesce") {
+		t.Fatalf("long final after short progress must append, got %q", g)
+	}
+}
+
 func TestCursorAlreadyStreamed(t *testing.T) {
 	streamed := "先查移动端水母头像的渲染条件和显示入口。\n**App 里要重新装一次才会看到。**\n请用 Xcode Run 覆盖安装。"
 	piece := "**App 里要重新装一次才会看到。**\n请用 Xcode Run 覆盖安装。"

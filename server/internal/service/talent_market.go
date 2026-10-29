@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"atolla/server/internal/store"
 )
@@ -305,14 +306,26 @@ func (s *Service) HireTalent(ctx context.Context, in HireTalentInput) (*store.Ma
 }
 
 // installTalentSkill 安装技能；browser-use 未就绪时仍写入安装记录，避免堵住招聘。
+// 注意：不得在招聘请求里同步 EnsureBrowserUse（uv/pipx/claude 安装可达数分钟，前端会卡在「招聘中…」）。
 func (s *Service) installTalentSkill(ctx context.Context, agentID int64, skillID string) error {
 	if skillID == "atolla.browser" {
-		if _, err := s.EnsureBrowserUse(ctx); err != nil {
-			log.Printf("talent hire browser-use warn agent=%d: %v", agentID, err)
+		st := DetectBrowserUse()
+		if !st.OK {
+			log.Printf("talent hire browser-use missing agent=%d: %s (install skill anyway; ensure async)", agentID, st.Message)
+			go s.ensureBrowserUseAsync(agentID)
 		}
 	}
 	if err := s.Store.InstallAgentSkill(ctx, agentID, skillID, "talent_market", nil); err != nil {
 		return err
 	}
 	return s.syncAgentEngineFlagsFromSkills(ctx, agentID)
+}
+
+// ensureBrowserUseAsync 后台尝试安装 browser-use，失败只打日志，不影响招聘结果。
+func (s *Service) ensureBrowserUseAsync(agentID int64) {
+	bg, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	if _, err := s.EnsureBrowserUse(bg); err != nil {
+		log.Printf("talent hire browser-use background ensure agent=%d: %v", agentID, err)
+	}
 }

@@ -134,6 +134,12 @@ if [ "$DAEMON" = 1 ]; then
   sleep 2
   echo "==> 启动 React 前端 (vite, 局域网可访问, 后台)"
   cd ../web
+  # 缺依赖时先安装，避免 vite: command not found
+  if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vite ]; then
+    echo "==> web/node_modules 缺失，执行 npm install"
+    npm install
+  fi
+  : >"$FRONTEND_LOG"
   nohup npm run dev -- --host 0.0.0.0 >>"$FRONTEND_LOG" 2>&1 &
   echo $! >"$FRONTEND_PID_FILE"
   echo "==> 前端 pid $(cat "$FRONTEND_PID_FILE") 日志: $FRONTEND_LOG"
@@ -156,4 +162,9 @@ sleep 2
 echo "==> 启动 React 前端 (vite, 局域网可访问)"
 echo "    提示: 若要关终端仍保持运行，请用 ./scripts/start-bg.sh 或 ./scripts/start.sh --daemon"
 cd ../web
+# 缺依赖时先安装，避免 vite: command not found
+if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vite ]; then
+  echo "==> web/node_modules 缺失，执行 npm install"
+  npm install
+fi
 npm run dev -- --host 0.0.0.0

@@ -599,15 +599,20 @@ export default function ManagedAgentsPanel({
     }).catch(() => {})
   }, [active, selectedId])
 
-  async function loadDetail(id, { force = false } = {}) {
+  /**
+   * 拉取会话详情。
+   * preferDb：Ask 回合结束后以 DB 为准，丢掉 SSE 无 id 命令挂尾，避免最终回复被顶出视口。
+   */
+  async function loadDetail(id, { force = false, preferDb = false } = {}) {
     if (!id) {
       if (!viewRef.current.selectedId) setTasks([])
       return
     }
     const gen = ++detailLoadGen.current
     const local = getAgentSession(id)
+    const msgLimit = preferDb ? 100 : PAGE_SIZE
     const [msgRes, taskRes] = await Promise.all([
-      fetch(`${API}/admin/agents/${id}/messages?limit=${PAGE_SIZE}`, { headers: authHeaders() }),
+      fetch(`${API}/admin/agents/${id}/messages?limit=${msgLimit}`, { headers: authHeaders() }),
       fetch(`${API}/admin/agents/${id}/tasks`, { headers: authHeaders() }),
     ])
     // 已发起更新的 loadDetail：只丢弃「写 tasks UI」；会话 chatLog 仍按 id 写入，互不串台
@@ -622,11 +627,21 @@ export default function ManagedAgentsPanel({
       setTasks(taskData.items || [])
     }
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
-    if (force || !getAgentSession(id).loading) {
+    if (force || preferDb || !getAgentSession(id).loading) {
       const fromDb = mapMsgs(msgData.items)
-      const next = force
-        ? coalesceChatLog(getAgentSession(id).chatLog, fromDb)
-        : fromDb
+      let next
+      if (preferDb) {
+        // 保留「加载更早」留下的、本页之前的本地消息；本页完全以 DB 时间线为准
+        const oldestDb = fromDb[0]?.id
+        const olderLocal = (getAgentSession(id).chatLog || []).filter(
+          (m) => m?.id != null && oldestDb != null && Number(m.id) < Number(oldestDb),
+        )
+        next = [...olderLocal, ...fromDb]
+      } else if (force) {
+        next = coalesceChatLog(getAgentSession(id).chatLog, fromDb)
+      } else {
+        next = fromDb
+      }
       // 划选复制中不要整表替换聊天 DOM（仅当前窗口有选区）
       const skipDom = viewRef.current.selectedId === id && selectionInside(boxRef.current)
       if (!skipDom) {
@@ -1629,7 +1644,8 @@ export default function ManagedAgentsPanel({
       }
       try {
         await loadAgents(agentId)
-        await loadDetail(agentId, { force: true })
+        // preferDb：用落库时间线替换 SSE 挂尾命令，保证最终回复出现在视口底部
+        await loadDetail(agentId, { force: true, preferDb: true })
       } catch (postErr) {
         // 回合已结束；刷新列表失败不掩盖委托/汇总错误
         console.warn('ask post-refresh failed', postErr)
