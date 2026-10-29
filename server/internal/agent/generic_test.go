@@ -179,3 +179,12 @@ func TestCursorAlreadyStreamed(t *testing.T) {
 		t.Fatal("short new sentence must not be treated as duplicate")
 	}
 }
+
+func TestCursorResultAppendHighOverlap(t *testing.T) {
+	prev := "已修好。轮询 force 校准时会冲掉乐观气泡。\n\n改动\n- pending\n- coalesce 保留乐观 user\n\n建议提交：\nfix(pc-chat): 修复发送后用户消息被冲掉"
+	// result 与流式高度重叠但非整段包含时，旧逻辑会 `\n`+全文再贴一次
+	final := "说明：根因是 coalesce。\n" + prev
+	if g := cursorResultAppend(prev, final); g != "" {
+		t.Fatalf("high overlap must not append full final: %q", g)
+	}
+}

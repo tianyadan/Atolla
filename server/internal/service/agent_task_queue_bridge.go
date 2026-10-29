@@ -21,7 +21,14 @@ func (s *Service) ListAgentTaskQueue(ctx context.Context, agentID int64) (any, e
 
 // EnqueueAgentTaskQueue implements remotebridge.AgentRuntime.
 func (s *Service) EnqueueAgentTaskQueue(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt) (any, error) {
-	return s.EnqueueAgentTask(ctx, agentID, question, chatAttsToQueue(atts))
+	out, err := s.EnqueueAgentTaskEx(ctx, agentID, question, chatAttsToQueue(atts))
+	if err != nil {
+		return nil, err
+	}
+	if out.Kickoff != nil {
+		go s.autoRunClaimedTaskQueueItem(agentID, out.Kickoff)
+	}
+	return out.Item, nil
 }
 
 // InterruptAgentTaskQueue implements remotebridge.AgentRuntime.

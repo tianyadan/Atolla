@@ -379,6 +379,11 @@ func runCodexJSONStream(
 			}
 		}
 		if ev.Chunk != "" {
+			raw := strings.TrimSpace(ev.Chunk)
+			// 与已推送正文重复的 agent_message（修订尾段）不再拼接，避免 PC 出现「改动」贴两次
+			if raw != "" && cursorAlreadyStreamed(full.String(), raw) {
+				continue
+			}
 			// 时间线：每条 agent 消息前加换行 + ·
 			piece := ev.Chunk
 			if msgCount == 0 {

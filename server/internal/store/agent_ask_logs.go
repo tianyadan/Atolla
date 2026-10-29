@@ -301,30 +301,46 @@ func (s *Store) AgentAskOverviewStats(ctx context.Context, f AgentAskAuditFilter
 	return out, nil
 }
 
-// AgentAskTokensDaily 按自然日聚合 Token。
-func (s *Store) AgentAskTokensDaily(ctx context.Context, f AgentAskAuditFilter) ([]AgentAskTokenBucket, error) {
-	where, args := agentAskRangeArgs(f)
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT DATE(started_at) AS d,
-		       COALESCE(SUM(input_tokens),0),
-		       COALESCE(SUM(output_tokens),0),
-		       COALESCE(SUM(total_tokens),0)
-		FROM agent_ask_logs WHERE %s
-		GROUP BY DATE(started_at) ORDER BY d`, where), args...)
-	if err != nil {
-		return nil, err
+// formatSQLDateBucket 把 DATE()/周一表达式结果收成 YYYY-MM-DD（兼容 MySQL time 与 SQLite TEXT）。
+func formatSQLDateBucket(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case time.Time:
+		if t.IsZero() {
+			return ""
+		}
+		return t.Format("2006-01-02")
+	case []byte:
+		s := strings.TrimSpace(string(t))
+		if len(s) >= 10 {
+			return s[:10]
+		}
+		return s
+	case string:
+		s := strings.TrimSpace(t)
+		if len(s) >= 10 {
+			return s[:10]
+		}
+		return s
+	default:
+		s := strings.TrimSpace(fmt.Sprint(t))
+		if len(s) >= 10 {
+			return s[:10]
+		}
+		return s
 	}
-	defer rows.Close()
+}
+
+func scanAskTokenBuckets(rows *sql.Rows) ([]AgentAskTokenBucket, error) {
 	var out []AgentAskTokenBucket
 	for rows.Next() {
 		var b AgentAskTokenBucket
-		var d sql.NullTime
-		if err := rows.Scan(&d, &b.InputTokens, &b.OutputTokens, &b.TotalTokens); err != nil {
+		var day any
+		if err := rows.Scan(&day, &b.InputTokens, &b.OutputTokens, &b.TotalTokens); err != nil {
 			return nil, err
 		}
-		if d.Valid {
-			b.Bucket = d.Time.Format("2006-01-02")
-		}
+		b.Bucket = formatSQLDateBucket(day)
 		out = append(out, b)
 	}
 	if out == nil {
@@ -333,37 +349,47 @@ func (s *Store) AgentAskTokensDaily(ctx context.Context, f AgentAskAuditFilter) 
 	return out, rows.Err()
 }
 
-// AgentAskTokensWeekly 按自然周（周一）聚合 Token。
-func (s *Store) AgentAskTokensWeekly(ctx context.Context, f AgentAskAuditFilter) ([]AgentAskTokenBucket, error) {
+// AgentAskTokensDaily 按自然日聚合 Token。
+func (s *Store) AgentAskTokensDaily(ctx context.Context, f AgentAskAuditFilter) ([]AgentAskTokenBucket, error) {
 	where, args := agentAskRangeArgs(f)
-	// MySQL: DATE_SUB(DATE(started_at), INTERVAL WEEKDAY(started_at) DAY) = 该周周一
+	dayExpr := "DATE(started_at)"
+	if s.IsSQLite() {
+		dayExpr = "date(started_at)"
+	}
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT DATE_SUB(DATE(started_at), INTERVAL WEEKDAY(started_at) DAY) AS week_start,
+		SELECT %s AS d,
 		       COALESCE(SUM(input_tokens),0),
 		       COALESCE(SUM(output_tokens),0),
 		       COALESCE(SUM(total_tokens),0)
 		FROM agent_ask_logs WHERE %s
-		GROUP BY week_start ORDER BY week_start`, where), args...)
+		GROUP BY %s ORDER BY d`, dayExpr, where, dayExpr), args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []AgentAskTokenBucket
-	for rows.Next() {
-		var b AgentAskTokenBucket
-		var d sql.NullTime
-		if err := rows.Scan(&d, &b.InputTokens, &b.OutputTokens, &b.TotalTokens); err != nil {
-			return nil, err
-		}
-		if d.Valid {
-			b.Bucket = d.Time.Format("2006-01-02")
-		}
-		out = append(out, b)
+	return scanAskTokenBuckets(rows)
+}
+
+// AgentAskTokensWeekly 按自然周（周一）聚合 Token。
+func (s *Store) AgentAskTokensWeekly(ctx context.Context, f AgentAskAuditFilter) ([]AgentAskTokenBucket, error) {
+	where, args := agentAskRangeArgs(f)
+	// MySQL WEEKDAY: 周一=0；SQLite strftime %%w: 周日=0 → 换算到周一
+	weekExpr := "DATE_SUB(DATE(started_at), INTERVAL WEEKDAY(started_at) DAY)"
+	if s.IsSQLite() {
+		weekExpr = `date(started_at, '-' || ((CAST(strftime('%w', started_at) AS INTEGER) + 6) % 7) || ' days')`
 	}
-	if out == nil {
-		out = []AgentAskTokenBucket{}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s AS week_start,
+		       COALESCE(SUM(input_tokens),0),
+		       COALESCE(SUM(output_tokens),0),
+		       COALESCE(SUM(total_tokens),0)
+		FROM agent_ask_logs WHERE %s
+		GROUP BY week_start ORDER BY week_start`, weekExpr, where), args...)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	defer rows.Close()
+	return scanAskTokenBuckets(rows)
 }
 
 // AgentAskToolAggregates 按工具聚合；limit<=0 表示全部。

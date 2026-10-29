@@ -19,7 +19,7 @@ import {
   setAgentChatLog,
   subscribeAgentSessions,
 } from './managedAgentSessions.js'
-import { coalesceChatLog } from './coalesceChatLog.js'
+import { coalesceChatLog, shouldAppendAssistantChunk, stripRepeatedAssistantTail } from './coalesceChatLog.js'
 import AgentSkillsPanel from './AgentSkillsPanel.jsx'
 import TalentMarket from './TalentMarket.jsx'
 import DismissAgentModal from './DismissAgentModal.jsx'
@@ -293,6 +293,8 @@ export default function ManagedAgentsPanel({
   /** loadDetail 世代号：切换数字人后丢弃过期拉取，避免写错会话 */
   const detailLoadGen = useRef(0)
   const stickBottomRef = useRef(true)
+  /** 程序性滚底期间忽略 onScroll，避免把 stickBottom 误判为 false */
+  const pinningScrollRef = useRef(false)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
 
@@ -744,11 +746,27 @@ export default function ManagedAgentsPanel({
     setLightboxSrc('')
   }, [selectedId])
 
+  /** 把对话区钉在底部（双 rAF 等用户气泡 / RunStatus 布局完成） */
+  function scrollChatToBottom() {
+    stickBottomRef.current = true
+    const el = boxRef.current
+    if (!el || selectionInside(el)) return
+    pinningScrollRef.current = true
+    const pin = () => { el.scrollTop = el.scrollHeight }
+    pin()
+    requestAnimationFrame(() => {
+      pin()
+      requestAnimationFrame(() => {
+        pin()
+        pinningScrollRef.current = false
+      })
+    })
+  }
+
   useEffect(() => {
     if (!active || !stickBottomRef.current) return
-    const el = boxRef.current
-    // 用户正在划选正文时不要强滚到底，否则选区会被冲掉
-    if (el && !selectionInside(el)) el.scrollTop = el.scrollHeight
+    scrollChatToBottom()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatLog, loading, active, permQueue.length])
 
   /** 刷新后无本地 SSE：按服务端 running 恢复 loading，并在终态清掉「幽灵忙碌」 */
@@ -841,7 +859,9 @@ export default function ManagedAgentsPanel({
   function onChatScroll() {
     const el = boxRef.current
     if (!el) return
-    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+    if (pinningScrollRef.current) return
+    // 阈值略放宽：亚像素 / RunStatus 增高时仍视为贴底
+    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96
     if (el.scrollTop < 40) loadOlder()
   }
 
@@ -1258,9 +1278,13 @@ export default function ManagedAgentsPanel({
           // 命令/引用事件会插在末尾;后续正文必须接到 assistant
           if (n.length && n[n.length - 1].role === 'assistant') {
             const last = n[n.length - 1]
-            n[n.length - 1] = { ...last, content: (last.content || '') + piece }
+            const cur = last.content || ''
+            // 引擎重放已推送段落时跳过，避免「改动」等章节贴两次
+            if (!shouldAppendAssistantChunk(cur, piece)) return n
+            const next = stripRepeatedAssistantTail(cur + piece)
+            n[n.length - 1] = { ...last, content: next }
           } else {
-            n.push({ role: 'assistant', content: piece, time: Date.now() })
+            n.push({ role: 'assistant', content: stripRepeatedAssistantTail(piece), time: Date.now() })
           }
           return n
         })
@@ -1271,6 +1295,20 @@ export default function ManagedAgentsPanel({
             n[n.length - 1] = { ...n[n.length - 1], content: `❌ ${ev.message || '出错'}`, error: true }
           } else {
             n.push({ role: 'assistant', content: `❌ ${ev.message || '出错'}`, error: true })
+          }
+          return n
+        })
+      } else if (ev.type === 'assistant_attachments') {
+        const atts = Array.isArray(ev.attachments) ? ev.attachments : []
+        if (!atts.length) continue
+        const mid = ev.message_id
+        setAgentChatLog(agentId, (prev) => {
+          const n = [...prev]
+          for (let i = n.length - 1; i >= 0; i--) {
+            if (n[i].role !== 'assistant') continue
+            if (mid && n[i].id && n[i].id !== mid) continue
+            n[i] = { ...n[i], id: n[i].id || mid, attachments: atts }
+            break
           }
           return n
         })
@@ -1462,16 +1500,19 @@ export default function ManagedAgentsPanel({
     const taskId = Number(opts.taskId) || 0
     const resumePrefix = !!opts.resumePrefix
     const ac = new AbortController()
+    // 先钉底再改会话，避免中间一次 effect 读到旧的 stickBottom=false
+    stickBottomRef.current = true
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: Date.now(), abort: ac, interrupting: false, invokes: {},
       taskTokens: 0,
       liveActivity: { tool: '', summary: '启动中…', at: Date.now() },
     })
+    // pending: 轮询 force 校准时由 coalesce 保留，避免乐观气泡被冲掉
     setAgentChatLog(agentId, (prev) => [
       ...prev,
-      { role: 'user', content: q, attachments: atts, time: Date.now() },
+      { role: 'user', content: q, attachments: atts, time: Date.now(), pending: true },
     ])
-    stickBottomRef.current = true
+    scrollChatToBottom()
     pendingQueueNextRef.current = null
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/ask`, {
@@ -1736,18 +1777,32 @@ export default function ManagedAgentsPanel({
   async function onTqEnqueue() {
     if (!selected || !tqChoice || tqChoiceBusy) return
     const id = selected.id
+    const q = tqChoice.question
+    const atts = tqChoice.attachments || []
     setTqChoiceBusy(true)
     try {
       const res = await fetch(`${API}/admin/agents/${id}/task-queue`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ question: tqChoice.question, attachments: tqChoice.attachments || [] }),
+        body: JSON.stringify({ question: q, attachments: atts }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || `入队失败(${res.status})`)
       setTqChoice(null)
       setTqRefreshKey((k) => k + 1)
+      // 入队时刚好空闲：服务端已 claim，需立刻 Ask，否则会一直挂在队列里
+      const kick = d.kickoff || (d.status === 'running' ? d : null)
+      if (kick?.id) {
+        let kickAtts = atts
+        if (kick.attachments_json) {
+          try { kickAtts = JSON.parse(kick.attachments_json) } catch { /* keep */ }
+        }
+        await sendQuestion(id, kick.question || q, kickAtts, {
+          taskId: kick.id,
+          resumePrefix: !!kick.resume_hint,
+        })
+      }
     } catch (err) {
       patchAgentSession(id, { error: String(err.message || err) })
     } finally {
@@ -2472,6 +2527,9 @@ export default function ManagedAgentsPanel({
                     ) : m.role === 'assistant' ? (
                       <div className="ma-timeline-assistant">
                         <AgentMarkdown content={m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
+                        {(m.attachments || []).length > 0 && (
+                          <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
+                        )}
                       </div>
                     ) : (
                       <div className="msg-body">
@@ -2553,7 +2611,11 @@ export default function ManagedAgentsPanel({
                         ))}
                       </ul>
                     )}
-                    <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
+                    <ChatAttachPreview
+                      items={pendingImages}
+                      onRemove={removePendingImage}
+                      onOpen={setLightboxSrc}
+                    />
                     <textarea
                       ref={composerRef}
                       className="ma-composer-input"

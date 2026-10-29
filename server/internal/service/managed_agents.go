@@ -71,8 +71,15 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 			return fmt.Errorf("agent busy")
 		default:
 			// enqueue 或旧客户端缺省 mode
-			if _, err := s.EnqueueAgentTask(ctx, agentID, q, tqAtts); err != nil {
+			out, err := s.EnqueueAgentTaskEx(ctx, agentID, q, tqAtts)
+			if err != nil {
 				return err
+			}
+			// 竞态：入队时刚好变空闲 → 服务端立刻续跑，避免队列挂死
+			if out.Kickoff != nil {
+				go s.autoRunClaimedTaskQueueItem(agentID, out.Kickoff)
+				log.Printf("remotebridge agent.ask agent=%d: enqueued+kickoff task=%d", agentID, out.Kickoff.ID)
+				return nil
 			}
 			log.Printf("remotebridge agent.ask agent=%d: busy -> enqueued", agentID)
 			return nil
@@ -508,7 +515,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		history = FormatResumeHistory(turns, q)
 	}
 	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, history, onChunk, onEvent, userQuestion, atts)
-	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
+	msg, err := s.finishManagedAsk(runCtx, a, convID, opts.bindMainConv, out, ms, runErr, tp, opts, onEvent)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, runErr)
@@ -605,7 +612,7 @@ func (s *Service) askManagedWithInvokes(
 	sumQ = MaybeReinforcePolicy(caller, userTurns, sumQ)
 
 	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, convID, sys, sumQ, "", onChunk, onEvent, taskBody, nil)
-	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, opts)
+	msg, err := s.finishManagedAsk(ctx, caller, convID, bindMainConv, out, ms, runErr, tp, opts, onEvent)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
 	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(ctx, opts.agentAudit, msg, runErr)
@@ -625,7 +632,14 @@ func (s *Service) flushCompactAfterAsk(ctx context.Context, convID int64, onEven
 	})
 }
 
-func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, bindMainConv bool, out string, ms int, runErr error, tp *TaskProgress, opts askCoreOpts) (*store.Message, error) {
+func (s *Service) finishManagedAsk(ctx context.Context, a *store.ManagedAgent, convID int64, bindMainConv bool, out string, ms int, runErr error, tp *TaskProgress, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
+	agentID := int64(0)
+	engine, workspace := "", ""
+	if a != nil {
+		agentID = a.ID
+		engine = a.Engine
+		workspace = a.WorkspacePath
+	}
 	out, runErr = applyCancelledAskOutput(ctx.Err(), out, runErr)
 	if ctx.Err() != nil && ms == 0 {
 		ms = 1
@@ -657,12 +671,19 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 		}
 	}
 
-	msg := &store.Message{
-		ConversationID: convID, Role: "assistant", Content: out, Status: status, ReplyMs: ms,
+	// Codex/Cursor：从完整正文识别本机图并上传（用 out，避免切段尾巴漏路径）。
+	var localAtts []ChatAttachment
+	if !opts.silent && EngineSupportsLocalImageAttach(engine) {
+		localAtts = s.AttachLocalImagesFromText(context.WithoutCancel(ctx), engine, workspace, out)
 	}
-	if !opts.silent && strings.TrimSpace(persist) != "" {
+	metaJSON := AttachmentsMetaJSON(localAtts)
+
+	msg := &store.Message{
+		ConversationID: convID, Role: "assistant", Content: out, Status: status, ReplyMs: ms, MetaJSON: metaJSON,
+	}
+	if !opts.silent && (strings.TrimSpace(persist) != "" || len(localAtts) > 0) {
 		row := &store.Message{
-			ConversationID: convID, Role: "assistant", Content: persist, Status: status, ReplyMs: ms,
+			ConversationID: convID, Role: "assistant", Content: persist, Status: status, ReplyMs: ms, MetaJSON: metaJSON,
 		}
 		if id, err := s.Store.InsertMessage(context.WithoutCancel(ctx), row); err != nil {
 			log.Printf("finishManagedAsk: insert assistant failed: %v", err)
@@ -670,6 +691,12 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 			msg.ID = id
 			msg.Content = persist
 		}
+	}
+	if len(localAtts) > 0 && msg.ID > 0 {
+		emitAsk(onEvent, map[string]any{
+			"type": "assistant_attachments", "message_id": msg.ID,
+			"attachments": AttachmentsForSSE(localAtts),
+		})
 	}
 	if !opts.holdStatus {
 		_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))

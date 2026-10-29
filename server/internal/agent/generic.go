@@ -346,7 +346,47 @@ func cursorResultAppend(prev, final string) string {
 	if cursorMostlyCovered(prev, final) {
 		return ""
 	}
+	// result 尾段已在流式中出现过（常见：改动/提交说明又整节回来）→ 不补
+	if cursorAlreadyStreamed(prev, final) {
+		return ""
+	}
+	// 高重叠时禁止「\n+全文」兜底，否则 PC 必现重复章节
+	if cursorOverlapRatio(prev, final) >= 0.55 {
+		return ""
+	}
 	return "\n" + final
+}
+
+// cursorOverlapRatio 粗估两段重叠比例（按较短串）。
+func cursorOverlapRatio(a, b string) float64 {
+	a, b = cursorCollapseWS(a), cursorCollapseWS(b)
+	if a == "" || b == "" {
+		return 0
+	}
+	short, long := a, b
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	if strings.Contains(long, short) {
+		return 1
+	}
+	// 取 short 中段探测
+	step := 24
+	if len(short) < step*2 {
+		return 0
+	}
+	hits := 0
+	total := 0
+	for i := 0; i+step <= len(short); i += step {
+		total++
+		if strings.Contains(long, short[i:i+step]) {
+			hits++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(hits) / float64(total)
 }
 
 // deliverCursor 把解析后的正文交给调用方，并回传 session/usage。

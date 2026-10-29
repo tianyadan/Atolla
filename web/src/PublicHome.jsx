@@ -495,7 +495,11 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
               onDragOver={onComposerDragOver}
               onDrop={onComposerDrop}
             >
-              <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
+              <ChatAttachPreview
+                items={pendingImages}
+                onRemove={removePendingImage}
+                onOpen={setLightboxSrc}
+              />
               <textarea
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}

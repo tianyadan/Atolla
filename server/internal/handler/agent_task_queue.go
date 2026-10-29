@@ -71,12 +71,33 @@ func (h *Handler) AdminAgentTaskQueueEnqueue(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	item, err := h.svc.EnqueueAgentTask(c.Request.Context(), id, body.Question, parseTaskQueueAtts(body.Attachments))
+	out, err := h.svc.EnqueueAgentTaskEx(c.Request.Context(), id, body.Question, parseTaskQueueAtts(body.Attachments))
 	if err != nil {
 		taskQueueHTTPError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	if out.Item == nil {
+		c.JSON(http.StatusOK, gin.H{})
+		return
+	}
+	// 兼容旧前端：正文仍是队列项；kickoff 表示空闲入队需立刻 Ask
+	c.JSON(http.StatusOK, gin.H{
+		"id":               out.Item.ID,
+		"agent_id":         out.Item.AgentID,
+		"conversation_id":  out.Item.ConversationID,
+		"status":           out.Item.Status,
+		"question":         out.Item.Question,
+		"attachments_json": out.Item.AttachmentsJSON,
+		"position":         out.Item.Position,
+		"pause_rank":       out.Item.PauseRank,
+		"silent_notify":    out.Item.SilentNotify,
+		"created_at":       out.Item.CreatedAt,
+		"started_at":       out.Item.StartedAt,
+		"finished_at":      out.Item.FinishedAt,
+		"error_text":       out.Item.ErrorText,
+		"resume_hint":      out.Item.ResumeHint,
+		"kickoff":          out.Kickoff,
+	})
 }
 
 // AdminAgentTaskQueueInterrupt 打断优先：paused 当前 + 登记紧急 running。

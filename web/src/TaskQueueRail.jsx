@@ -210,14 +210,27 @@ export default function TaskQueueRail({
     })
   }
 
-  const trackItems = useMemo(() => {
+  /** 活跃按 position 倒序（越新越靠前，保留队列相对顺序）；已完成沉底且越新越靠前 */
+  const { liveItems, doneItems, trackItems } = useMemo(() => {
     const activeStatuses = new Set(['running', 'paused', 'queued'])
-    const live = view.items.filter((x) => activeStatuses.has(x.status))
-    const done = view.items.filter((x) => x.status === 'done' || x.status === 'failed' || x.status === 'cancelled')
-    return [...live, ...done.slice(0, 12)]
+    const live = view.items
+      .filter((x) => activeStatuses.has(x.status))
+      .slice()
+      .sort((a, b) => (Number(b.position) - Number(a.position)) || (Number(b.id) - Number(a.id)))
+    const done = view.items
+      .filter((x) => x.status === 'done' || x.status === 'failed' || x.status === 'cancelled')
+      .slice()
+      .sort((a, b) => {
+        const fa = a.finished_at ? new Date(a.finished_at).getTime() : 0
+        const fb = b.finished_at ? new Date(b.finished_at).getTime() : 0
+        return (fb - fa) || (Number(b.id) - Number(a.id))
+      })
+      .slice(0, 12)
+    return { liveItems: live, doneItems: done, trackItems: [...live, ...done] }
   }, [view.items])
 
   const badge = view.active || (view.hold ? 1 : 0)
+  const canClearDone = doneItems.length > 0
 
   async function cancelTask(taskId) {
     if (!agentId || busy) return
@@ -315,9 +328,6 @@ export default function TaskQueueRail({
                   {t('tq.continue')}
                 </button>
               ) : null}
-              <button type="button" className="ghost" disabled={busy} onClick={() => void clearDone()}>
-                {t('tq.clearDone')}
-              </button>
               <button type="button" className="ghost" onClick={() => setOpen(false)} aria-label={t('tq.close')}>
                 ×
               </button>
@@ -328,25 +338,61 @@ export default function TaskQueueRail({
             {trackItems.length === 0 ? (
               <p className="tq-empty">{t('tq.empty')}</p>
             ) : (
-              trackItems.map((item, idx) => {
-                const st = item.status || 'queued'
-                const q = item.question || ''
-                return (
-                  <div
-                    key={item.id}
-                    className={`tq-node st-${st}${hoverId === item.id ? ' is-hover' : ''}`}
-                    onMouseEnter={(e) => showTipFor(item, e.currentTarget.querySelector('.tq-dot') || e.currentTarget)}
-                    onMouseLeave={clearTipSoon}
-                  >
-                    {idx > 0 ? <i className="tq-line" aria-hidden="true" /> : null}
+              <>
+                {liveItems.map((item, idx) => {
+                  const st = item.status || 'queued'
+                  const q = item.question || ''
+                  return (
+                    <div
+                      key={item.id}
+                      className={`tq-node st-${st}${hoverId === item.id ? ' is-hover' : ''}`}
+                      onMouseEnter={(e) => showTipFor(item, e.currentTarget.querySelector('.tq-dot') || e.currentTarget)}
+                      onMouseLeave={clearTipSoon}
+                    >
+                      {idx > 0 ? <i className="tq-line" aria-hidden="true" /> : null}
+                      <button
+                        type="button"
+                        className={`tq-dot st-${st}`}
+                        aria-label={q.slice(0, 80)}
+                      />
+                    </div>
+                  )
+                })}
+                {doneItems.length > 0 ? (
+                  <div className="tq-done-block">
+                    {liveItems.length > 0 ? <div className="tq-done-sep" aria-hidden /> : null}
+                    {doneItems.map((item, idx) => {
+                      const st = item.status || 'done'
+                      const q = item.question || ''
+                      return (
+                        <div
+                          key={item.id}
+                          className={`tq-node st-${st}${hoverId === item.id ? ' is-hover' : ''}`}
+                          onMouseEnter={(e) => showTipFor(item, e.currentTarget.querySelector('.tq-dot') || e.currentTarget)}
+                          onMouseLeave={clearTipSoon}
+                        >
+                          {idx > 0 ? <i className="tq-line tq-line-done" aria-hidden="true" /> : null}
+                          <button
+                            type="button"
+                            className={`tq-dot st-${st}`}
+                            aria-label={q.slice(0, 80)}
+                          />
+                        </div>
+                      )
+                    })}
+                    {/* 仅清除已完成；排队/执行中不可由此清除 */}
                     <button
                       type="button"
-                      className={`tq-dot st-${st}`}
-                      aria-label={q.slice(0, 80)}
-                    />
+                      className="tq-clear-done-btn"
+                      disabled={busy || !canClearDone}
+                      title={t('tq.clearDoneHint')}
+                      onClick={() => void clearDone()}
+                    >
+                      {t('tq.clearDone')}
+                    </button>
                   </div>
-                )
-              })
+                ) : null}
+              </>
             )}
           </div>
 

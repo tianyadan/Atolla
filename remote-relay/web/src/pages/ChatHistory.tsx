@@ -91,7 +91,12 @@ const PAGE_SIZE = 20
 /** Ask Mac to sync a bit more into mirror than UI shows */
 const SYNC_LIMIT = 40
 
-type LocalBubble = PublicMirrorMessage & { pending?: boolean; failed?: boolean }
+type LocalBubble = PublicMirrorMessage & {
+  pending?: boolean
+  failed?: boolean
+  /** 已成功入队、尚未真正发出执行 */
+  queued?: boolean
+}
 
 /** Sort ascending for chat UI */
 function sortMessages(list: LocalBubble[]): LocalBubble[] {
@@ -107,20 +112,21 @@ function sortMessages(list: LocalBubble[]): LocalBubble[] {
 function mergeServerMessages(prev: LocalBubble[], page: PublicMirrorMessage[]): LocalBubble[] {
   const byId = new Map<string, LocalBubble>()
   for (const m of prev) {
-    if (!m.pending) byId.set(m.message_id, m)
+    // 本地 pending / queued 乐观气泡等服务端同文案落库后再替换
+    if (!m.pending && !m.queued) byId.set(m.message_id, m)
   }
   for (const m of page) {
     const prevRow = byId.get(m.message_id)
-    byId.set(m.message_id, { ...prevRow, ...m, pending: false, failed: false })
+    byId.set(m.message_id, { ...prevRow, ...m, pending: false, failed: false, queued: false })
   }
-  const pending = prev.filter(
+  const localHold = prev.filter(
     (m) =>
-      m.pending &&
+      (m.pending || m.queued) &&
       !m.failed &&
       !page.some((s) => s.role === 'user' && s.content === m.content) &&
       !byId.has(m.message_id),
   )
-  return sortMessages([...byId.values(), ...pending])
+  return sortMessages([...byId.values(), ...localHold])
 }
 
 /** Chat with sticky agent header, bottom-anchored thread, older-on-scroll-up */
@@ -670,6 +676,14 @@ export function ChatHistoryPage() {
       await askAgent(forInstance, forAgent, q, atts, mode)
       if (routeAgentRef.current !== forAgent) return
       if (mode === 'enqueue') {
+        // 入队不会立刻落聊天消息，勿一直显示「发送中」
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.message_id === optimisticId
+              ? { ...m, pending: false, queued: true, failed: false }
+              : m,
+          ),
+        )
         setError(t('tq.enqueuedToast'))
         void refreshTaskQueueBadge()
       }
@@ -689,7 +703,9 @@ export function ChatHistoryPage() {
         setError(err instanceof Error ? err.message : '发送失败')
         setMessages((prev) =>
           prev.map((m) =>
-            m.message_id === optimisticId ? { ...m, failed: true, pending: false } : m,
+            m.message_id === optimisticId
+              ? { ...m, failed: true, pending: false, queued: false }
+              : m,
           ),
         )
       }
@@ -993,7 +1009,7 @@ export function ChatHistoryPage() {
             return (
               <article
                 key={m.message_id}
-                className={`chat-bubble role-${role}${isUser ? ' bubble-user' : ''}${isAssistant ? ' bubble-assistant' : ''}${isSpecial ? ' bubble-special' : ''}${isCommand ? ' bubble-command' : ''}${m.failed ? ' failed' : ''}${m.pending ? ' pending' : ''}`}
+                className={`chat-bubble role-${role}${isUser ? ' bubble-user' : ''}${isAssistant ? ' bubble-assistant' : ''}${isSpecial ? ' bubble-special' : ''}${isCommand ? ' bubble-command' : ''}${m.failed ? ' failed' : ''}${m.pending ? ' pending' : ''}${m.queued ? ' queued' : ''}`}
               >
                 <header className={isAssistant ? 'bubble-agent-head' : undefined}>
                   {isAssistant ? (
@@ -1019,7 +1035,13 @@ export function ChatHistoryPage() {
                       {isCommand && cmd?.by ? (
                         <span className="cmd-by">{byLabel(cmd.by)}</span>
                       ) : null}
-                      {m.failed ? ' · 发送失败' : m.pending ? ' · 发送中' : ''}
+                      {m.failed
+                        ? ` · ${t('chat.sendFailed')}`
+                        : m.pending
+                          ? ` · ${t('chat.sending')}`
+                          : m.queued
+                            ? ` · ${t('tq.queuedLabel')}`
+                            : ''}
                     </>
                   )}
                 </header>

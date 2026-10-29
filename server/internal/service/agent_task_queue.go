@@ -79,33 +79,49 @@ func (s *Service) ListTaskQueue(ctx context.Context, agentID int64) (TaskQueueVi
 	return TaskQueueView{Items: items, Hold: hold, Active: active}, nil
 }
 
+// EnqueueOutcome 入队结果；Kickoff 表示空闲时已 claim、需立刻 Ask 的项（可能是新入队或更早的排队项）。
+type EnqueueOutcome struct {
+	Item    *store.AgentTaskQueueItem
+	Kickoff *store.AgentTaskQueueItem
+}
+
 // EnqueueAgentTask 追加到队列末尾（不停当前）。
+// 若数字人已空闲且未 hold：claim 队首并返回 Kickoff，避免「入队踩在回合收尾后」永远不跑。
 func (s *Service) EnqueueAgentTask(ctx context.Context, agentID int64, question string, atts []TaskQueueAttachment) (*store.AgentTaskQueueItem, error) {
+	out, err := s.EnqueueAgentTaskEx(ctx, agentID, question, atts)
+	if err != nil {
+		return nil, err
+	}
+	return out.Item, nil
+}
+
+// EnqueueAgentTaskEx 同 EnqueueAgentTask，额外返回是否需立刻开跑。
+func (s *Service) EnqueueAgentTaskEx(ctx context.Context, agentID int64, question string, atts []TaskQueueAttachment) (EnqueueOutcome, error) {
 	question = strings.TrimSpace(question)
 	if question == "" && len(atts) == 0 {
-		return nil, errTaskQueueEmptyQ
+		return EnqueueOutcome{}, errTaskQueueEmptyQ
 	}
 	unlock := s.taskQueueLock(agentID)
 	defer unlock()
 
 	active, err := s.Store.CountAgentTaskActive(ctx, agentID)
 	if err != nil {
-		return nil, err
+		return EnqueueOutcome{}, err
 	}
 	if active >= store.TaskQueueMaxActive {
-		return nil, ErrTaskQueueFull
+		return EnqueueOutcome{}, ErrTaskQueueFull
 	}
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil || a == nil {
-		return nil, fmt.Errorf("agent not found")
+		return EnqueueOutcome{}, fmt.Errorf("agent not found")
 	}
 	pos, err := s.Store.NextAgentTaskPosition(ctx, agentID)
 	if err != nil {
-		return nil, err
+		return EnqueueOutcome{}, err
 	}
 	attJSON, err := marshalTaskAtts(atts)
 	if err != nil {
-		return nil, err
+		return EnqueueOutcome{}, err
 	}
 	id, err := s.Store.InsertAgentTaskQueue(ctx, store.AgentTaskQueueItem{
 		AgentID:         agentID,
@@ -116,9 +132,39 @@ func (s *Service) EnqueueAgentTask(ctx context.Context, agentID int64, question 
 		Position:        pos,
 	})
 	if err != nil {
-		return nil, err
+		return EnqueueOutcome{}, err
 	}
-	return s.Store.GetAgentTaskQueueItem(ctx, id)
+	item, err := s.Store.GetAgentTaskQueueItem(ctx, id)
+	if err != nil {
+		return EnqueueOutcome{}, err
+	}
+	kickoff := s.claimNextIfIdleLocked(ctx, agentID)
+	if kickoff != nil && item != nil && kickoff.ID == item.ID {
+		item = kickoff
+	}
+	return EnqueueOutcome{Item: item, Kickoff: kickoff}, nil
+}
+
+// claimNextIfIdleLocked 调用方须已持有 taskQueueLock。
+func (s *Service) claimNextIfIdleLocked(ctx context.Context, agentID int64) *store.AgentTaskQueueItem {
+	hold, _ := s.Store.GetAgentTaskQueueHold(ctx, agentID)
+	if hold {
+		return nil
+	}
+	s.runMu.Lock()
+	_, live := s.runs[agentID]
+	s.runMu.Unlock()
+	if live {
+		return nil
+	}
+	if cur, _ := s.Store.GetRunningAgentTask(ctx, agentID); cur != nil {
+		return nil
+	}
+	if next, _ := s.Store.ClaimPausedAgentTask(ctx, agentID); next != nil {
+		return next
+	}
+	next, _ := s.Store.ClaimQueuedAgentTask(ctx, agentID)
+	return next
 }
 
 // InterruptPreferAgentTask 打断当前 → paused，登记紧急任务为 running，由调用方发起 Ask。
@@ -177,6 +223,11 @@ func (s *Service) InterruptPreferAgentTask(ctx context.Context, agentID int64, q
 	if err != nil {
 		return nil, err
 	}
+	// 打断项也占新 position：展示时「越新越靠前」，不因 position=0 沉底
+	pos, err := s.Store.NextAgentTaskPosition(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	id, err := s.Store.InsertAgentTaskQueue(ctx, store.AgentTaskQueueItem{
 		AgentID:         agentID,
@@ -184,7 +235,7 @@ func (s *Service) InterruptPreferAgentTask(ctx context.Context, agentID int64, q
 		Status:          store.TaskRunning,
 		Question:        question,
 		AttachmentsJSON: attJSON,
-		Position:        0,
+		Position:        pos,
 		StartedAt:       &now,
 		SilentNotify:    false,
 	})

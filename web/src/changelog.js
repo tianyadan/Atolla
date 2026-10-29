@@ -8,6 +8,7 @@ export const CHANGELOG = [
       '队列持久化落库：queued / running / paused（LIFO 恢复）/ done；Stop 后 hold，需「继续队列」才恢复',
       '对话区右侧队列轨：排队紫灯 / 执行中橙色呼吸灯；抽屉可拖拽改宽高；hover 气泡可改未执行文案、取消项',
       '修复手机发消息后 PC 只见状态不见正文：消息 coalesce 改为按 id 合并，不再因本地命令气泡更多而整段丢弃 DB 新消息',
+      '修复回合结束后只见命令不见回复：coalesce 不再把无 id 本地命令追加到末尾顶掉最终 assistant',
       '普通直发不再误写入队列；仅入队 / 打断 / 出队续跑写轨；队列连跑中间轮 Bark 静默',
       '通知开启前增加 Bark OTP 验证；管理台与中继界面中英 i18n',
       '启动脚本支持后台模式：./scripts/start-bg.sh 或 start.sh --daemon，可关终端常驻',

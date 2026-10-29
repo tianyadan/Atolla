@@ -119,14 +119,12 @@ func (s *Store) ListAgentTaskQueue(ctx context.Context, agentID int64, doneLimit
 	if doneLimit <= 0 {
 		doneLimit = TaskQueueDoneKeep
 	}
+	// 活跃项按队列 position 倒序：越新（更大 position）越靠前；不按 status 把 running 置顶。
+	// 已完成另查并接在后面（finished_at 新→旧）。
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+taskQueueSelectCols+` FROM agent_task_queue
 		WHERE agent_id = ? AND status IN (?, ?, ?)
-		ORDER BY
-		  CASE status WHEN 'running' THEN 0 WHEN 'paused' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END,
-		  pause_rank DESC,
-		  position ASC,
-		  id ASC`,
+		ORDER BY position DESC, id DESC`,
 		agentID, TaskQueued, TaskRunning, TaskPaused)
 	if err != nil {
 		return nil, err
@@ -252,12 +250,13 @@ func (s *Store) InsertAgentTaskQueue(ctx context.Context, it AgentTaskQueueItem)
 	return res.LastInsertId()
 }
 
-// NextAgentTaskPosition 下一个 queued position。
+// NextAgentTaskPosition 下一个入队 position（相对全部活跃项取 max，保证越新越大）。
 func (s *Store) NextAgentTaskPosition(ctx context.Context, agentID int64) (int, error) {
 	var max sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
-		SELECT MAX(position) FROM agent_task_queue WHERE agent_id = ? AND status = ?`,
-		agentID, TaskQueued).Scan(&max)
+		SELECT MAX(position) FROM agent_task_queue
+		WHERE agent_id = ? AND status IN (?, ?, ?)`,
+		agentID, TaskQueued, TaskRunning, TaskPaused).Scan(&max)
 	if err != nil {
 		return 1, err
 	}

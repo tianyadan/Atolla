@@ -193,13 +193,20 @@ html.theme-light {
 .mobile-option-copy small {
   display: flex;
   align-items: center;
-  justify-content: center;
   flex-wrap: wrap;
   gap: 0.35rem;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.35;
   max-width: 100%;
+}
+
+/* 顶栏状态可居中；实例列表需左对齐，避免名称与「在线·系统」之间留大空 */
+.mobile-chat-status {
+  justify-content: center;
+}
+.mobile-option-copy small {
+  justify-content: flex-start;
 }
 
 /* 头像右下角状态点 */
@@ -2739,6 +2746,12 @@ html.native-app .login-home {
 
 .chat-bubble.pending {
   opacity: 0.7;
+}
+
+/* 已入队：略偏紫，区别于「发送中」半透明 */
+.chat-bubble.queued {
+  opacity: 0.92;
+  border-color: color-mix(in srgb, #7c3aed 35%, var(--border));
 }
 
 .chat-bubble.failed {

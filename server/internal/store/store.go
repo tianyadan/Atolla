@@ -663,6 +663,20 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) (int64, error) {
 	return id, nil
 }
 
+// UpdateMessageMeta 覆盖消息 meta_json（如 assistant attachments）。
+func (s *Store) UpdateMessageMeta(ctx context.Context, id int64, metaJSON string) error {
+	if id <= 0 {
+		return nil
+	}
+	meta := metaJSON
+	if meta == "" {
+		meta = "null"
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE messages SET `+s.jsonColAssign("meta_json")+` WHERE id = ?`, meta, id)
+	return err
+}
+
 // Messages 返回某会话的全部消息(按创建顺序)。
 func (s *Store) Messages(ctx context.Context, conversationID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,
