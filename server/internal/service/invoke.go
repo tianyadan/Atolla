@@ -73,7 +73,7 @@ func (s *Service) releaseAgentRun(agentID int64, slot *managedRun) {
 // sessionConvID：读写 engine_session_id / 拼平台历史（被调方记忆应绑自己的会话）。
 // permConvID/policyAgentID：授权路由（委托时弹窗挂调用方，策略取被调方）。
 // noHook=true 用于任务拆分等轻量调用,避免再次弹授权。
-func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink, atts []ChatAttachment) (string, int, error) {
+func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink, atts []ChatAttachment) (out string, ms int, runErr error) {
 	// Ensure local CLI sandbox allowlists track DB before engine starts.
 	_ = s.SyncNetworkAllowlistToHome(ctx)
 	engineName := store.RepairEngineName(a.Engine)
@@ -108,6 +108,9 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			}
 		}
 	}
+	traceRunID := fmt.Sprintf("%d-%d", a.ID, time.Now().UnixNano())
+	traceSource := llmTraceSource(engineName)
+	availability := "CLI 未暴露内部真实 API 调用边界、完整隐藏 Prompt 与精确底层模型；本条为 Atolla 可见的 CLI 执行轨迹。"
 	timeout := s.Cfg.AskTimeout()
 	// 记忆会话：优先显式 sessionConv；否则员工主会话；再不济用授权会话
 	metaConv := sessionConvID
@@ -133,6 +136,10 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		turn := m.InputTokens + m.OutputTokens + m.CacheRead + m.CacheWrite
 		emitAsk(onEvent, map[string]any{
 			"type":               "usage",
+			"trace_run_id":       traceRunID,
+			"agent_id":           a.ID,
+			"source":             traceSource,
+			"model":              "引擎未提供",
 			"session_id":         m.SessionID,
 			"input_tokens":       m.InputTokens,
 			"output_tokens":      m.OutputTokens,
@@ -156,6 +163,28 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			history = FormatResumeHistory(turns, question)
 		}
 	}
+	traceStarted := time.Now()
+	emitAsk(onEvent, map[string]any{
+		"type": "llm_trace_start", "trace_run_id": traceRunID, "agent_id": a.ID,
+		"engine": engineName, "source": traceSource, "model": "引擎未提供",
+		"input_content":     llmTraceInputContent(sys, engineQ, history, atts),
+		"availability_note": availability,
+	})
+	defer func() {
+		status := "success"
+		if runErr != nil {
+			status = "failed"
+		}
+		outputPayload, _ := json.MarshalIndent(map[string]any{
+			"text":       out,
+			"tool_calls": "原始模型工具调用请求不可获取；请查看工具执行明细。",
+		}, "", "  ")
+		emitAsk(onEvent, map[string]any{
+			"type": "llm_trace_end", "trace_run_id": traceRunID, "agent_id": a.ID,
+			"status": status, "duration_ms": time.Since(traceStarted).Milliseconds(),
+			"output_content": string(outputPayload),
+		})
+	}()
 	switch strings.ToLower(engineName) {
 	case "claude":
 		r := agent.NewRunner(bin)
@@ -246,6 +275,41 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		s.rememberWorkspaceTrust(dir)
 		return agent.GenericAskMetaTrusted(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, hookEnv...)
 	}
+}
+
+func llmTraceSource(engine string) string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "claude":
+		return "Claude Stream"
+	case "codex":
+		return "Codex JSONL"
+	case "cursor", "agent":
+		return "Cursor Stream"
+	default:
+		return "Atolla Derived"
+	}
+}
+
+func llmTraceInputContent(systemPrompt, question, history string, atts []ChatAttachment) string {
+	messages := make([]map[string]string, 0, 3)
+	if strings.TrimSpace(systemPrompt) != "" {
+		messages = append(messages, map[string]string{"role": "system", "content": systemPrompt})
+	}
+	if strings.TrimSpace(history) != "" {
+		messages = append(messages, map[string]string{
+			"role": "assistant", "content": history,
+			"note": "平台恢复历史；不代表 CLI 最终内部消息结构",
+		})
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": question})
+	payload := map[string]any{
+		"visibility":  "平台可见输入",
+		"messages":    messages,
+		"attachments": atts,
+		"unavailable": []string{"CLI 内部系统提示", "CLI 工具定义", "压缩后的隐藏上下文", "厂商最终请求体"},
+	}
+	raw, _ := json.MarshalIndent(payload, "", "  ")
+	return string(raw)
 }
 
 // workspaceTrusted 该目录是否已经过用户确认。

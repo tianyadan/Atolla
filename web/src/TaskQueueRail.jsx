@@ -45,9 +45,19 @@ export default function TaskQueueRail({
   active,
   refreshKey = 0,
   onContinue,
+  open: controlledOpen,
+  onOpenChange,
+  onBadgeChange,
+  showToggle = true,
 }) {
   const { t } = useLocale()
-  const [open, setOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  function setOpen(next) {
+    const value = typeof next === 'function' ? next(open) : next
+    if (controlledOpen === undefined) setInternalOpen(value)
+    onOpenChange?.(value)
+  }
   const [view, setView] = useState({ items: [], hold: false, active: 0 })
   const [hoverId, setHoverId] = useState(null)
   /** fixed 气泡，避免被抽屉 overflow 裁切 */
@@ -232,6 +242,11 @@ export default function TaskQueueRail({
   const badge = view.active || (view.hold ? 1 : 0)
   const canClearDone = doneItems.length > 0
 
+  // 队列入口已迁移到输入框工具栏，沿用原徽标语义并把数量同步给父组件。
+  useEffect(() => {
+    onBadgeChange?.(badge)
+  }, [badge, onBadgeChange])
+
   async function cancelTask(taskId) {
     if (!agentId || busy) return
     setBusy(true)
@@ -302,17 +317,19 @@ export default function TaskQueueRail({
 
   return (
     <div className={`tq-rail${open ? ' is-open' : ''}${badge ? ' has-badge' : ''}`}>
-      <button
-        type="button"
-        className="tq-rail-toggle"
-        title={t('tq.toggle')}
-        aria-label={t('tq.toggle')}
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="tq-rail-chevron" aria-hidden="true" />
-        {badge > 0 ? <em className="tq-rail-badge">{badge > 9 ? '9+' : badge}</em> : null}
-      </button>
+      {showToggle ? (
+        <button
+          type="button"
+          className="tq-rail-toggle"
+          title={t('tq.toggle')}
+          aria-label={t('tq.toggle')}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span className="tq-rail-chevron" aria-hidden="true" />
+          {badge > 0 ? <em className="tq-rail-badge">{badge > 9 ? '9+' : badge}</em> : null}
+        </button>
+      ) : null}
 
       {open ? (
         <aside

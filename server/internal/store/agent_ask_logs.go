@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -31,6 +32,34 @@ const (
 	AgentAskToolDenied = "denied"
 )
 
+const agentLLMTraceRetention = 7 * 24 * time.Hour
+
+// AgentLLMInvocation 是一次 CLI 可观测调用轨迹，不冒充 CLI 内部真实模型 API 请求。
+type AgentLLMInvocation struct {
+	ID               int64      `json:"id"`
+	AskLogID         int64      `json:"ask_log_id"`
+	AgentID          int64      `json:"agent_id"`
+	StepNo           int        `json:"step_no"`
+	Engine           string     `json:"engine"`
+	Source           string     `json:"source"`
+	Model            string     `json:"model"`
+	Status           string     `json:"status"`
+	DurationMs       int        `json:"duration_ms"`
+	InputTokens      int64      `json:"input_tokens"`
+	OutputTokens     int64      `json:"output_tokens"`
+	CacheTokens      int64      `json:"cache_tokens"`
+	ContextWindow    int64      `json:"context_window"`
+	ContextUsed      int64      `json:"context_used"`
+	InputContent     string     `json:"input_content"`
+	OutputContent    string     `json:"output_content"`
+	InputTruncated   bool       `json:"input_truncated"`
+	OutputTruncated  bool       `json:"output_truncated"`
+	AvailabilityNote string     `json:"availability_note"`
+	StartedAt        time.Time  `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
 // AgentAskLog 数字员工一轮 Ask。
 type AgentAskLog struct {
 	ID             int64      `json:"id"`
@@ -56,9 +85,17 @@ type AgentAskToolCall struct {
 	AskLogID   int64     `json:"ask_log_id"`
 	AgentID    int64     `json:"agent_id"`
 	ToolName   string    `json:"tool_name"`
+	Summary    string    `json:"summary,omitempty"`
 	Result     string    `json:"result"`
 	DurationMs int       `json:"duration_ms"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// AgentAskRuntimeDetail 单个数字员工最近一轮运行及其工具调用。
+type AgentAskRuntimeDetail struct {
+	AgentAskLog
+	Tools          []AgentAskToolCall   `json:"tools"`
+	LLMInvocations []AgentLLMInvocation `json:"llm_invocations"`
 }
 
 // AgentAskAuditFilter 聚合查询公共筛选。
@@ -156,11 +193,44 @@ func (s *Store) ensureAgentAskAuditSchema(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
+	if err := s.execDDL(ctx, `
+		CREATE TABLE IF NOT EXISTS agent_llm_invocations (
+		  id                BIGINT        NOT NULL AUTO_INCREMENT,
+		  ask_log_id        BIGINT        NOT NULL,
+		  agent_id          BIGINT        NOT NULL,
+		  step_no           INT           NOT NULL DEFAULT 1,
+		  engine            VARCHAR(32)   NOT NULL DEFAULT '',
+		  source            VARCHAR(64)   NOT NULL DEFAULT 'Atolla Derived',
+		  model             VARCHAR(128)  NOT NULL DEFAULT '',
+		  status            VARCHAR(20)   NOT NULL DEFAULT 'running',
+		  duration_ms       INT           NOT NULL DEFAULT 0,
+		  input_tokens      BIGINT        NOT NULL DEFAULT 0,
+		  output_tokens     BIGINT        NOT NULL DEFAULT 0,
+		  cache_tokens      BIGINT        NOT NULL DEFAULT 0,
+		  context_window    BIGINT        NOT NULL DEFAULT 0,
+		  context_used      BIGINT        NOT NULL DEFAULT 0,
+		  input_content     MEDIUMTEXT    NULL,
+		  output_content    MEDIUMTEXT    NULL,
+		  input_truncated   TINYINT       NOT NULL DEFAULT 0,
+		  output_truncated  TINYINT       NOT NULL DEFAULT 0,
+		  availability_note VARCHAR(512)  NOT NULL DEFAULT '',
+		  started_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  finished_at       DATETIME      NULL,
+		  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  PRIMARY KEY (id),
+		  KEY idx_ali_ask_step (ask_log_id, step_no),
+		  KEY idx_ali_agent_time (agent_id, created_at),
+		  KEY idx_ali_created (created_at)
+		) ENGINE=InnoDB`); err != nil {
+		return err
+	}
 	return nil
 }
 
 // BeginAgentAskLog 用户消息落库后创建 processing 行。
 func (s *Store) BeginAgentAskLog(ctx context.Context, agentID, convID, userMsgID int64, source string) (int64, error) {
+	// 轨迹含 Prompt/输出正文，只保留 7 天；清理失败不阻断主任务。
+	_, _ = s.PurgeAgentLLMInvocations(ctx, time.Now().Add(-agentLLMTraceRetention))
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = AgentAskSourceAdmin
@@ -174,6 +244,82 @@ func (s *Store) BeginAgentAskLog(ctx context.Context, agentID, convID, userMsgID
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// BeginAgentLLMInvocation 创建 CLI 可观测调用轨迹。
+func (s *Store) BeginAgentLLMInvocation(ctx context.Context, item AgentLLMInvocation) (int64, error) {
+	if item.AskLogID <= 0 || item.AgentID <= 0 {
+		return 0, nil
+	}
+	input, inputTruncated := limitLLMTraceContent(item.InputContent)
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO agent_llm_invocations
+		  (ask_log_id, agent_id, step_no, engine, source, model, status,
+		   input_content, input_truncated, availability_note, started_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,NOW())`,
+		item.AskLogID, item.AgentID, item.StepNo, limitString(item.Engine, 32),
+		limitString(item.Source, 64), limitString(item.Model, 128), "running",
+		input, inputTruncated, limitString(item.AvailabilityNote, 512))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// UpdateAgentLLMInvocationUsage 写入引擎实际提供的回合级 Usage。
+func (s *Store) UpdateAgentLLMInvocationUsage(ctx context.Context, id, input, output, cache, window, used int64) error {
+	if id <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE agent_llm_invocations SET input_tokens=?, output_tokens=?, cache_tokens=?,
+		  context_window=?, context_used=? WHERE id=?`, input, output, cache, window, used, id)
+	return err
+}
+
+// FinishAgentLLMInvocation 收口输出、耗时和状态。
+func (s *Store) FinishAgentLLMInvocation(ctx context.Context, id int64, status, output string, durationMs int) error {
+	if id <= 0 {
+		return nil
+	}
+	if status != "success" && status != "failed" {
+		status = "failed"
+	}
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	content, truncated := limitLLMTraceContent(output)
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE agent_llm_invocations SET status=?, duration_ms=?, output_content=?,
+		  output_truncated=?, finished_at=NOW() WHERE id=?`, status, durationMs, content, truncated, id)
+	return err
+}
+
+// PurgeAgentLLMInvocations 删除 7 天前的敏感调用正文。
+func (s *Store) PurgeAgentLLMInvocations(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM agent_llm_invocations WHERE created_at < ?`, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func limitString(value string, max int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) > max {
+		return string(runes[:max])
+	}
+	return value
+}
+
+func limitLLMTraceContent(value string) (string, bool) {
+	const maxRunes = 128 * 1024
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value, false
+	}
+	return string(runes[:maxRunes]), true
 }
 
 // FinishAgentAskLog 结束一轮审计。
@@ -226,6 +372,139 @@ func (s *Store) InsertAgentAskToolCall(ctx context.Context, askLogID, agentID in
 		INSERT INTO agent_ask_tool_calls (ask_log_id, agent_id, tool_name, result, duration_ms)
 		VALUES (?,?,?,?,?)`, askLogID, agentID, toolName, result, durationMs)
 	return err
+}
+
+// LatestAgentAskRuntimeDetail 返回最近一轮运行；包含 processing，供页面刷新后恢复当前运行态。
+func (s *Store) LatestAgentAskRuntimeDetail(ctx context.Context, agentID int64) (*AgentAskRuntimeDetail, error) {
+	if agentID <= 0 {
+		return nil, nil
+	}
+	_, _ = s.PurgeAgentLLMInvocations(ctx, time.Now().Add(-agentLLMTraceRetention))
+	var out AgentAskRuntimeDetail
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, agent_id, conversation_id, user_message_id, source, status,
+		       duration_ms, input_tokens, output_tokens, total_tokens,
+		       IFNULL(error_type,''), IFNULL(error_message,''),
+		       started_at, finished_at, created_at
+		FROM agent_ask_logs
+		WHERE agent_id=?
+		ORDER BY started_at DESC, id DESC
+		LIMIT 1`, agentID).Scan(
+		&out.ID, &out.AgentID, &out.ConversationID, &out.UserMessageID, &out.Source, &out.Status,
+		&out.DurationMs, &out.InputTokens, &out.OutputTokens, &out.TotalTokens,
+		&out.ErrorType, &out.ErrorMessage, &out.StartedAt, &out.FinishedAt, &out.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, ask_log_id, agent_id, tool_name, result, duration_ms, created_at
+		FROM agent_ask_tool_calls
+		WHERE ask_log_id=?
+		ORDER BY id`, out.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tool AgentAskToolCall
+		if err := rows.Scan(&tool.ID, &tool.AskLogID, &tool.AgentID, &tool.ToolName, &tool.Result, &tool.DurationMs, &tool.CreatedAt); err != nil {
+			return nil, err
+		}
+		out.Tools = append(out.Tools, tool)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if out.Tools == nil {
+		out.Tools = []AgentAskToolCall{}
+	}
+
+	// 命令审计包含真实调用内容；运行明细用它替换只有工具名的同类活动。
+	end := time.Now().Add(time.Second)
+	if out.FinishedAt != nil {
+		end = out.FinishedAt.Add(time.Second)
+	}
+	cmdRows, err := s.db.QueryContext(ctx, `
+		SELECT id, tool_name, command_text, decision, created_at
+		FROM command_audits
+		WHERE agent_id=? AND created_at>=? AND created_at<=?
+		ORDER BY id`, out.AgentID, out.StartedAt.Add(-time.Second), end)
+	if err != nil {
+		return nil, err
+	}
+	defer cmdRows.Close()
+	commandTools := map[string]bool{}
+	var commands []AgentAskToolCall
+	for cmdRows.Next() {
+		var tool AgentAskToolCall
+		var decision string
+		if err := cmdRows.Scan(&tool.ID, &tool.ToolName, &tool.Summary, &decision, &tool.CreatedAt); err != nil {
+			return nil, err
+		}
+		tool.ID = -tool.ID // 与 agent_ask_tool_calls 的 ID 隔离，避免前端 key 冲突。
+		tool.AgentID = out.AgentID
+		tool.Result = AgentAskToolOK
+		if decision != "allow" {
+			tool.Result = AgentAskToolDenied
+		}
+		commandTools[strings.ToLower(strings.TrimSpace(tool.ToolName))] = true
+		commands = append(commands, tool)
+	}
+	if err := cmdRows.Err(); err != nil {
+		return nil, err
+	}
+	filtered := out.Tools[:0]
+	for _, tool := range out.Tools {
+		name := strings.ToLower(strings.TrimSpace(tool.ToolName))
+		if name == "agent" || name == "codex" || name == "cursor" || name == "claude" || commandTools[name] {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	out.Tools = append(filtered, commands...)
+	sort.SliceStable(out.Tools, func(i, j int) bool {
+		return out.Tools[i].CreatedAt.Before(out.Tools[j].CreatedAt)
+	})
+
+	traceRows, err := s.db.QueryContext(ctx, `
+		SELECT id, ask_log_id, agent_id, step_no, engine, source, model, status,
+		       duration_ms, input_tokens, output_tokens, cache_tokens,
+		       context_window, context_used, IFNULL(input_content,''), IFNULL(output_content,''),
+		       input_truncated, output_truncated, availability_note,
+		       started_at, finished_at, created_at
+		FROM agent_llm_invocations
+		WHERE ask_log_id=? AND created_at>=?
+		ORDER BY step_no, id`, out.ID, time.Now().Add(-agentLLMTraceRetention))
+	if err != nil {
+		return nil, err
+	}
+	defer traceRows.Close()
+	for traceRows.Next() {
+		var item AgentLLMInvocation
+		if err := traceRows.Scan(
+			&item.ID, &item.AskLogID, &item.AgentID, &item.StepNo, &item.Engine,
+			&item.Source, &item.Model, &item.Status, &item.DurationMs,
+			&item.InputTokens, &item.OutputTokens, &item.CacheTokens,
+			&item.ContextWindow, &item.ContextUsed, &item.InputContent, &item.OutputContent,
+			&item.InputTruncated, &item.OutputTruncated, &item.AvailabilityNote,
+			&item.StartedAt, &item.FinishedAt, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out.LLMInvocations = append(out.LLMInvocations, item)
+	}
+	if err := traceRows.Err(); err != nil {
+		return nil, err
+	}
+	if out.LLMInvocations == nil {
+		out.LLMInvocations = []AgentLLMInvocation{}
+	}
+	return &out, nil
 }
 
 func (f AgentAskAuditFilter) normalize() AgentAskAuditFilter {

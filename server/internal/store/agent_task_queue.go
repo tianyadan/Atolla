@@ -10,8 +10,10 @@ import (
 
 // 任务队列状态（系统状态机，非模型控制）。
 const (
-	TaskQueued    = "queued"
-	TaskRunning   = "running"
+	TaskQueued  = "queued"
+	TaskRunning = "running"
+	// TaskExecuting 是内部派发态：running 表示已领取待发送，executing 表示已原子占用并开始执行。
+	TaskExecuting = "executing"
 	TaskPaused    = "paused"
 	TaskDone      = "done"
 	TaskFailed    = "failed"
@@ -26,19 +28,19 @@ const (
 
 // AgentTaskQueueItem 数字人持久化任务队列项。
 type AgentTaskQueueItem struct {
-	ID             int64      `json:"id"`
-	AgentID        int64      `json:"agent_id"`
-	ConversationID int64      `json:"conversation_id"`
-	Status         string     `json:"status"`
-	Question       string     `json:"question"`
-	AttachmentsJSON string    `json:"attachments_json,omitempty"`
-	Position       int        `json:"position"`
-	PauseRank      *int       `json:"pause_rank,omitempty"`
-	ErrorText      string     `json:"error_text,omitempty"`
-	SilentNotify   bool       `json:"silent_notify"`
-	CreatedAt      time.Time  `json:"created_at"`
-	StartedAt      *time.Time `json:"started_at,omitempty"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	ID              int64      `json:"id"`
+	AgentID         int64      `json:"agent_id"`
+	ConversationID  int64      `json:"conversation_id"`
+	Status          string     `json:"status"`
+	Question        string     `json:"question"`
+	AttachmentsJSON string     `json:"attachments_json,omitempty"`
+	Position        int        `json:"position"`
+	PauseRank       *int       `json:"pause_rank,omitempty"`
+	ErrorText       string     `json:"error_text,omitempty"`
+	SilentNotify    bool       `json:"silent_notify"`
+	CreatedAt       time.Time  `json:"created_at"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 	// ResumeHint 非持久化：刚从 paused claim 出来，Ask 需加系统前缀。
 	ResumeHint bool `json:"resume_hint,omitempty"`
 }
@@ -123,9 +125,9 @@ func (s *Store) ListAgentTaskQueue(ctx context.Context, agentID int64, doneLimit
 	// 已完成另查并接在后面（finished_at 新→旧）。
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+taskQueueSelectCols+` FROM agent_task_queue
-		WHERE agent_id = ? AND status IN (?, ?, ?)
+		WHERE agent_id = ? AND status IN (?, ?, ?, ?)
 		ORDER BY position DESC, id DESC`,
-		agentID, TaskQueued, TaskRunning, TaskPaused)
+		agentID, TaskQueued, TaskRunning, TaskExecuting, TaskPaused)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +168,8 @@ func (s *Store) CountAgentTaskActive(ctx context.Context, agentID int64) (int, e
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM agent_task_queue
-		WHERE agent_id = ? AND status IN (?, ?, ?)`,
-		agentID, TaskQueued, TaskRunning, TaskPaused).Scan(&n)
+		WHERE agent_id = ? AND status IN (?, ?, ?, ?)`,
+		agentID, TaskQueued, TaskRunning, TaskExecuting, TaskPaused).Scan(&n)
 	return n, err
 }
 
@@ -197,8 +199,8 @@ func (s *Store) GetAgentTaskQueueItem(ctx context.Context, id int64) (*AgentTask
 func (s *Store) GetRunningAgentTask(ctx context.Context, agentID int64) (*AgentTaskQueueItem, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT `+taskQueueSelectCols+` FROM agent_task_queue
-		WHERE agent_id = ? AND status = ? ORDER BY id DESC LIMIT 1`,
-		agentID, TaskRunning)
+		WHERE agent_id = ? AND status IN (?, ?) ORDER BY id DESC LIMIT 1`,
+		agentID, TaskRunning, TaskExecuting)
 	it, err := scanTaskQueueItem(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -255,8 +257,8 @@ func (s *Store) NextAgentTaskPosition(ctx context.Context, agentID int64) (int, 
 	var max sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT MAX(position) FROM agent_task_queue
-		WHERE agent_id = ? AND status IN (?, ?, ?)`,
-		agentID, TaskQueued, TaskRunning, TaskPaused).Scan(&max)
+		WHERE agent_id = ? AND status IN (?, ?, ?, ?)`,
+		agentID, TaskQueued, TaskRunning, TaskExecuting, TaskPaused).Scan(&max)
 	if err != nil {
 		return 1, err
 	}
@@ -285,8 +287,8 @@ func (s *Store) NextAgentTaskPauseRank(ctx context.Context, agentID int64) (int,
 func (s *Store) PauseAgentTaskRunning(ctx context.Context, id int64, pauseRank int) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agent_task_queue SET status = ?, pause_rank = ?, started_at = started_at
-		WHERE id = ? AND status = ?`,
-		TaskPaused, pauseRank, id, TaskRunning)
+		WHERE id = ? AND status IN (?, ?)`,
+		TaskPaused, pauseRank, id, TaskRunning, TaskExecuting)
 	if err != nil {
 		return false, err
 	}
@@ -306,13 +308,36 @@ func (s *Store) CompleteAgentTaskRunning(ctx context.Context, id int64, status, 
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agent_task_queue SET status = ?, error_text = ?, finished_at = ?, pause_rank = NULL
-		WHERE id = ? AND status = ?`,
-		status, et, now, id, TaskRunning)
+		WHERE id = ? AND status IN (?, ?)`,
+		status, et, now, id, TaskRunning, TaskExecuting)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// BeginAgentTaskExecution 原子地把“已领取待发送”切到“执行中”。
+// 同一个 task_id 只有第一次派发能够成功，防止网络重试再次执行已完成或正在执行的任务。
+func (s *Store) BeginAgentTaskExecution(ctx context.Context, taskID int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE agent_task_queue SET status = ?
+		WHERE id = ? AND status = ?`,
+		TaskExecuting, taskID, TaskRunning)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ResetAgentTaskExecution 仅在真正启动引擎前失败时释放派发权，允许用户安全重试。
+func (s *Store) ResetAgentTaskExecution(ctx context.Context, taskID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE agent_task_queue SET status = ?
+		WHERE id = ? AND status = ?`,
+		TaskRunning, taskID, TaskExecuting)
+	return err
 }
 
 // ClaimPausedAgentTask 取 pause_rank 最大的 paused → running。
@@ -430,7 +455,7 @@ func (s *Store) ClearAgentTaskDone(ctx context.Context, agentID int64) (int64, e
 // DemoteRunningAgentTasksToPaused 启动时假 running → paused，返回受影响 agent_id。
 func (s *Store) DemoteRunningAgentTasksToPaused(ctx context.Context) (n int64, agentIDs []int64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
-		SELECT DISTINCT agent_id FROM agent_task_queue WHERE status = ?`, TaskRunning)
+		SELECT DISTINCT agent_id FROM agent_task_queue WHERE status IN (?, ?)`, TaskRunning, TaskExecuting)
 	if qerr != nil {
 		return 0, nil, qerr
 	}
@@ -451,8 +476,8 @@ func (s *Store) DemoteRunningAgentTasksToPaused(ctx context.Context) (n int64, a
 	rank := 1
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agent_task_queue SET status = ?, pause_rank = COALESCE(pause_rank, ?)
-		WHERE status = ?`,
-		TaskPaused, rank, TaskRunning)
+		WHERE status IN (?, ?)`,
+		TaskPaused, rank, TaskRunning, TaskExecuting)
 	if err != nil {
 		return 0, nil, err
 	}

@@ -15,7 +15,7 @@ import (
 var vagueStepRe = regexp.MustCompile(`(?i)(正在规划|正在执行|正在输出|规划中|\b执行中\b|输出结果|处理中|开始任务|整理并回复|理解需求与目标|执行任务)`)
 
 // PlanConcreteSteps 产出 4～8 条具体可执行步骤,禁止空话。
-func (s *Service) PlanConcreteSteps(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef) []string {
+func (s *Service) PlanConcreteSteps(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []string {
 	q := strings.TrimSpace(question)
 	if q == "" {
 		q = "完成用户下达的任务"
@@ -23,7 +23,7 @@ func (s *Service) PlanConcreteSteps(ctx context.Context, a *store.ManagedAgent, 
 	var raw []string
 	if a != nil {
 		pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		raw = s.planStepsViaEngine(pctx, a, q, callees)
+		raw = s.planStepsViaEngine(pctx, a, q, callees, onEvent)
 		cancel()
 	}
 	out := filterConcreteSteps(raw)
@@ -157,7 +157,7 @@ func parseStepsJSON(raw string) []string {
 	return arr
 }
 
-func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef) []string {
+func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []string {
 	var b strings.Builder
 	b.WriteString("把下面任务拆成 4～8 个具体可执行步骤。\n")
 	b.WriteString("要求：每步写清动作与对象；禁止「正在规划/正在执行/正在输出结果/理解需求/整理回复」等空话。\n")
@@ -176,7 +176,7 @@ func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent,
 	b.WriteString(question)
 
 	sys := "你是任务拆分助手,只输出 JSON 数组。"
-	out, _, err := s.runManagedEngine(ctx, a, sys, b.String(), "", nil, nil, 0, 0, 0, true, nil, nil)
+	out, _, err := s.runManagedEngine(ctx, a, sys, b.String(), "", nil, nil, 0, 0, 0, true, onEvent, nil)
 	if err != nil {
 		return nil
 	}

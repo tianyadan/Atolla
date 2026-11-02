@@ -39,6 +39,17 @@ import { runningElapsedSec } from './taskTiming.js'
 import { useLocale } from './i18n/useLocale.js'
 import TaskQueueRail from './TaskQueueRail.jsx'
 import TaskQueueChoiceSheet from './TaskQueueChoiceSheet.jsx'
+import AgentRuntimeDetail from './AgentRuntimeDetail.jsx'
+import {
+  beginAgentRuntime,
+  finishAgentRuntime,
+  recordRuntimeLLMTrace,
+  recordRuntimeTool,
+  recordRuntimeUsage,
+  runtimeFromActiveAgent,
+  runtimeFromAudit,
+  selectRuntimeDetail,
+} from './agentRuntime.js'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -229,6 +240,9 @@ export default function ManagedAgentsPanel({
   const [tqChoice, setTqChoice] = useState(null)
   const [tqChoiceBusy, setTqChoiceBusy] = useState(false)
   const [tqRefreshKey, setTqRefreshKey] = useState(0)
+  const [taskQueueOpen, setTaskQueueOpen] = useState(false)
+  const [taskQueueBadge, setTaskQueueBadge] = useState(0)
+  const [runtimeDetailOpen, setRuntimeDetailOpen] = useState(false)
   const pendingQueueNextRef = useRef(null)
   const [question, setQuestion] = useState('')
   const [tasks, setTasks] = useState([])
@@ -313,6 +327,8 @@ export default function ManagedAgentsPanel({
   // 缺省 true：兼容尚未返回字段的旧响应
   const taskPlanOn = selected ? selected.task_plan_enabled !== false : true
   const invokeMap = sess.invokes || {}
+  const localRuntimeStreamActive = loading && !!sess.abort
+  const runtimeForDetail = selectRuntimeDetail(sess.runtimeDetail, sess.lastRuntimeDetail, localRuntimeStreamActive)
   const mentionCandidates = agents.filter((a) => a.id !== selectedId)
 
   useEffect(() => subscribeAgentSessions(() => setSessVer((v) => v + 1)), [])
@@ -320,6 +336,19 @@ export default function ManagedAgentsPanel({
     const t = setInterval(() => setTick((x) => x + 1), 1000)
     return () => clearInterval(t)
   }, [])
+
+  // 当前页面实时数据优先；刷新或外部任务结束后，用审计表恢复最近一轮。
+  useEffect(() => {
+    if (!selectedId || !active) return undefined
+    // 当前 fetch SSE 会直接更新 runtimeDetail；此时读取数据库 processing 快照会覆盖实时轨迹。
+    if (getAgentSession(selectedId).loading && getAgentSession(selectedId).abort) return undefined
+    void loadLatestRuntime(selectedId)
+    const serverRunning = ['running', 'busy', 'waiting', '插话中'].includes(selected?.status)
+    if (!serverRunning || loading) return undefined
+    const timer = window.setInterval(() => void loadLatestRuntime(selectedId), 3000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, active, selected?.status, loading])
 
   // 上下文圆环：空闲/运行中每 5s 刷新真实占用
   useEffect(() => {
@@ -664,6 +693,11 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => { loadAgents() /* eslint-disable-next-line */ }, [])
 
+  // 切换数字人时先清理旧队列徽标，等待新队列状态回传。
+  useEffect(() => {
+    setTaskQueueBadge(0)
+  }, [selectedId])
+
   // 从「数字人管理」卡片 / 灵动岛跳转：选中并打开设置 / 招聘；顺带补拉审批
   useEffect(() => {
     if (!focusAgentId) return
@@ -777,19 +811,22 @@ export default function ManagedAgentsPanel({
       const local = getAgentSession(id)
       const remoteBusy =
         a.status === 'running' ||
+        a.status === 'busy' ||
         a.status === 'waiting' ||
         a.status === 'compressing' ||
+        a.status === '插话中' ||
         a.status === 'initializing'
       // 本页正挂着 Ask SSE（有 abort）时不干涉
       if (local.abort) continue
-      if (remoteBusy && !local.loading) {
-        const startedMs = a.run_started_at
-          ? (a.run_started_at < 1e12 ? a.run_started_at * 1000 : a.run_started_at)
-          : Date.now()
+      if (remoteBusy && (!local.loading || !local.runtimeDetail)) {
+        const restoredRuntime = local.runtimeDetail || runtimeFromActiveAgent(a)
+        const startedMs = restoredRuntime?.startedAt || Date.now()
         patchAgentSession(id, {
           loading: true,
           runStartedAt: startedMs,
           liveActivity: local.liveActivity || { tool: '', summary: '后台运行中…', at: Date.now() },
+          // 页面刷新会清空模块内存；从服务端 running 状态补回 Runtime Detail 按钮。
+          runtimeDetail: restoredRuntime,
         })
       } else if (!remoteBusy && local.loading && !local.abort) {
         patchAgentSession(id, {
@@ -1178,6 +1215,8 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => {
     setDetailMoreOpen(false)
+    setTaskQueueOpen(false)
+    setRuntimeDetailOpen(false)
   }, [selectedId])
 
   /** 开关「命令全部审批通过」并落库 */
@@ -1266,9 +1305,16 @@ export default function ManagedAgentsPanel({
           resume_prefix: !!ev.resume_prefix,
         }
         setTqRefreshKey((k) => k + 1)
+      } else if (ev.type === 'llm_trace_start' || ev.type === 'llm_trace_end') {
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          runtimeDetail: recordRuntimeLLMTrace(local.runtimeDetail, ev),
+        })
       } else if (ev.type === 'activity') {
+        const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
           liveActivity: { tool: ev.tool || '', summary: ev.summary || '运行中…', at: Date.now() },
+          runtimeDetail: recordRuntimeTool(local.runtimeDetail, ev),
         })
       } else if (ev.type === 'chunk') {
         const piece = (ev.content || '').replace(/\\n/g, '\n')
@@ -1289,6 +1335,10 @@ export default function ManagedAgentsPanel({
           return n
         })
       } else if (ev.type === 'error') {
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'failed'),
+        })
         setAgentChatLog(agentId, (prev) => {
           const n = [...prev]
           if (n.length && n[n.length - 1].role === 'assistant') {
@@ -1313,6 +1363,10 @@ export default function ManagedAgentsPanel({
           return n
         })
       } else if (ev.type === 'done') {
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'completed'),
+        })
         if (ev.conversation_id) patchAgentSession(agentId, { convId: ev.conversation_id })
         if (ev.reply_ms) {
           setAgentChatLog(agentId, (prev) => {
@@ -1374,7 +1428,9 @@ export default function ManagedAgentsPanel({
           Number(ev.input_tokens || 0) + Number(ev.output_tokens || 0)
           + Number(ev.cache_read_tokens || 0) + Number(ev.cache_write_tokens || 0)
         )
-        const patch = {}
+        const patch = {
+          runtimeDetail: recordRuntimeUsage(getAgentSession(agentId).runtimeDetail, ev),
+        }
         if (turn > 0) patch.taskTokens = turn
 		// SSE usage 是本轮统计，只记录任务消耗；圆环统一由 /context 刷新。
         if (Object.keys(patch).length) patchAgentSession(agentId, patch)
@@ -1448,6 +1504,10 @@ export default function ManagedAgentsPanel({
           },
         })
       } else if (ev.type === 'command') {
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          runtimeDetail: recordRuntimeTool(local.runtimeDetail, ev),
+        })
         setAgentChatLog(agentId, (prev) => [
           ...prev,
           {
@@ -1495,6 +1555,21 @@ export default function ManagedAgentsPanel({
     } catch { /* ignore */ }
   }
 
+  async function loadLatestRuntime(agentId) {
+    if (!agentId) return null
+    try {
+      const res = await fetch(`${API}/admin/agent-audit/latest?agent_id=${agentId}`, { headers: authHeaders() })
+      if (res.status === 401) { onUnauthorized?.(); return null }
+      if (!res.ok) return null
+      const data = await res.json().catch(() => ({}))
+      const runtime = runtimeFromAudit(data.item)
+      patchAgentSession(agentId, { lastRuntimeDetail: runtime })
+      return runtime
+    } catch {
+      return null
+    }
+  }
+
   async function sendQuestion(agentId, q, attachments = [], opts = {}) {
     const atts = (attachments || []).filter((a) => a?.url || a?.id)
     const taskId = Number(opts.taskId) || 0
@@ -1502,10 +1577,13 @@ export default function ManagedAgentsPanel({
     const ac = new AbortController()
     // 先钉底再改会话，避免中间一次 effect 读到旧的 stickBottom=false
     stickBottomRef.current = true
+    const startedAt = Date.now()
     patchAgentSession(agentId, {
-      loading: true, error: '', runStartedAt: Date.now(), abort: ac, interrupting: false, invokes: {},
+      loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
       taskTokens: 0,
       liveActivity: { tool: '', summary: '启动中…', at: Date.now() },
+      runtimeDetail: beginAgentRuntime(startedAt),
+      lastRuntimeDetail: null,
     })
     // pending: 轮询 force 校准时由 coalesce 保留，避免乐观气泡被冲掉
     setAgentChatLog(agentId, (prev) => [
@@ -1558,6 +1636,9 @@ export default function ManagedAgentsPanel({
       }
     } catch (err) {
       if (err?.name === 'AbortError') {
+        patchAgentSession(agentId, {
+          runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'interrupted'),
+        })
         const isInterrupt = !!getAgentSession(agentId).pendingInterrupt
         if (!isInterrupt) {
           setAgentChatLog(agentId, (prev) => {
@@ -1573,20 +1654,26 @@ export default function ManagedAgentsPanel({
           })
         }
       } else {
-        patchAgentSession(agentId, { error: String(err) })
+        patchAgentSession(agentId, {
+          error: String(err),
+          runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'failed'),
+        })
       }
     } finally {
-      const pending = getAgentSession(agentId).pendingInterrupt
-      const pendingAtts = getAgentSession(agentId).pendingAttachments || []
+      const currentSession = getAgentSession(agentId)
+      const pending = currentSession.pendingInterrupt
+      const pendingAtts = currentSession.pendingAttachments || []
       const queueNext = pendingQueueNextRef.current
       pendingQueueNextRef.current = null
       patchAgentSession(agentId, {
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
         interrupting: false, liveActivity: null,
+        runtimeDetail: finishAgentRuntime(currentSession.runtimeDetail, currentSession.error ? 'failed' : 'completed'),
       })
       setTqRefreshKey((k) => k + 1)
       // fresh=true：空闲时拉 Claude /context 或 Codex session 真值，避免一直停在 turn usage 估算
       await refreshAgentContext(agentId, true)
+      await loadLatestRuntime(agentId)
       // 旧插话路径兼容；优先走服务端 task_queue_next
       if (queueNext?.task_id) {
         const nextAtts = Array.isArray(queueNext.attachments) ? queueNext.attachments : []
@@ -2291,6 +2378,10 @@ export default function ManagedAgentsPanel({
               active={active && !!selected}
               refreshKey={tqRefreshKey}
               onContinue={() => void onTqContinue()}
+              open={taskQueueOpen}
+              onOpenChange={setTaskQueueOpen}
+              onBadgeChange={setTaskQueueBadge}
+              showToggle={false}
             />
           ) : null}
           {!selected ? (
@@ -2570,14 +2661,71 @@ export default function ManagedAgentsPanel({
                 onDragOver={onComposerDragOver}
                 onDrop={onComposerDrop}
               >
+                <AgentRuntimeDetail
+                  open={runtimeDetailOpen && !!runtimeForDetail}
+                  runtime={runtimeForDetail}
+                  agent={selected}
+                  context={{
+                    used: sess.contextUsed,
+                    window: sess.contextWindow,
+                    estimated: sess.contextEstimated,
+                    source: sess.contextSource,
+                  }}
+                  parallelCount={Object.keys(invokeMap).length}
+                  onClose={() => setRuntimeDetailOpen(false)}
+                />
                 <div className="ma-composer-shell">
-                  <CapsuleToggle
-                    label={t('composer.taskPlan')}
-                    hint={t('composer.taskPlanHint')}
-                    checked={taskPlanOn}
-                    disabled={taskPlanSaving || loading}
-                    onChange={toggleTaskPlan}
-                  />
+                  <div className="ma-composer-tools" aria-label="任务工具">
+                    <button
+                      type="button"
+                      className={`ma-composer-tool${taskPlanOn ? ' is-active' : ''}`}
+                      data-tooltip="Task Plan"
+                      aria-label={`${t('composer.taskPlan')} · ${taskPlanOn ? '已开启' : '已关闭'}`}
+                      aria-pressed={taskPlanOn}
+                      disabled={taskPlanSaving || loading}
+                      onClick={() => void toggleTaskPlan(!taskPlanOn)}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="6" cy="5" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="7" cy="18" r="2" /><path d="M8 5h4a4 4 0 0 1 4 4v1M7 7v9M9 18h5a4 4 0 0 0 4-4v-2" />
+                      </svg>
+                      <span>Task Plan</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`ma-composer-tool${taskQueueOpen ? ' is-active' : ''}`}
+                      data-tooltip="Task Queue"
+                      aria-label="Task Queue · 任务队列"
+                      aria-pressed={taskQueueOpen}
+                      onClick={() => {
+                        setRuntimeDetailOpen(false)
+                        setTaskQueueOpen((value) => !value)
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+                        <path d="M9 6h10M9 12h10M9 18h10" /><circle cx="5" cy="6" r="1" /><circle cx="5" cy="12" r="1" /><circle cx="5" cy="18" r="1" />
+                      </svg>
+                      <span>Task Queue</span>
+                      {taskQueueBadge > 0 ? (
+                        <em className="ma-composer-tool-badge">{taskQueueBadge > 9 ? '9+' : taskQueueBadge}</em>
+                      ) : null}
+                    </button>
+                    {runtimeForDetail ? <button
+                      type="button"
+                      className={`ma-composer-tool${runtimeDetailOpen ? ' is-active' : ''}`}
+                      data-tooltip="Runtime Detail"
+                      aria-label="Agent Runtime Detail · 运行明细"
+                      aria-pressed={runtimeDetailOpen}
+                      onClick={() => {
+                        setTaskQueueOpen(false)
+                        setRuntimeDetailOpen((value) => !value)
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M3 12h3l2-6 4 12 3-9 2 3h4" />
+                      </svg>
+                      <span>Runtime Detail</span>
+                    </button> : null}
+                  </div>
                   <div className="ma-composer-wrap">
                     <GroupChatOfferSheet
                       open={!!groupOffer}

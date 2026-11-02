@@ -80,6 +80,7 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.GET("/admin/agent-audit/tokens/weekly", h.AdminAgentAuditTokensWeekly)
 			adm.GET("/admin/agent-audit/tools", h.AdminAgentAuditTools)
 			adm.GET("/admin/agent-audit/errors", h.AdminAgentAuditErrors)
+			adm.GET("/admin/agent-audit/latest", h.AdminAgentAuditLatest)
 			adm.GET("/commands", h.Commands)
 			adm.GET("/stats", h.Stats)
 			adm.GET("/stats/days", h.StatsDays)

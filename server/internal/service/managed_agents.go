@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"atolla/server/internal/agent"
@@ -188,7 +189,17 @@ func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, quest
 	if OccupancyBlocksUserChat(occ) {
 		return nil, &OccupancyBusyError{Occ: occ}
 	}
-	_ = s.Store.ClearOccupancy(ctx, agentID)
+	// DIRECT 占用只有在本进程已无运行槽时才是陈旧数据；不能清掉仍在执行的占用，
+	// 否则重复请求会取消上一轮并再次执行相同任务。
+	s.runMu.Lock()
+	_, liveRun := s.runs[agentID]
+	s.runMu.Unlock()
+	if liveRun {
+		return nil, &OccupancyBusyError{Occ: occ}
+	}
+	if occ != nil {
+		_ = s.Store.ClearOccupancy(ctx, agentID)
+	}
 
 	var taskID int64
 	silentNotify := false
@@ -196,16 +207,16 @@ func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, quest
 	if opts.TaskID > 0 {
 		// 仅队列节点（打断紧急 / 出队 / 继续）带 task_id；普通直发不入队
 		taskID = opts.TaskID
-		if it, _ := s.Store.GetAgentTaskQueueItem(ctx, opts.TaskID); it != nil {
-			silentNotify = it.SilentNotify
-			if askQ == "" {
-				askQ = it.Question
-			}
-			if opts.ResumePrefix || it.ResumeHint {
-				askQ = BuildTaskQueueAskQuestion(it, true)
-			}
-		} else if opts.ResumePrefix && askQ != "" {
-			askQ = taskQueueResumePrefix + askQ
+		it, startErr := s.beginTaskQueueExecution(ctx, agentID, taskID)
+		if startErr != nil {
+			return nil, startErr
+		}
+		silentNotify = it.SilentNotify
+		if askQ == "" {
+			askQ = it.Question
+		}
+		if opts.ResumePrefix || it.ResumeHint {
+			askQ = BuildTaskQueueAskQuestion(it, true)
 		}
 	} else {
 		// 空闲再发：解除 Stop 的 hold，本轮结束后仍可自动出队
@@ -216,6 +227,9 @@ func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, quest
 		AgentID: agentID, SourceType: SourceDirect, SourceID: fmt.Sprintf("%d", agentID),
 		SourceName: a.Name, TaskName: truncate(askQ, 120),
 	}); err != nil {
+		if taskID > 0 {
+			_ = s.Store.ResetAgentTaskExecution(context.WithoutCancel(ctx), taskID)
+		}
 		return nil, err
 	}
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
@@ -312,6 +326,9 @@ type agentAskAudit struct {
 	output     int64
 	cacheRead  int64
 	cacheWrite int64
+	traceMu    sync.Mutex
+	traceStep  int
+	traceIDs   map[string]int64
 }
 
 func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question string, holdStatus bool) (*store.Message, error) {
@@ -359,6 +376,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 					}
 				}
 				if opts.agentAudit != nil && opts.agentAudit.logID > 0 {
+					s.recordAgentLLMTraceEvent(opts.agentAudit, a.ID, ev)
 					s.recordAgentAskToolEvent(opts.agentAudit, a.ID, ev)
 				}
 			}
@@ -487,7 +505,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	if shouldEmitTaskPlanAsk(a, opts.skipTaskPlan) {
 		// 真实阶段：planning → 拆分 → 激活第 0 步；禁止再跳到中间步
 		tp = s.beginTaskProgress(runCtx, agentID, truncateRunTitle(taskBody), onEvent)
-		steps = s.PlanConcreteSteps(runCtx, a, taskBody, calleeRefs)
+		steps = s.PlanConcreteSteps(runCtx, a, taskBody, calleeRefs, onEvent)
 		tp.SetPlan(runCtx, steps)
 		steps = tp.Snapshot("").StepTitles
 	}
@@ -770,6 +788,88 @@ func (s *Service) recordAgentAskToolEvent(audit *agentAskAudit, agentID int64, e
 	if err := s.Store.InsertAgentAskToolCall(context.Background(), audit.logID, agentID, tool, result, 0); err != nil {
 		log.Printf("agent ask: tool audit failed: %v", err)
 	}
+}
+
+// recordAgentLLMTraceEvent 把 CLI 可见边界写入轨迹表；不推测 CLI 内部真实 API 调用。
+func (s *Service) recordAgentLLMTraceEvent(audit *agentAskAudit, fallbackAgentID int64, ev map[string]any) {
+	if audit == nil || audit.logID <= 0 || ev == nil {
+		return
+	}
+	typ, _ := ev["type"].(string)
+	runID, _ := ev["trace_run_id"].(string)
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return
+	}
+	agentID := toInt64Any(ev["agent_id"])
+	if agentID <= 0 {
+		agentID = fallbackAgentID
+	}
+
+	switch typ {
+	case "llm_trace_start":
+		audit.traceMu.Lock()
+		audit.traceStep++
+		step := audit.traceStep
+		audit.traceMu.Unlock()
+		item := store.AgentLLMInvocation{
+			AskLogID:         audit.logID,
+			AgentID:          agentID,
+			StepNo:           step,
+			Engine:           stringAny(ev["engine"]),
+			Source:           stringAny(ev["source"]),
+			Model:            stringAny(ev["model"]),
+			InputContent:     stringAny(ev["input_content"]),
+			AvailabilityNote: stringAny(ev["availability_note"]),
+		}
+		id, err := s.Store.BeginAgentLLMInvocation(context.Background(), item)
+		if err != nil {
+			log.Printf("agent ask: begin llm trace failed: %v", err)
+			return
+		}
+		audit.traceMu.Lock()
+		if audit.traceIDs == nil {
+			audit.traceIDs = make(map[string]int64)
+		}
+		audit.traceIDs[runID] = id
+		audit.traceMu.Unlock()
+		ev["trace_id"] = id
+		ev["step_no"] = step
+	case "usage":
+		id := audit.traceID(runID)
+		if id <= 0 {
+			return
+		}
+		cache := toInt64Any(ev["cache_read_tokens"]) + toInt64Any(ev["cache_write_tokens"])
+		if err := s.Store.UpdateAgentLLMInvocationUsage(context.Background(), id,
+			toInt64Any(ev["input_tokens"]), toInt64Any(ev["output_tokens"]), cache,
+			toInt64Any(ev["window_tokens"]), toInt64Any(ev["used_tokens"])); err != nil {
+			log.Printf("agent ask: update llm trace usage failed: %v", err)
+		}
+		ev["trace_id"] = id
+	case "llm_trace_end":
+		id := audit.traceID(runID)
+		if id <= 0 {
+			return
+		}
+		status := stringAny(ev["status"])
+		if err := s.Store.FinishAgentLLMInvocation(context.Background(), id, status,
+			stringAny(ev["output_content"]), int(toInt64Any(ev["duration_ms"]))); err != nil {
+			log.Printf("agent ask: finish llm trace failed: %v", err)
+		}
+		ev["trace_id"] = id
+	}
+}
+
+func (a *agentAskAudit) traceID(runID string) int64 {
+	a.traceMu.Lock()
+	defer a.traceMu.Unlock()
+	return a.traceIDs[runID]
+}
+
+func stringAny(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 // mapAgentAskStatus 把取消/超时/失败映射到审计终态。

@@ -16,10 +16,11 @@ import (
 const taskQueueResumePrefix = "（系统）上一轮执行被紧急任务打断，请根据最新对话完整重新完成本任务，避免重复已完成的副作用。\n\n"
 
 var (
-	ErrTaskQueueFull      = errors.New("任务队列已满（最多 20 条活跃）")
-	ErrTaskQueuePauseFull = errors.New("打断次数过多，请先处理紧急任务或终止")
-	ErrTaskQueueLocked    = errors.New("数字人正被项目协作占用，请稍后再打断")
-	errTaskQueueEmptyQ    = errors.New("question required")
+	ErrTaskQueueFull       = errors.New("任务队列已满（最多 20 条活跃）")
+	ErrTaskQueuePauseFull  = errors.New("打断次数过多，请先处理紧急任务或终止")
+	ErrTaskQueueLocked     = errors.New("数字人正被项目协作占用，请稍后再打断")
+	ErrTaskQueueDispatched = errors.New("任务已开始或已完成，请勿重复发送")
+	errTaskQueueEmptyQ     = errors.New("question required")
 )
 
 // taskQueueLocks 按 agent 串行调度。
@@ -60,9 +61,9 @@ type TaskQueueAttachment struct {
 
 // TaskQueueView 列表 API 视图。
 type TaskQueueView struct {
-	Items []store.AgentTaskQueueItem `json:"items"`
-	Hold  bool                       `json:"hold"`
-	Active int                       `json:"active"`
+	Items  []store.AgentTaskQueueItem `json:"items"`
+	Hold   bool                       `json:"hold"`
+	Active int                        `json:"active"`
 }
 
 // ListTaskQueue 读取队列轨数据。
@@ -76,7 +77,33 @@ func (s *Service) ListTaskQueue(ctx context.Context, agentID int64) (TaskQueueVi
 	if items == nil {
 		items = []store.AgentTaskQueueItem{}
 	}
+	// executing 仅用于后端防重；前端继续沿用 running，避免改变既有状态与样式协议。
+	for i := range items {
+		if items[i].Status == store.TaskExecuting {
+			items[i].Status = store.TaskRunning
+		}
+	}
 	return TaskQueueView{Items: items, Hold: hold, Active: active}, nil
+}
+
+// beginTaskQueueExecution 校验任务归属并原子取得唯一派发权。
+func (s *Service) beginTaskQueueExecution(ctx context.Context, agentID, taskID int64) (*store.AgentTaskQueueItem, error) {
+	it, err := s.Store.GetAgentTaskQueueItem(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if it == nil || it.AgentID != agentID {
+		return nil, fmt.Errorf("task not found")
+	}
+	started, err := s.Store.BeginAgentTaskExecution(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if !started {
+		return nil, ErrTaskQueueDispatched
+	}
+	it.Status = store.TaskExecuting
+	return it, nil
 }
 
 // EnqueueOutcome 入队结果；Kickoff 表示空闲时已 claim、需立刻 Ask 的项（可能是新入队或更早的排队项）。
@@ -296,6 +323,10 @@ func (s *Service) ContinueAgentTaskQueue(ctx context.Context, agentID int64) (*s
 		return nil, ErrTaskQueueLocked
 	}
 	if cur, _ := s.Store.GetRunningAgentTask(ctx, agentID); cur != nil {
+		// executing 已由某个请求接管；继续按钮不得再次派发。running 则允许恢复尚未送达的领取项。
+		if cur.Status == store.TaskExecuting {
+			return nil, nil
+		}
 		return cur, nil
 	}
 	_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, false)

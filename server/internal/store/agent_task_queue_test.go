@@ -63,3 +63,29 @@ func TestAgentTaskQueueHold(t *testing.T) {
 		t.Fatalf("held=%v err=%v", held, err)
 	}
 }
+
+func TestAgentTaskQueueExecutionCanOnlyBeginOnce(t *testing.T) {
+	st, err := NewWithDriver(DriverSQLite, filepath.Join(t.TempDir(), "tq-execution.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id, err := st.InsertAgentTaskQueue(ctx, AgentTaskQueueItem{
+		AgentID: 7, Status: TaskRunning, Question: "只执行一次", Position: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.BeginAgentTaskExecution(ctx, id); err != nil || !ok {
+		t.Fatalf("first begin ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.BeginAgentTaskExecution(ctx, id); err != nil || ok {
+		t.Fatalf("duplicate begin ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.CompleteAgentTaskRunning(ctx, id, TaskDone, ""); err != nil || !ok {
+		t.Fatalf("complete executing ok=%v err=%v", ok, err)
+	}
+	if ok, err := st.BeginAgentTaskExecution(ctx, id); err != nil || ok {
+		t.Fatalf("completed task began again ok=%v err=%v", ok, err)
+	}
+}

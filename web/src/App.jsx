@@ -1130,13 +1130,12 @@ export default function App() {
                 active={adminMenu === 'legacy-memories'}
               />
             )}
-            {adminMenu === 'remote-relay' && (
-              <RemoteRelayPanel
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'remote-relay'}
-              />
-            )}
+            {/* 部署任务切换菜单后仍继续接收 SSE；页面仅隐藏，不卸载。 */}
+            <RemoteRelayPanel
+              authHeaders={authHeaders}
+              onUnauthorized={() => clearAuth('登录已过期')}
+              active={adminMenu === 'remote-relay'}
+            />
             {/* 安装 JEV/灵动岛可能持续数分钟；仅隐藏而不卸载设置页，避免切换菜单后丢失安装进度与错误。 */}
             <section
               className="settings-page"

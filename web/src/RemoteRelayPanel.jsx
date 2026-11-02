@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { deployLogExpiresAt, shouldShowDeployProgress } from './remoteRelayPanelModel.js'
 
 const API = '/api'
 const PW_SESSION_KEY = 'atolla_relay_instance_password_once'
@@ -159,6 +160,32 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
   const [sshPasswordDraft, setSshPasswordDraft] = useState('')
   const logEndRef = useRef(null)
   const jobAbortRef = useRef(null)
+  const jobLogCleanupRef = useRef(null)
+
+  function cancelDeployLogCleanup() {
+    if (jobLogCleanupRef.current != null) {
+      window.clearTimeout(jobLogCleanupRef.current)
+      jobLogCleanupRef.current = null
+    }
+  }
+
+  /** 终态日志只保留十分钟；运行中的任务永不因超时被清理。 */
+  function scheduleDeployLogCleanup(nextStatus) {
+    cancelDeployLogCleanup()
+    const expiresAt = deployLogExpiresAt(nextStatus)
+    if (expiresAt == null) return
+    jobLogCleanupRef.current = window.setTimeout(() => {
+      setJobLogs([])
+      setJobStatus('')
+      setJobKind('')
+      jobLogCleanupRef.current = null
+    }, Math.max(0, expiresAt - Date.now()))
+  }
+
+  useEffect(() => () => {
+    jobAbortRef.current?.abort?.()
+    cancelDeployLogCleanup()
+  }, [])
 
   /** 记住本次会话内生成的明文密码（刷新页面仍可显示，关闭标签页清除） */
   function rememberPassword(plain) {
@@ -588,6 +615,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
     }
     setErr('')
     setMsg('')
+    cancelDeployLogCleanup()
     setJobKind('deploy')
     setJobLogs([])
     setJobStatus('running')
@@ -615,11 +643,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       if (!res.ok) throw new Error(d.error || `启动部署失败(${res.status})`)
       const result = await streamDeployJob(d.job_id)
       setJobStatus(result)
+      scheduleDeployLogCleanup(result)
       setMsg(result === 'ok' ? '部署完成' : '部署失败，见下方日志')
       if (result === 'ok') setDeployHostHistory(rememberDeployHost(host))
     } catch (e) {
       if (e?.name === 'AbortError') return
       setJobStatus('error')
+      scheduleDeployLogCleanup('error')
       setErr(String(e.message || e))
       setJobLogs((prev) => [...prev, `ERROR: ${e.message || e}`])
     } finally {
@@ -637,6 +667,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
     }
     setErr('')
     setMsg('')
+    cancelDeployLogCleanup()
     setJobKind('upgrade')
     setJobLogs([])
     setJobStatus('running')
@@ -662,11 +693,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       if (!res.ok) throw new Error(d.error || `启动升级失败(${res.status})`)
       const result = await streamDeployJob(d.job_id)
       setJobStatus(result)
+      scheduleDeployLogCleanup(result)
       setMsg(result === 'ok' ? '升级完成' : '升级失败，见下方日志')
       if (result === 'ok') setDeployHostHistory(rememberDeployHost(host))
     } catch (e) {
       if (e?.name === 'AbortError') return
       setJobStatus('error')
+      scheduleDeployLogCleanup('error')
       setErr(String(e.message || e))
       setJobLogs((prev) => [...prev, `ERROR: ${e.message || e}`])
     } finally {
@@ -694,9 +727,14 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
   const registered = !!status?.registered
   const lastError = String(status?.last_error || '').trim()
   const hasError = Boolean(lastError) && !running
+  const showDeployProgress = shouldShowDeployProgress({
+    status: jobStatus,
+    logs: jobLogs,
+    running: jobRunning,
+  })
 
   return (
-    <section className="list rr-panel">
+    <section className="list rr-panel" style={{ display: active ? undefined : 'none' }}>
       <div className="lm-shelf-head">
         <div>
           <h2>远程中继</h2>
@@ -709,7 +747,14 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       {msg && <p className="empty-hint">{msg}</p>}
       {loading && !baseUrl && !instanceId && <p className="empty">加载中…</p>}
 
-      <form className="tm-form-row" onSubmit={saveConfig} style={{ maxWidth: 640 }}>
+      <article className="version-card rr-config-card" style={{ order: 30 }}>
+        <div className="version-head">
+          <span className="version-tag">连接远程配置</span>
+        </div>
+        <p className="empty-hint">
+          配置本机连接远程中继所需的地址、实例标识和六位实例密码。
+        </p>
+        <form className="tm-form-row" onSubmit={saveConfig} style={{ maxWidth: 640 }}>
         <label>
           <span>启用出站桥接</span>
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
@@ -771,81 +816,6 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
           </div>
         </div>
 
-        <div className="rr-password-block" style={{ marginTop: 16 }}>
-          <div className="rr-password-head">
-            <span>验证码登录 · 发送邮箱 SMTP</span>
-            <span className={`rr-reg-tag ${smtpOk ? 'set' : 'unset'}`}>
-              {smtpOk ? '已校验' : '未校验'}
-            </span>
-          </div>
-          <p className="empty-hint" style={{ margin: '6px 0 10px' }}>
-            配置 163 等 SMTP 后点「校验 SMTP」。手机需在设置填写接收邮箱，解锁弹窗才可「验证码登录」。
-          </p>
-          <label>
-            <span>SMTP 主机</span>
-            <input
-              type="text"
-              placeholder="smtp.163.com"
-              value={smtpHost}
-              onChange={(e) => setSmtpHost(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>端口</span>
-            <input
-              type="number"
-              min={1}
-              max={65535}
-              value={smtpPort}
-              onChange={(e) => setSmtpPort(Number(e.target.value) || 465)}
-            />
-          </label>
-          <label>
-            <span>账号</span>
-            <input
-              type="text"
-              autoComplete="off"
-              placeholder="you@163.com"
-              value={smtpUser}
-              onChange={(e) => setSmtpUser(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>授权码 / 密码</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              placeholder={hasSmtpPass ? '已保存，留空不修改' : '邮箱授权码'}
-              value={smtpPassword}
-              onChange={(e) => setSmtpPassword(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>发件人 From</span>
-            <input
-              type="email"
-              placeholder="you@163.com"
-              value={smtpFrom}
-              onChange={(e) => setSmtpFrom(e.target.value)}
-            />
-          </label>
-          <div className="rr-password-actions">
-            <button
-              type="button"
-              className="ghost"
-              disabled={busy || smtpBusy || !smtpHost.trim() || !smtpUser.trim()}
-              onClick={() => void testSmtp()}
-            >
-              {smtpBusy ? '校验中…' : '校验 SMTP'}
-            </button>
-          </div>
-          {smtpErr ? (
-            <pre className="error" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>
-              {smtpErr}
-            </pre>
-          ) : null}
-        </div>
-
         <p className="empty-hint">
           推荐流程：填写 Base URL →「保存连接配置」→「生成并注册密码」→ 勾选启用并再次保存（若尚未启用）。
         </p>
@@ -857,9 +827,55 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
             仅写入本机并重载桥接，不会注册/轮换密码
           </span>
         </div>
-      </form>
+        </form>
+      </article>
 
-      <article className="version-card rr-status-card">
+      <article className="version-card rr-config-card" style={{ order: 40 }}>
+        <div className="version-head">
+          <span className="version-tag">验证码登录配置</span>
+          <span className={`rr-reg-tag ${smtpOk ? 'set' : 'unset'}`}>
+            {smtpOk ? '已校验' : '未校验'}
+          </span>
+        </div>
+        <p className="empty-hint">
+          单独配置验证码登录使用的发信邮箱。手机端填写接收邮箱后，解锁页才能发送验证码。
+        </p>
+        <div className="tm-form-row" style={{ maxWidth: 640 }}>
+          <label>
+            <span>SMTP 主机</span>
+            <input type="text" placeholder="smtp.163.com" value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} />
+          </label>
+          <label>
+            <span>端口</span>
+            <input type="number" min={1} max={65535} value={smtpPort} onChange={(e) => setSmtpPort(Number(e.target.value) || 465)} />
+          </label>
+          <label>
+            <span>账号</span>
+            <input type="text" autoComplete="off" placeholder="you@163.com" value={smtpUser} onChange={(e) => setSmtpUser(e.target.value)} />
+          </label>
+          <label>
+            <span>授权码 / 密码</span>
+            <input type="password" autoComplete="new-password" placeholder={hasSmtpPass ? '已保存，留空不修改' : '邮箱授权码'} value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} />
+          </label>
+          <label>
+            <span>发件人 From</span>
+            <input type="email" placeholder="you@163.com" value={smtpFrom} onChange={(e) => setSmtpFrom(e.target.value)} />
+          </label>
+        </div>
+        <div className="rr-password-actions">
+          <button
+            type="button"
+            className="ghost"
+            disabled={busy || smtpBusy || !smtpHost.trim() || !smtpUser.trim()}
+            onClick={() => void testSmtp()}
+          >
+            {smtpBusy ? '校验中…' : '保存并校验 SMTP'}
+          </button>
+        </div>
+        {smtpErr ? <pre className="error" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{smtpErr}</pre> : null}
+      </article>
+
+      <article className="version-card rr-status-card" style={{ order: 50 }}>
         <div className="version-head">
           <span className="version-tag">运行状态</span>
         </div>
@@ -887,7 +903,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </ul>
       </article>
 
-      <article className="version-card rr-mobile-card">
+      <article className="version-card rr-mobile-card" style={{ order: 60 }}>
         <div className="version-head">
           <span className="version-tag">移动端访问</span>
           <button type="button" className="ghost" disabled={busy || !!kickId} onClick={() => void loadMobileSessions()}>
@@ -952,7 +968,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </div>
       </article>
 
-      <article className="version-card">
+      <article className="version-card" style={{ order: 10 }}>
         <div className="version-head">
           <span className="version-tag">服务器部署</span>
         </div>
@@ -1069,7 +1085,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </p>
       </article>
 
-      <article className="version-card">
+      {showDeployProgress ? <article className="version-card" style={{ order: 20 }}>
         <div className="version-head">
           <span className="version-tag">部署进度</span>
           {jobStatus === 'running' && <span className="empty-hint">进行中（{jobKind || '…'}）</span>}
@@ -1092,15 +1108,13 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
             borderRadius: 8,
           }}
         >
-          {jobLogs.length === 0
-            ? '点击「一键部署」或「一键升级」后，日志会显示在这里。'
-            : jobLogs.join('\n')}
+          {jobLogs.join('\n')}
           <span ref={logEndRef} />
         </pre>
-      </article>
+      </article> : null}
 
       {sshAuthOpen && (
-        <div className="modal-mask" onClick={closeSshAuth}>
+        <div className="modal-mask" style={{ order: 70 }} onClick={closeSshAuth}>
           <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={confirmSshAuth}>
             <h2>{sshAuthKind === 'upgrade' ? '确认升级' : '确认部署'}</h2>
             <p className="empty-hint" style={{ margin: '0 0 12px' }}>
