@@ -3059,11 +3059,14 @@ export default function ManagedAgentsPanel({
           setSettingsOpen(false)
           loadAgents(selected.id)
         }}>
-          <div className="modal-card ma-settings ma-settings-wide ma-settings-modern" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal-card ma-settings ma-settings-wide ma-settings-modern"
+            onClick={(e) => e.stopPropagation()}
+          >
             <header className="ma-settings-head">
               <div>
                 <h2>员工设置</h2>
-                <p className="ma-settings-sub">{selected.name}</p>
+                <p className="ma-settings-sub">{selected.name} · 管理数字员工的基础信息、技能与记忆</p>
               </div>
               <button
                 type="button"

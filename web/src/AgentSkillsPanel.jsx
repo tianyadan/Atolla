@@ -20,6 +20,55 @@ const BUILTIN_ICON_URL = {
   database: '/skill-icons/database.svg',
   server: '/skill-icons/server.svg',
   browser: '/skill-icons/browser.svg',
+  search: '/skill-icons/search.svg',
+}
+
+/** 商店卡片标签（对齐设计稿） */
+const SKILL_TAGS = {
+  'atolla.database': ['数据', 'SQL', 'MySQL', 'PostgreSQL'],
+  'atolla.browser': ['浏览器', '自动化', '网页操作'],
+  'atolla.search': ['搜索', 'RAG', '文档'],
+  'atolla.server_control': ['SSH', '运维', '部署', '文件'],
+}
+
+function skillTags(sk) {
+  if (SKILL_TAGS[sk?.id]) return SKILL_TAGS[sk.id]
+  const tags = []
+  if (CAT_ZH[sk?.category]) tags.push(CAT_ZH[sk.category])
+  for (const c of sk?.capabilities || []) {
+    const label = typeof c === 'string' ? c : (c?.label || c?.id)
+    if (label && !tags.includes(label) && tags.length < 4) tags.push(label)
+  }
+  return tags.slice(0, 4)
+}
+
+function IconSearch({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M16.5 16.5L21 21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconStack({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 3l9 4.5-9 4.5L3 7.5 12 3z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M3 12l9 4.5 9-4.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M3 16.5L12 21l9-4.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function IconDownload({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 4v11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7.5 11.5L12 16l4.5-4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 19h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 /** 技能图标：内置 SVG / 自定义 URL / 字形兜底 */
@@ -267,8 +316,7 @@ export default function AgentSkillsPanel({
     <div className="sk-panel">
       <div className="sk-tabs" role="tablist">
         <button type="button" className={activeTab === 'installed' ? 'active' : ''} disabled={disabled} onClick={() => onTabChange?.('installed')}>
-          已安装技能
-          {installedList.length > 0 && <span className="sk-tab-count">{installedList.length}</span>}
+          已安装技能 {installedList.length}
         </button>
         <button type="button" className={activeTab === 'store' ? 'active' : ''} disabled={disabled} onClick={() => onTabChange?.('store')}>
           技能商店
@@ -284,32 +332,38 @@ export default function AgentSkillsPanel({
             <p className="muted sk-empty">尚未安装技能。去「技能商店」浏览并安装到此数字人。</p>
           ) : (
             installedList.map((sk) => (
-              <article key={sk.id} className={`sk-card ${sk.enabled ? '' : 'sk-card-off'}`}>
-                <button type="button" className="sk-card-main" onClick={() => openDetail(sk)}>
-                  <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} />
-                  <div className="sk-card-body">
-                    <div className="sk-card-title-row">
-                      <strong>{sk.name}</strong>
+              <article key={sk.id} className={`sk-card sk-store-card ${sk.enabled ? '' : 'sk-card-off'}`}>
+                <button type="button" className="sk-store-card-hit" onClick={() => openDetail(sk)}>
+                  <div className="sk-store-card-top">
+                    <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} size={44} />
+                    <div className="sk-store-card-badges">
                       <span className={`sk-risk sk-risk-${sk.risk || 'mid'}`}>{RISK_ZH[sk.risk] || sk.risk}</span>
                       {sk.id === 'atolla.browser' && (
                         <span className={`dbs-dot ${browserUse?.ok ? 'ok' : 'miss'}`} title={browserUse?.ok ? (browserUse.version || 'browser-use 已安装') : 'browser-use 未就绪'} />
                       )}
                     </div>
-                    <p>{sk.summary}</p>
-                    {!sk.enabled && <span className="sk-badge-off">已停用</span>}
+                  </div>
+                  <h4 className="sk-store-card-title">{sk.name}</h4>
+                  <p className="sk-store-card-desc">{sk.summary}</p>
+                  {!sk.enabled && <span className="sk-badge-off">已停用</span>}
+                  <div className="sk-tags">
+                    {skillTags(sk).map((t) => <span key={t} className="sk-tag">{t}</span>)}
                   </div>
                 </button>
-                <div className="sk-card-actions">
-                  {sk.id === 'atolla.database' && (
-                    <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setDbConfigOpen(true)}>配置数据源</button>
-                  )}
-                  {sk.id === 'atolla.server_control' && (
-                    <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setServerConfigOpen(true)}>配置服务器</button>
-                  )}
-                  <button type="button" className="ghost" disabled={busy || disabled} onClick={() => patchSkill(sk.id, { enabled: !sk.enabled })}>
-                    {sk.enabled ? '停用' : '启用'}
-                  </button>
-                  <button type="button" className="ghost danger" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>卸载</button>
+                <div className="sk-store-card-foot">
+                  <span className="sk-author">{sk.author || 'Atolla'} <em>v{sk.version || '1.0.0'}</em></span>
+                  <div className="sk-card-actions">
+                    {sk.id === 'atolla.database' && (
+                      <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setDbConfigOpen(true)}>配置数据源</button>
+                    )}
+                    {sk.id === 'atolla.server_control' && (
+                      <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setServerConfigOpen(true)}>配置服务器</button>
+                    )}
+                    <button type="button" className="ghost" disabled={busy || disabled} onClick={() => patchSkill(sk.id, { enabled: !sk.enabled })}>
+                      {sk.enabled ? '停用' : '启用'}
+                    </button>
+                    <button type="button" className="ghost danger" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>卸载</button>
+                  </div>
                 </div>
               </article>
             ))
@@ -353,52 +407,75 @@ export default function AgentSkillsPanel({
 
       {activeTab === 'store' && (
         <div className="sk-store">
-          <div className="sk-store-bar">
-            <input
-              placeholder="搜索技能…"
-              value={q}
-              disabled={disabled}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadStore() } }}
-            />
-            <select value={category} disabled={disabled} onChange={(e) => setCategory(e.target.value)}>
-              <option value="">全部分类</option>
-              <option value="engine">引擎</option>
-              <option value="data">数据</option>
-              <option value="ops">运维</option>
-              <option value="custom">自定义</option>
-            </select>
-            <button type="button" className="ghost" disabled={busy || disabled} onClick={loadStore}>搜索</button>
-            <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setPublishOpen(true)}>发布自定义</button>
+          <div className="sk-store-toolbar">
+            <label className="sk-search-wrap">
+              <button
+                type="button"
+                className="sk-search-ico"
+                disabled={busy || disabled}
+                aria-label="搜索"
+                onClick={loadStore}
+              >
+                <IconSearch size={14} />
+              </button>
+              <input
+                placeholder="搜索技能（如：数据库、浏览器、部署…）"
+                value={q}
+                disabled={disabled}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadStore() } }}
+              />
+            </label>
+            <label className="sk-cat-select">
+              <span className="sk-cat-ico"><IconStack size={13} /></span>
+              <select value={category} disabled={disabled} onChange={(e) => setCategory(e.target.value)}>
+                <option value="">全部分类</option>
+                <option value="engine">引擎</option>
+                <option value="data">数据</option>
+                <option value="ops">运维</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <button type="button" className="sk-btn-publish" disabled={busy || disabled} onClick={() => setPublishOpen(true)}>
+              + 发布自定义
+            </button>
           </div>
           <div className="sk-grid">
-            {store.map((sk) => {
+            {store.length === 0 ? (
+              <p className="muted sk-empty">暂无匹配技能</p>
+            ) : store.map((sk) => {
               const inst = installedMap[sk.id]
               return (
                 <article key={sk.id} className="sk-store-card">
-                  <button type="button" className="sk-card-main" onClick={() => openDetail({ ...sk, installed: !!inst, enabled: inst?.enabled, capabilities: inst?.capabilities || [] })}>
-                    <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} size={48} />
-                    <div className="sk-card-body">
-                      <div className="sk-card-title-row">
-                        <strong>{sk.name}</strong>
+                  <button
+                    type="button"
+                    className="sk-store-card-hit"
+                    onClick={() => openDetail({ ...sk, installed: !!inst, enabled: inst?.enabled, capabilities: inst?.capabilities || [] })}
+                  >
+                    <div className="sk-store-card-top">
+                      <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} size={44} />
+                      <div className="sk-store-card-badges">
                         <span className={`sk-risk sk-risk-${sk.risk || 'mid'}`}>{RISK_ZH[sk.risk] || '中风险'}</span>
                         {sk.id === 'atolla.browser' && (
                           <span className={`dbs-dot ${browserUse?.ok ? 'ok' : 'miss'}`} title={browserUse?.ok ? 'browser-use 已安装' : '安装技能时将自动下载 browser-use'} />
                         )}
                       </div>
-                      <p>{sk.summary}</p>
-                      <div className="sk-meta">
-                        <span>{CAT_ZH[sk.category] || sk.category}</span>
-                        <span>{sk.author || 'Atolla'}</span>
-                        <span>v{sk.version}</span>
-                      </div>
+                    </div>
+                    <h4 className="sk-store-card-title">{sk.name}</h4>
+                    <p className="sk-store-card-desc">{sk.summary}</p>
+                    <div className="sk-tags">
+                      {skillTags(sk).map((t) => <span key={t} className="sk-tag">{t}</span>)}
                     </div>
                   </button>
-                  <div className="sk-card-actions">
+                  <div className="sk-store-card-foot">
+                    <span className="sk-author">{sk.author || 'Atolla'} <em>v{sk.version || '1.0.0'}</em></span>
                     {inst ? (
-                      <button type="button" className="ghost" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>已安装 · 卸载</button>
+                      <button type="button" className="sk-install-btn is-installed" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>
+                        已安装 · 卸载
+                      </button>
                     ) : (
-                      <button type="button" disabled={busy || disabled} onClick={() => install(sk.id, defaultCaps(sk.capabilities))}>
+                      <button type="button" className="sk-install-btn" disabled={busy || disabled} onClick={() => install(sk.id, defaultCaps(sk.capabilities))}>
+                        <IconDownload size={13} />
                         安装到此数字人
                       </button>
                     )}

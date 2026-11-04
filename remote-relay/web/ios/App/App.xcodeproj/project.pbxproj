@@ -183,7 +183,6 @@
 				B0261F4D33E62F4C22C4D222 /* jelly-red-32.png */,
 				F4C67F1A5A9095B1DEBDEB51 /* jelly-yellow-32.png */,
 			);
-			name = "jelly-sprites";
 			path = "jelly-sprites";
 			sourceTree = "<group>";
 		};
@@ -205,7 +204,6 @@
 				1839CD8B7CD32A0D4E559A81 /* JellyAvatarView.swift */,
 				5FE8A212F3FDCADA64B77113 /* jelly-sprites */,
 			);
-			name = AtollaIslandWidget;
 			path = AtollaIslandWidget;
 			sourceTree = "<group>";
 		};
