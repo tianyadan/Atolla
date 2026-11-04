@@ -999,7 +999,7 @@ html.native-app .login-home {
   width: 100%;
   max-width: 380px;
   padding: 1.5rem 1.25rem 2rem;
-  gap: 1.75rem;
+  gap: 1.4rem;
 }
 
 .login-brand {
@@ -1015,7 +1015,21 @@ html.native-app .login-home {
   height: 5.5rem;
   object-fit: contain;
   display: block;
-  margin-bottom: 1.1rem;
+  margin-bottom: 1rem;
+  animation: login-logo-enter 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Logo 只在进入页面时淡入，避免循环动效分散登录操作注意力。 */
+@keyframes login-logo-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* —— 冷启动白底 SplashOverlay（仅原生壳） —— */
@@ -1109,6 +1123,10 @@ html.native-app .login-home {
   .splash-copy {
     transform: translate(-50%, 0);
   }
+
+  .login-logo {
+    animation: none;
+  }
 }
 
 .login-product {
@@ -1129,28 +1147,50 @@ html.native-app .login-home {
   color: var(--muted);
 }
 
-.login-desc {
-  margin: 0.75rem 0 0;
-  font-size: 0.9rem;
-  line-height: 1.45;
-  color: var(--muted);
-  max-width: 18rem;
-}
-
 .login-form {
   width: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 1.1rem 1.15rem 1.2rem;
+  border-radius: 16px;
+  padding: 1.15rem;
 }
 
 .login-form .field {
   margin-top: 0;
 }
 
-.login-form .btn.primary {
-  margin-top: 0.25rem;
+.login-submit.btn.primary {
+  min-height: 3.25rem;
+  margin-top: 0.35rem;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 22px rgb(37 99 235 / 18%);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    filter 160ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.login-submit.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.07);
+  box-shadow: 0 10px 26px rgb(37 99 235 / 24%);
+}
+
+.login-submit.btn.primary:active:not(:disabled) {
+  transform: scale(0.985);
+  box-shadow: 0 4px 14px rgb(37 99 235 / 18%);
+}
+
+.login-submit.btn.primary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  outline-offset: 3px;
+}
+
+.login-submit.btn.primary[aria-busy='true'] {
+  cursor: progress;
 }
 
 .muted {

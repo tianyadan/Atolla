@@ -85,10 +85,9 @@ export function LoginPage() {
         />
         <h1 className="login-product">Atolla</h1>
         <p className="login-tagline">Remote Relay</p>
-        <p className="login-desc">Sign in with your site password to access Mac instances.</p>
       </div>
 
-      <form className="card login-card" onSubmit={onSubmit}>
+      <form className="login-form" onSubmit={onSubmit}>
         {showApiField ? (
           <label className="field">
             <span>Relay API</span>
@@ -113,7 +112,12 @@ export function LoginPage() {
           />
         </label>
         {error ? <p className="error">{error}</p> : null}
-        <button type="submit" className="primary-btn" disabled={loading || !password.trim()}>
+        <button
+          type="submit"
+          className="btn primary login-submit"
+          disabled={loading || !password.trim()}
+          aria-busy={loading}
+        >
           {loading ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
