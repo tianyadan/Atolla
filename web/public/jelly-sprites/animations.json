@@ -10,7 +10,8 @@
     "alert",
     "error",
     "celebrate",
-    "ponder"
+    "ponder",
+    "coding"
   ],
   "action_meta": {
     "idle": {
@@ -128,6 +129,18 @@
       "trigger": "frontend preview or future SSE thinking (not typing)",
       "cssHint": null,
       "notes": "左右轻摇、眼睛上望、触手摆动、偶尔1-2问号；与 typing 跳动区分；目前仅手动预览，SSE 未改"
+    },
+    "coding": {
+      "id": "coding",
+      "name": "写代码",
+      "row": 8,
+      "frames": 8,
+      "fps": 8,
+      "durationMs": 1000,
+      "loop": true,
+      "trigger": "frontend preview or future SSE coding (not typing/working)",
+      "cssHint": null,
+      "notes": "笔记本居中置于 jelly 前方，短触手敲击，屏幕 2–3 行代码闪烁；与 typing 跳动、ponder 思考区分；目前仅手动预览，SSE 未改"
     }
   },
   "colors": {
@@ -165,12 +178,14 @@
     "typing": "typing",
     "waiting": "alert",
     "error": "error",
-    "ponder": "ponder"
+    "ponder": "ponder",
+    "coding": "coding"
   },
   "frontend_only": [
     "sleep",
     "eat",
     "celebrate",
-    "ponder"
+    "ponder",
+    "coding"
   ]
 }

@@ -3,12 +3,12 @@ import { normalizeJellyColor } from './jellyColor.js'
 /** 精灵图：每格 16px 逻辑像素 */
 export const JELLY_CELL = 16
 export const JELLY_FRAMES = 8
-/** v3 素材：8 列 × 8 行动作（含 ponder） */
-export const JELLY_ACTION_ROWS = 8
+/** v3 素材：8 列 × 9 行动作（含 ponder、coding） */
+export const JELLY_ACTION_ROWS = 9
 
 /**
  * 动作行（与 public/jelly-sprites/animations.json 一致）
- * 0 idle · 1 typing · 2 sleep · 3 eat · 4 alert · 5 error · 6 celebrate · 7 ponder
+ * 0 idle · 1 typing · 2 sleep · 3 eat · 4 alert · 5 error · 6 celebrate · 7 ponder · 8 coding
  */
 export const JELLY_ACTION_ROW = {
   idle: 0,
@@ -19,6 +19,7 @@ export const JELLY_ACTION_ROW = {
   error: 5,
   celebrate: 6,
   ponder: 7,
+  coding: 8,
   // 兼容旧名
   float: 0,
   jump: 1,
@@ -28,7 +29,7 @@ export const JELLY_ACTION_ROW = {
 
 /**
  * Avatar state → 精灵行
- * @param {'idle'|'working'|'typing'|'waiting'|'error'|'sleep'|'eat'|'celebrate'|'ponder'} state
+ * @param {'idle'|'working'|'typing'|'waiting'|'error'|'sleep'|'eat'|'celebrate'|'ponder'|'coding'} state
  */
 export function jellyActionRow(state) {
   const s = String(state || 'idle')
@@ -39,6 +40,7 @@ export function jellyActionRow(state) {
   if (s === 'eat') return JELLY_ACTION_ROW.eat
   if (s === 'celebrate') return JELLY_ACTION_ROW.celebrate
   if (s === 'ponder') return JELLY_ACTION_ROW.ponder
+  if (s === 'coding') return JELLY_ACTION_ROW.coding
   return JELLY_ACTION_ROW.idle
 }
 
