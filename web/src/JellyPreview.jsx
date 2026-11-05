@@ -10,12 +10,26 @@ const DEMO_AGENTS = JELLY_COLORS.map((color, i) => ({
   status: i === 4 ? 'running' : 'idle',
 }))
 
+/** 手动预览可切换的动作（含 ponder；SSE 未接入） */
+const PREVIEW_STATES = [
+  { id: 'idle', label: 'idle 漂浮' },
+  { id: 'typing', label: 'typing 跳动' },
+  { id: 'working', label: 'working→typing' },
+  { id: 'waiting', label: 'waiting 闪' },
+  { id: 'error', label: 'error' },
+  { id: 'sleep', label: 'sleep' },
+  { id: 'eat', label: 'eat' },
+  { id: 'celebrate', label: 'celebrate' },
+  { id: 'ponder', label: 'ponder 思考' },
+]
+
 /**
  * 本地预览页：用真实 JellyAvatar / JellyColorPicker 组件截图用。
  * 访问 /?jellyPreview=1
  */
 export default function JellyPreview() {
   const [color, setColor] = useState(() => assignJellyColor('preview'))
+  const [previewState, setPreviewState] = useState('ponder')
 
   return (
     <div style={{ padding: 24, background: '#0a0a0a', minHeight: '100vh', color: '#f5f5f5', fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
@@ -32,9 +46,33 @@ export default function JellyPreview() {
             <option value="claude">Claude</option>
           </select>
         </label>
+        <label style={{ display: 'block', marginTop: 12 }}>
+          动作预览
+          <select
+            value={previewState}
+            onChange={(e) => setPreviewState(e.target.value)}
+            style={{ display: 'block', width: '100%', marginTop: 6 }}
+          >
+            {PREVIEW_STATES.map((s) => (
+              <option key={s.id} value={s.id}>{s.label}</option>
+            ))}
+          </select>
+        </label>
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <JellyAvatar color={color} size={72} state="idle" />
-          <span className="muted">预览 · {color}</span>
+          <JellyAvatar color={color} size={72} state={previewState} />
+          <span className="muted">预览 · {color} · {previewState}</span>
+        </div>
+      </section>
+
+      <section style={{ maxWidth: 520, marginBottom: 24 }} data-shot="ponder-colors">
+        <h2 style={{ fontSize: 16, marginBottom: 12 }}>ponder 思考 · 六色</h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
+          {JELLY_COLORS.map((c) => (
+            <div key={c} style={{ textAlign: 'center' }}>
+              <JellyAvatar color={c} size={48} state="ponder" />
+              <div style={{ fontSize: 12, marginTop: 4, color: '#8a8a8a' }}>{c}</div>
+            </div>
+          ))}
         </div>
       </section>
 
