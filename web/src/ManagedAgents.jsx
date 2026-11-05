@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
-import { ListCollapseIcon } from './adminMenuIcons.jsx'
 import AgentMarkdown, { selectionInside } from './agentMarkdown.jsx'
 import JellyAvatar from './JellyAvatar.jsx'
 import JellyColorPicker from './JellyColorPicker.jsx'
@@ -74,13 +73,6 @@ function shortErrorText(raw, max = 140) {
   return `${t.slice(0, max)}…`
 }
 
-/** 未入组：没有工作组，或工作组已被删除（否则人和组对不上，列表两边都看不到）。 */
-function isUngroupedAgent(agent, folders) {
-  const id = Number(agent?.folder_id) || 0
-  if (id <= 0) return true
-  return !(folders || []).some((f) => Number(f.id) === id)
-}
-
 /** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默） */
 const THINKING_PHRASES = [
   'thinking',
@@ -114,12 +106,6 @@ function engineMeta(id) {
   return ENGINES.find((e) => e.id === id) || { id, label: id, color: '#94a3b8' }
 }
 
-const BUILTIN_SKILL_ICON = {
-  database: '/skill-icons/database.svg',
-  server: '/skill-icons/server.svg',
-  browser: '/skill-icons/browser.svg',
-}
-
 /** 引擎标签旁：已安装技能数量（浅紫粉半透明） */
 function SkillCountBadge({ count }) {
   const n = Number(count) || 0
@@ -140,26 +126,6 @@ function EngineTagWithSkills({ engine, skillCount }) {
       </span>
       <SkillCountBadge count={skillCount} />
     </span>
-  )
-}
-
-/** 悬停展示已安装技能 10×10 图标 */
-function SkillIconStrip({ icons }) {
-  if (!icons?.length) return null
-  return (
-    <div className="ma-item-skills" aria-hidden="true">
-      {icons.map((sk) => {
-        const src = sk.icon_url || BUILTIN_SKILL_ICON[sk.icon_key]
-        if (src) {
-          return <img key={sk.id} className="ma-skill-ico" src={src} alt="" title={sk.name || sk.id} />
-        }
-        return (
-          <span key={sk.id} className="ma-skill-ico glyph" title={sk.name || sk.id}>
-            ◇
-          </span>
-        )
-      })}
-    </div>
   )
 }
 
@@ -232,7 +198,7 @@ export default function ManagedAgentsPanel({
   authHeaders, onUnauthorized, active = true, onOpenWorkflowRun, onOpenGroupChat,
   focusAgentId = 0, onFocusConsumed, focusApprovalRequestId = '', onApprovalFocusConsumed,
   openHire = false, onHireConsumed, openSettings = false,
-  presentation = 'classic', conversationRefreshKey = 0, onAgentHired,
+  conversationRefreshKey = 0, onAgentHired,
 }) {
   const { t } = useLocale()
   const [agents, setAgents] = useState([])
@@ -257,16 +223,6 @@ export default function ManagedAgentsPanel({
   const [skillsSubTab, setSkillsSubTab] = useState('installed') // installed | store
   const [dismissTarget, setDismissTarget] = useState(null) // agent | null
   const [legacyMounts, setLegacyMounts] = useState([])
-  const [folders, setFolders] = useState([])
-  const [agentSearch, setAgentSearch] = useState('')
-  const [collapsedFolders, setCollapsedFolders] = useState({})
-  const [folderCreateOpen, setFolderCreateOpen] = useState(false)
-  const [folderCreateName, setFolderCreateName] = useState('新建工作组')
-  const [folderEdit, setFolderEdit] = useState(null) // { id, name }
-  const [listCollapsed, setListCollapsed] = useState(() => {
-    try { return localStorage.getItem('ma_list_collapsed') === '1' } catch { return false }
-  })
-  const [folderEditName, setFolderEditName] = useState('')
   const [newName, setNewName] = useState('新同事')
   const [newEngine, setNewEngine] = useState('claude')
   const [newContextWindow, setNewContextWindow] = useState(1000000)
@@ -470,12 +426,9 @@ export default function ManagedAgentsPanel({
     // 首页未登录也会挂着本面板轮询。没令牌时接口必然 401，不能当成登录过期。
     if (!hasBearerToken(headers)) return
     const gen = ++agentsLoadGen.current
-    const [res, folderRes] = await Promise.all([
-      fetch(`${API}/admin/agents`, { headers }),
-      fetch(`${API}/admin/agent-folders`, { headers }),
-    ])
+    const res = await fetch(`${API}/admin/agents`, { headers })
     if (gen !== agentsLoadGen.current) return
-    if (shouldForceLogout(res.status, headers) || shouldForceLogout(folderRes.status, headers)) {
+    if (shouldForceLogout(res.status, headers)) {
       onUnauthorized?.()
       return
     }
@@ -505,10 +458,6 @@ export default function ManagedAgentsPanel({
       }).catch(() => {})
     }
     setAgents(items)
-    if (folderRes.ok) {
-      const fd = await folderRes.json()
-      setFolders(fd.items || [])
-    }
     // 从服务端恢复自动审核开关(刷新不丢)
     items.forEach((a) => {
       if (a && a.id) patchAgentSession(a.id, { autoOn: !!a.auto_review })
@@ -958,7 +907,6 @@ export default function ManagedAgentsPanel({
         }
         setAgents((prev) => [created, ...prev.filter((a) => a.id !== created.id)])
         setSelectedId(created.id)
-        setAgentSearch('')
       }
       setCreateOpen(false)
       setNewPolicy(emptyPolicy())
@@ -1045,59 +993,6 @@ export default function ManagedAgentsPanel({
     } finally { setBusy(false) }
   }
 
-  async function createFolder(e) {
-    e?.preventDefault?.()
-    if (busy) return
-    const name = folderCreateName.trim() || '新建工作组'
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agent-folders`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name }),
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      if (!res.ok) return
-      setFolderCreateOpen(false)
-      setFolderCreateName('新建工作组')
-      await loadAgents(selectedId)
-    } finally { setBusy(false) }
-  }
-
-  async function saveFolderEdit(e) {
-    e?.preventDefault?.()
-    if (!folderEdit || busy) return
-    const name = folderEditName.trim()
-    if (!name) return
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agent-folders/${folderEdit.id}`, {
-        method: 'PATCH',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name }),
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      if (!res.ok) return
-      setFolderEdit(null)
-      await loadAgents(selectedId)
-    } finally { setBusy(false) }
-  }
-
-  async function moveAgentToFolder(agentId, folderId) {
-    const res = await fetch(`${API}/admin/agents/${agentId}/folder`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ folder_id: folderId || 0 }),
-    })
-    if (res.status === 401) { onUnauthorized?.(); return }
-    await loadAgents(selectedId)
-  }
-
-  /** 从工作组移出到未入组 */
-  async function removeAgentFromFolder(agentId) {
-    await moveAgentToFolder(agentId, 0)
-  }
-
   async function fetchStatusSnapshot() {
     if (!selected || loading) return
     const res = await fetch(`${API}/admin/agents/${selected.id}/status`, { headers: authHeaders() })
@@ -1117,7 +1012,7 @@ export default function ManagedAgentsPanel({
     setDismissTarget(selected)
   }
 
-  /** 统一准备员工设置草稿，现代/经典入口共用，避免打开后字段残留。 */
+  /** 统一准备员工设置草稿，避免从不同入口打开后残留旧字段。 */
   function openSelectedSettings(tab = 'basic') {
     if (!selected) return
     setRenameDraft(selected.name || '')
@@ -1922,18 +1817,18 @@ export default function ManagedAgentsPanel({
 
   /** 继续被 Stop 挂起的队列 */
   async function onTqContinue() {
-    if (!selectedId) return
+    if (!selectedId) return false
     try {
       const res = await fetch(`${API}/admin/agents/${selectedId}/task-queue/continue`, {
         method: 'POST',
         headers: authHeaders(),
       })
-      if (res.status === 401) { onUnauthorized?.(); return }
+      if (res.status === 401) { onUnauthorized?.(); return false }
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || `继续失败(${res.status})`)
       setTqRefreshKey((k) => k + 1)
       const task = d.task
-      if (!task?.id) return
+      if (!task?.id) return true
       const atts = (() => {
         try {
           return task.attachments_json ? JSON.parse(task.attachments_json) : []
@@ -1945,8 +1840,10 @@ export default function ManagedAgentsPanel({
         taskId: task.id,
         resumePrefix: !!d.resume_prefix || !!task.resume_hint,
       })
+      return true
     } catch (err) {
       patchAgentSession(selectedId, { error: String(err.message || err) })
+      return false
     }
   }
 
@@ -2100,298 +1997,9 @@ export default function ManagedAgentsPanel({
     return ''
   }
 
-  const searchQ = agentSearch.trim().toLowerCase()
-  const filteredAgents = useMemo(() => {
-    if (!searchQ) return agents
-    return agents.filter((a) => (a.name || '').toLowerCase().includes(searchQ))
-  }, [agents, searchQ])
-  // 依赖 sessVer：本地 loading 变化时刷新「运行中」镜像区
-  const busyAgents = useMemo(
-    () => filteredAgents.filter((a) => isAgentBusy(a)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
-    [filteredAgents, sessVer],
-  )
-  /** 任务完成未读（非忙碌）；按完成时间倒序：越早越靠后 */
-  const unreadAgents = useMemo(
-    () =>
-      filteredAgents
-        .filter((a) => !!a.task_unread && !isAgentBusy(a))
-        .sort((a, b) => unreadAtMs(b) - unreadAtMs(a)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
-    [filteredAgents, sessVer],
-  )
-
-  function renderAgentItem(a) {
-    const st = statusLabel(a)
-    const stClass = isCloneInitBusy(a)
-      ? 'initializing'
-      : statusClass(getAgentSession(a.id).compressing ? 'compressing' : (getAgentSession(a.id).loading ? 'running' : a.status))
-    const runSec = liveRunSec(a)
-    const pend = (getAgentSession(a.id).permQueue || []).length
-    return (
-      <div
-        key={a.id}
-        role="button"
-        tabIndex={0}
-        className={`ma-item ${selectedId === a.id ? 'active' : ''}`}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData('text/agent-id', String(a.id))
-          e.dataTransfer.effectAllowed = 'move'
-        }}
-        onClick={() => setSelectedId(a.id)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setSelectedId(a.id)
-          }
-        }}
-      >
-        <div className="ma-item-head">
-          <JellyAvatar
-            className="ma-avatar ma-avatar-sm"
-            color={resolveJellyColor(a)}
-            size={28}
-            state={jellyStateFromAgent(a, { loading: getAgentSession(a.id).loading })}
-          />
-          <strong className="ma-item-name">
-            {a.name}
-            {a.mobile_viewing ? <MobileViewerIcon /> : null}
-          </strong>
-          <span className="ma-item-badges">
-            {pend > 0 && <span className="admin-badge admin-badge-perm" title="待授权">{pend}</span>}
-            {!!a.task_unread && !isAgentBusy(a) && (
-              <span className="admin-badge admin-badge-unread" title="任务完成未读">未读</span>
-            )}
-            <span className={`ma-status st-${stClass}`}>{st}</span>
-          </span>
-        </div>
-        <div className="ma-item-meta">
-          <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
-          <span className="ma-age-fixed">已运行 {fmtAge(a.created_at)}</span>
-          {runSec > 0 ? <span className="ma-runlive">本次 {fmtSec(runSec)}</span>
-            : a.last_run_ms > 0 ? <span>上次 {fmtSec(Math.round(a.last_run_ms / 1000))}</span> : null}
-          {isWorkflowBusy(a) && onOpenWorkflowRun && a.occupancy?.workflow_run_id > 0 && (
-            <button
-              type="button"
-              className="ma-occ-link"
-              onClick={(e) => { e.stopPropagation(); onOpenWorkflowRun(a.occupancy.workflow_run_id) }}
-            >
-              查看团队任务
-            </button>
-          )}
-        </div>
-        <SkillIconStrip icons={a.skill_icons} />
-      </div>
-    )
-  }
-
-  /** 向左收起工作组列表，把横向空间让给对话区。 */
-  function toggleAgentList() {
-    setListCollapsed((v) => {
-      const next = !v
-      try { localStorage.setItem('ma_list_collapsed', next ? '1' : '0') } catch { /* 隐私模式忽略 */ }
-      return next
-    })
-  }
-
-  /** 一键展开所有工作组（含未入组）。 */
-  function expandAllFolders() {
-    setCollapsedFolders({})
-  }
-
-  /** 一键折叠所有工作组（含未入组）。 */
-  function collapseAllFolders() {
-    const next = { root: true }
-    for (const f of folders) {
-      if (f?.id != null) next[f.id] = true
-    }
-    setCollapsedFolders(next)
-  }
-
   return (
-    <section className={`ma-panel${presentation === 'focus' ? ' ma-panel-focus' : ''}`}>
-      <button
-        type="button"
-        className="ma-list-collapse"
-        onClick={toggleAgentList}
-        title={listCollapsed ? '展开工作组' : '向左收起工作组'}
-        aria-expanded={!listCollapsed}
-        aria-label={listCollapsed ? '展开工作组' : '向左收起工作组'}
-      >
-        <ListCollapseIcon collapsed={listCollapsed} />
-      </button>
-      <div className="ma-toolbar">
-        <h2>数字人对话</h2>
-        <div className="ma-toolbar-actions">
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => { setFolderCreateName('新建工作组'); setFolderCreateOpen(true) }}
-            disabled={busy}
-          >
-            创建工作组
-          </button>
-          <button type="button" className="new" onClick={() => setTalentMarketOpen(true)}>＋ 一键招聘</button>
-        </div>
-      </div>
-
-      <div className={`ma-layout${listCollapsed ? ' is-collapsed' : ''}`}>
-        <aside className="ma-list">
-          <input
-            className="ma-search"
-            value={agentSearch}
-            onChange={(e) => setAgentSearch(e.target.value)}
-            placeholder="搜索数字员工名称…"
-          />
-          {folders.length > 0 || filteredAgents.some((a) => isUngroupedAgent(a, folders)) ? (
-            <div className="ma-fold-toolbar">
-              <button type="button" className="ghost ma-fold-btn" onClick={expandAllFolders}>
-                全部展开
-              </button>
-              <button type="button" className="ghost ma-fold-btn" onClick={collapseAllFolders}>
-                全部折叠
-              </button>
-            </div>
-          ) : null}
-          {filteredAgents.length === 0 && <p className="empty">暂无匹配的数字员工</p>}
-
-          {/* 未读置顶，优先级高于运行中；浅蓝边框；点进对话后已读移出 */}
-          {unreadAgents.length > 0 && (
-            <div className="ma-folder-block ma-unread-block">
-              <div className="ma-folder-head">
-                <div className="ma-folder-title">
-                  <span className="ma-folder-title-text">未读</span>
-                  <span className="ma-folder-title-right">
-                    <span className="admin-badge admin-badge-unread ma-folder-badge" title="任务完成未读">
-                      {unreadAgents.length}
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <div className="ma-folder-agents">
-                {unreadAgents.map(renderAgentItem)}
-              </div>
-            </div>
-          )}
-
-          {busyAgents.length > 0 && (
-            <div className="ma-folder-block ma-running-block">
-              <div className="ma-folder-head">
-                <div className="ma-folder-title">
-                  <span className="ma-folder-title-text">运行中</span>
-                  <span className="ma-folder-title-right">
-                    <span className="admin-badge ma-folder-badge" title="运行中">
-                      {busyAgents.length}
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <div className="ma-folder-agents">
-                {busyAgents.map(renderAgentItem)}
-              </div>
-            </div>
-          )}
-
-          <div
-            className="ma-folder-block ma-folder-root"
-            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
-            onDrop={(e) => {
-              e.preventDefault()
-              const id = Number(e.dataTransfer.getData('text/agent-id'))
-              if (id) moveAgentToFolder(id, 0)
-            }}
-          >
-            <div className="ma-folder-head">
-              <button
-                type="button"
-                className="ma-folder-title"
-                onClick={() => setCollapsedFolders((m) => ({ ...m, root: !m.root }))}
-              >
-                <span className="ma-folder-title-text">{collapsedFolders.root ? '▸' : '▾'} 未入组</span>
-                <span className="ma-folder-title-right">
-                  {(() => {
-                    const kids = filteredAgents.filter((a) => isUngroupedAgent(a, folders))
-                    const { direct, wf } = countFolderBusy(kids)
-                    return (
-                      <>
-                        {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="项目协作忙碌">{wf}</span>}
-                        {direct > 0 && <span className="admin-badge ma-folder-badge" title="直接运行中">{direct}</span>}
-                        <span className="muted">{kids.length}</span>
-                      </>
-                    )
-                  })()}
-                </span>
-              </button>
-            </div>
-            {(!collapsedFolders.root || !!searchQ) && (
-              <div className="ma-folder-agents">
-                {filteredAgents.filter((a) => isUngroupedAgent(a, folders)).map(renderAgentItem)}
-              </div>
-            )}
-          </div>
-
-          {folders.map((f) => {
-            const kids = filteredAgents.filter((a) => Number(a.folder_id) === Number(f.id))
-            if (searchQ && kids.length === 0) return null
-            // 搜索时强制展开，避免匹配结果被藏在折叠组里
-            const collapsed = !searchQ && !!collapsedFolders[f.id]
-            return (
-              <div
-                key={f.id}
-                className="ma-folder-block"
-                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  const id = Number(e.dataTransfer.getData('text/agent-id'))
-                  if (id) moveAgentToFolder(id, f.id)
-                }}
-              >
-                <div className="ma-folder-head">
-                  <button
-                    type="button"
-                    className="ma-folder-title"
-                    onClick={() => setCollapsedFolders((m) => ({ ...m, [f.id]: !m[f.id] }))}
-                  >
-                    <span className="ma-folder-title-text">{collapsed ? '▸' : '▾'} {f.name}</span>
-                    <span className="ma-folder-title-right">
-                      {(() => {
-                        const { direct, wf } = countFolderBusy(kids)
-                        return (
-                          <>
-                            {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="项目协作忙碌">{wf}</span>}
-                            {direct > 0 && <span className="admin-badge ma-folder-badge" title="直接运行中">{direct}</span>}
-                            <span className="muted">{kids.length}</span>
-                          </>
-                        )
-                      })()}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="ma-folder-edit"
-                    title="编辑工作组"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setFolderEdit({ id: f.id, name: f.name })
-                      setFolderEditName(f.name || '')
-                    }}
-                  >
-                    编辑
-                  </button>
-                </div>
-                {!collapsed && (
-                  <div className="ma-folder-agents">
-                    {kids.length === 0
-                      ? <p className="ma-folder-empty">工作组空闲 · 把同事拖进来</p>
-                      : kids.map(renderAgentItem)}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </aside>
-
+    <section className="ma-panel ma-panel-focus">
+      <div className="ma-layout">
         <div className="ma-main ma-main-with-tq">
           {selected ? (
             <TaskQueueRail
@@ -2399,8 +2007,9 @@ export default function ManagedAgentsPanel({
               authHeaders={authHeaders}
               onUnauthorized={onUnauthorized}
               active={active && !!selected}
+              agentBusy={isAgentBusy(selected)}
               refreshKey={tqRefreshKey}
-              onContinue={() => void onTqContinue()}
+              onContinue={onTqContinue}
               open={taskQueueOpen}
               onOpenChange={setTaskQueueOpen}
               onBadgeChange={setTaskQueueBadge}
@@ -2411,7 +2020,7 @@ export default function ManagedAgentsPanel({
             <div className="empty ma-empty ma-empty-hero">
               <div className="ma-empty-icon" aria-hidden="true" />
               <p>还没有选中同事</p>
-              <p className="ma-empty-sub">从左侧工作组点选，或点右上角「一键招聘」打开人才市场</p>
+              <p className="ma-empty-sub">从左侧最近对话选择同事，或使用招聘按钮添加新员工</p>
             </div>
           ) : (
             <div className="ma-detail">
@@ -2433,14 +2042,12 @@ export default function ManagedAgentsPanel({
                   <span className={`ma-status st-${cloneInitBusy ? 'initializing' : statusClass(getAgentSession(selected.id).compressing ? 'compressing' : (getAgentSession(selected.id).loading ? 'running' : selected.status))}`}>
                     {statusLabel(selected)}
                   </span>
-                  {presentation === 'focus' && (
-                    <EngineUsageChip
-                      engine={selected.engine}
-                      authHeaders={authHeaders}
-                      onUnauthorized={onUnauthorized}
-                      active={active}
-                    />
-                  )}
+                  <EngineUsageChip
+                    engine={selected.engine}
+                    authHeaders={authHeaders}
+                    onUnauthorized={onUnauthorized}
+                    active={active}
+                  />
                   {workflowBusy && selected.occupancy?.workflow_run_id > 0 && onOpenWorkflowRun && (
                     <button
                       type="button"
@@ -2453,95 +2060,65 @@ export default function ManagedAgentsPanel({
                   {liveRunSec(selected) > 0 && <span className="ma-runlive">{fmtSec(liveRunSec(selected))}</span>}
                 </div>
                 <div className="ma-detail-tools">
-                  {presentation === 'focus' ? (
-                    <>
-                      <button
-                        type="button"
-                        className={`ma-detail-icon-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
-                        onClick={() => openSelectedSettings('basic')}
-                        title="员工设置"
-                        aria-label="员工设置"
-                      >
-                        <ModernIcon name="settings" />
-                        {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
-                      </button>
-                      <div
-                        className="ma-detail-menu-wrap"
-                        onBlur={(event) => {
-                          if (!event.currentTarget.contains(event.relatedTarget)) setDetailMoreOpen(false)
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Escape') setDetailMoreOpen(false)
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className="ma-detail-icon-btn"
-                          onClick={() => setDetailMoreOpen((value) => !value)}
-                          title="更多操作"
-                          aria-label="更多操作"
-                          aria-expanded={detailMoreOpen}
-                        >
-                          <ModernIcon name="menu" />
-                        </button>
-                        {detailMoreOpen && (
-                          <div className="ma-detail-more-menu">
-                            {selected.status !== 'initializing' && !cloneInitBusy && (
-                              <button
-                                type="button"
-                                disabled={busy || loading}
-                                onClick={() => {
-                                  setCopyName(`${selected.name || '未命名员工'} 副本`)
-                                  setCopyJellyColor(resolveJellyColor(selected))
-                                  setCopyOpen(true)
-                                  setDetailMoreOpen(false)
-                                }}
-                              >复制</button>
-                            )}
-                            {!workflowBusy && !initializing && !cloneInitBusy && (
-                              <>
-                                <button type="button" onClick={() => { setDetailMoreOpen(false); fetchStatusSnapshot() }} disabled={loading || compressing}>状态</button>
-                                <button type="button" onClick={() => { setDetailMoreOpen(false); compressChat() }} disabled={loading || compressing}>
-                                  {compressing ? '压缩记忆…' : '压缩'}
-                                </button>
-                              </>
-                            )}
-                            {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
-                              <button type="button" disabled={busy} onClick={() => { setDetailMoreOpen(false); retryCloneInit() }}>重试初始化</button>
-                            )}
-                            <hr />
-                            <button type="button" className="danger-item" onClick={() => { setDetailMoreOpen(false); deleteAgent() }} disabled={busy || loading}>解聘</button>
-                          </div>
+                  <button
+                    type="button"
+                    className={`ma-detail-icon-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
+                    onClick={() => openSelectedSettings('basic')}
+                    title="员工设置"
+                    aria-label="员工设置"
+                  >
+                    <ModernIcon name="settings" />
+                    {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
+                  </button>
+                  <div
+                    className="ma-detail-menu-wrap"
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) setDetailMoreOpen(false)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setDetailMoreOpen(false)
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="ma-detail-icon-btn"
+                      onClick={() => setDetailMoreOpen((value) => !value)}
+                      title="更多操作"
+                      aria-label="更多操作"
+                      aria-expanded={detailMoreOpen}
+                    >
+                      <ModernIcon name="menu" />
+                    </button>
+                    {detailMoreOpen && (
+                      <div className="ma-detail-more-menu">
+                        {selected.status !== 'initializing' && !cloneInitBusy && (
+                          <button
+                            type="button"
+                            disabled={busy || loading}
+                            onClick={() => {
+                              setCopyName(`${selected.name || '未命名员工'} 副本`)
+                              setCopyJellyColor(resolveJellyColor(selected))
+                              setCopyOpen(true)
+                              setDetailMoreOpen(false)
+                            }}
+                          >复制</button>
                         )}
+                        {!workflowBusy && !initializing && !cloneInitBusy && (
+                          <>
+                            <button type="button" onClick={() => { setDetailMoreOpen(false); fetchStatusSnapshot() }} disabled={loading || compressing}>状态</button>
+                            <button type="button" onClick={() => { setDetailMoreOpen(false); compressChat() }} disabled={loading || compressing}>
+                              {compressing ? '压缩记忆…' : '压缩'}
+                            </button>
+                          </>
+                        )}
+                        {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
+                          <button type="button" disabled={busy} onClick={() => { setDetailMoreOpen(false); retryCloneInit() }}>重试初始化</button>
+                        )}
+                        <hr />
+                        <button type="button" className="danger-item" onClick={() => { setDetailMoreOpen(false); deleteAgent() }} disabled={busy || loading}>解聘</button>
                       </div>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" className="ghost" onClick={() => openSelectedSettings('basic')}>设置</button>
-                      {selected.status !== 'initializing' && !cloneInitBusy && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          disabled={busy || loading}
-                          onClick={() => {
-                            setCopyName(`${selected.name || '未命名员工'} 副本`)
-                            setCopyJellyColor(resolveJellyColor(selected))
-                            setCopyOpen(true)
-                          }}
-                        >复制</button>
-                      )}
-                      {!workflowBusy && !initializing && !cloneInitBusy && (
-                        <>
-                          <button type="button" className="ghost" onClick={fetchStatusSnapshot} disabled={loading || compressing}>状态</button>
-                          <button type="button" className="ghost" onClick={compressChat} disabled={loading || compressing}>{compressing ? '压缩记忆…' : '压缩'}</button>
-                        </>
-                      )}
-                      {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
-                        <button type="button" className="ghost" disabled={busy} onClick={retryCloneInit}>重试初始化</button>
-                      )}
-                      <button type="button" className="ghost danger-text" onClick={deleteAgent} disabled={busy || loading}>解聘</button>
-                    </>
-                  )}
+                    )}
+                  </div>
                 </div>
               </header>
 
@@ -2580,16 +2157,12 @@ export default function ManagedAgentsPanel({
                   <div key={`${selectedId}-${m.id || `i${i}`}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
                     <div className="msg-label">
                       <span>
-                        {(m.role === 'assistant' || m.role === 'invoke_quote') && (
+                        {m.role === 'invoke_quote' && (
                           <JellyAvatar
                             className="ma-msg-jelly"
                             color={resolveJellyColor(selected)}
                             size={16}
-                            state={
-                              m.role === 'assistant' && loading && i === chatLog.length - 1
-                                ? jellyStateFromPhase(sess.agentPhase, 'working')
-                                : jellyStateFromAgent(selected)
-                            }
+                            state={jellyStateFromAgent(selected)}
                           />
                         )}
                         {m.role === 'user' ? '你'
@@ -3006,72 +2579,6 @@ export default function ManagedAgentsPanel({
             <div className="modal-actions">
               <button type="button" disabled={busy} onClick={() => setCopyOpen(false)}>取消</button>
               <button type="submit" disabled={busy || !copyName.trim()}>{busy ? '复制中…' : '确认复制'}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {folderCreateOpen && (
-        <div className="modal-mask" onClick={() => !busy && setFolderCreateOpen(false)}>
-          <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={createFolder}>
-            <h2>创建工作组</h2>
-            <label>
-              工作组名称
-              <input
-                value={folderCreateName}
-                onChange={(e) => setFolderCreateName(e.target.value)}
-                disabled={busy}
-                placeholder="例如：研发组"
-                autoFocus
-              />
-            </label>
-            <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setFolderCreateOpen(false)}>取消</button>
-              <button type="submit" disabled={busy || !folderCreateName.trim()}>{busy ? '创建中…' : '创建'}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {folderEdit && (
-        <div className="modal-mask" onClick={() => !busy && setFolderEdit(null)}>
-          <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={saveFolderEdit}>
-            <h2>编辑工作组</h2>
-            <label>
-              工作组名称
-              <input
-                value={folderEditName}
-                onChange={(e) => setFolderEditName(e.target.value)}
-                disabled={busy}
-                autoFocus
-              />
-            </label>
-            <h3 className="ma-policy-title">工作组内数字员工</h3>
-            <div className="ma-folder-agents">
-              {agents.filter((a) => Number(a.folder_id) === Number(folderEdit.id)).length === 0 ? (
-                <p className="ma-folder-empty">工作组还空着，从左侧拖入同事</p>
-              ) : (
-                agents
-                  .filter((a) => Number(a.folder_id) === Number(folderEdit.id))
-                  .map((a) => (
-                    <div key={a.id} className="ma-folder-member">
-                      <span className="ma-folder-member-name">{a.name}</span>
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy}
-                        onClick={() => removeAgentFromFolder(a.id)}
-                      >
-                        移出
-                      </button>
-                    </div>
-                  ))
-              )}
-            </div>
-            <p className="muted">移出后同事回到「未入组」。</p>
-            <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setFolderEdit(null)}>取消</button>
-              <button type="submit" disabled={busy || !folderEditName.trim()}>{busy ? '保存中…' : '保存名称'}</button>
             </div>
           </form>
         </div>
@@ -3703,31 +3210,6 @@ function ContextRing({ used, window: win, estimated = true, source = '', updated
       </span>
     </div>
   )
-}
-
-function countFolderBusy(list) {
-  let direct = 0
-  let wf = 0
-  for (const a of list || []) {
-    if (isWorkflowBusy(a)) wf += 1
-    else if (getAgentSession(a.id).loading || a.status === 'running') direct += 1
-  }
-  return { direct, wf }
-}
-
-/** 未读完成时间毫秒；越早完成排序越靠后（倒序用） */
-function unreadAtMs(a) {
-  const raw = a?.task_unread_at
-  if (raw == null || raw === '') return 0
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw < 1e12 ? Math.floor(raw * 1000) : Math.floor(raw)
-  }
-  const n = Number(raw)
-  if (Number.isFinite(n) && n > 0) {
-    return n < 1e12 ? Math.floor(n * 1000) : Math.floor(n)
-  }
-  const ms = Date.parse(String(raw))
-  return Number.isFinite(ms) ? ms : 0
 }
 
 /** 是否「忙」（与移动端 agentBusy 对齐，并含本地 loading/compressing） */

@@ -2,7 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
-const css = fs.readFileSync(new URL('./App.css', import.meta.url), 'utf8')
+const css = [
+  fs.readFileSync(new URL('./App.css', import.meta.url), 'utf8'),
+  fs.readFileSync(new URL('./styles/modern-workspace.css', import.meta.url), 'utf8'),
+].join('\n')
 
 function readZIndex(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

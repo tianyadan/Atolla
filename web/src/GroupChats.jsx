@@ -560,14 +560,6 @@ export default function GroupChats({
                   >
                     <div className="msg-label">
                       <span className="gc-speaker-label">
-                        {m.role !== 'user' && (
-                          <JellyAvatar
-                            className="ma-msg-jelly"
-                            color={resolveJellyColor({ jelly_color: member?.jelly_color })}
-                            size={20}
-                            state={m.streaming ? 'typing' : 'idle'}
-                          />
-                        )}
                         <span className="gc-speaker-name">{label}</span>
                       </span>
                     </div>

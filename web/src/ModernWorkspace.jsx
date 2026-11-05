@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import './styles/modern-workspace.css'
 import ManagedAgentsPanel from './ManagedAgents.jsx'
 import JellyAvatar from './JellyAvatar.jsx'
-import { resolveJellyColor } from './jellyColor.js'
+import { jellyStateFromPhase, resolveJellyColor } from './jellyColor.js'
+import { getAgentSession, subscribeAgentSessions } from './managedAgentSessions.js'
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import DismissAgentModal from './DismissAgentModal.jsx'
+import AgentGroupManager from './AgentGroupManager.jsx'
 import { CURRENT_VERSION } from './changelog.js'
 import {
   conversationDisplayTitle,
@@ -44,13 +47,15 @@ export default function ModernWorkspace({
   authHeaders,
   onUnauthorized,
   onOpenMenu,
-  onUseClassic,
   onLogout,
   onOpenFrontend,
   focusAgentId = 0,
   focusApprovalRequestId = '',
+  openSettings = false,
+  openHire = false,
   onFocusConsumed,
   onApprovalFocusConsumed,
+  onHireConsumed,
   onOpenWorkflowRun,
   onOpenGroupChat,
   username = '',
@@ -67,6 +72,7 @@ export default function ModernWorkspace({
   const [groupFilter, setGroupFilter] = useState('')
   const [hireOpen, setHireOpen] = useState(false)
   const [hireGroupOpen, setHireGroupOpen] = useState(false)
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false)
   const [hireFolderId, setHireFolderId] = useState('0')
   const [moreOpen, setMoreOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
@@ -75,6 +81,7 @@ export default function ModernWorkspace({
   const [refreshKey, setRefreshKey] = useState(0)
   const [error, setError] = useState('')
   const [hoverAgent, setHoverAgent] = useState(null)
+  const [, setAgentSessionVersion] = useState(0)
   const accountCloseTimer = useRef(0)
   const moreMenuRef = useRef(null)
 
@@ -91,6 +98,11 @@ export default function ModernWorkspace({
   }
 
   useEffect(() => () => window.clearTimeout(accountCloseTimer.current), [])
+
+  // 左侧数字人菜单与对话区共用实时会话阶段，避免菜单动画停留在默认跳动状态。
+  useEffect(() => subscribeAgentSessions(() => {
+    setAgentSessionVersion((value) => value + 1)
+  }), [])
 
   useEffect(() => {
     if (!moreOpen) return undefined
@@ -137,10 +149,23 @@ export default function ModernWorkspace({
     }
   }, [request])
 
+  const loadFolders = useCallback(async () => {
+    try {
+      const data = await request(`${API}/admin/agent-folders`)
+      setFolders(data.items || [])
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [request])
+
   useEffect(() => {
     loadConversations()
-    request(`${API}/admin/agent-folders`).then((data) => setFolders(data.items || [])).catch((err) => setError(err.message))
-  }, [loadConversations, request])
+    loadFolders()
+  }, [loadConversations, loadFolders])
+
+  useEffect(() => {
+    if (openHire) setHireGroupOpen(true)
+  }, [openHire])
 
   // 最近活跃、终态未读和排序需要跟随任务进度更新，侧栏保持轻量轮询。
   useEffect(() => {
@@ -244,6 +269,7 @@ export default function ModernWorkspace({
         })
       }
       await loadConversations()
+      await loadFolders()
     } catch (err) {
       setError(err.message)
     }
@@ -289,23 +315,42 @@ export default function ModernWorkspace({
             placeholder={t('modern.searchPlaceholder')}
           />
         </label>
-        <label className="modern-group-filter">
-          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label={t('modern.selectGroup')}>
-            <option value="">{t('modern.allGroups')}</option>
-            {groupsAvailable.map((name) => (
-              <option key={name} value={name}>
-                {name === '__ungrouped__' ? ungrouped : name}
-              </option>
-            ))}
-          </select>
-          <ModernIcon name="chevron-down" size={16} />
-        </label>
+        <div className="modern-group-filter-row">
+          <label className="modern-group-filter">
+            <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} aria-label={t('modern.selectGroup')}>
+              <option value="">{t('modern.allGroups')}</option>
+              {groupsAvailable.map((name) => (
+                <option key={name} value={name}>
+                  {name === '__ungrouped__' ? ungrouped : name}
+                </option>
+              ))}
+            </select>
+            <ModernIcon name="chevron-down" size={16} />
+          </label>
+          <button
+            type="button"
+            className="modern-group-manage-btn"
+            onClick={() => setGroupManagerOpen(true)}
+            title={t('modern.manageGroups')}
+            aria-label={t('modern.manageGroups')}
+          >
+            <ModernIcon name="settings" size={16} />
+          </button>
+        </div>
         <div className="modern-recent-scroll">
           {groups.map((group) => (
             <div className="modern-recent-group" key={group.label}>
               <h3>{group.label}</h3>
               {group.items.map((item) => {
-                const state = highestAgentState(item)
+                const session = getAgentSession(item.agent_id)
+                const state = session.loading || session.compressing ? 'running' : highestAgentState(item)
+                const jellyState = state === 'error'
+                  ? 'error'
+                  : state === 'approval'
+                    ? 'waiting'
+                    : state === 'running'
+                      ? jellyStateFromPhase(session.agentPhase, 'working')
+                      : 'idle'
                 return (
                   <div key={item.id} className={`modern-recent-item${selected?.id === item.id ? ' active' : ''}`}>
                     <button type="button" className="modern-recent-main" onClick={() => activateConversation(item)}>
@@ -315,7 +360,7 @@ export default function ModernWorkspace({
                         onMouseEnter={(event) => showAgentTooltip(event, item, state)}
                         onMouseLeave={() => setHoverAgent(null)}
                       >
-                        <JellyAvatar color={resolveJellyColor({ id: item.agent_id, jelly_color: item.jelly_color })} size={24} state={state === 'error' ? 'error' : state === 'approval' ? 'waiting' : state === 'running' ? 'working' : 'idle'} />
+                        <JellyAvatar color={resolveJellyColor({ id: item.agent_id, jelly_color: item.jelly_color })} size={24} state={jellyState} />
                         <span className={`modern-state state-${state}`} />
                       </span>
                       <span><strong>{conversationDisplayTitle(item)}</strong><small>{item.agent_name} · {item.group_name}</small></span>
@@ -359,7 +404,6 @@ export default function ModernWorkspace({
             {accountOpen && (
               <div className="modern-account-menu">
                 <button type="button" onClick={onOpenFrontend}>{t('top.frontendChat')}</button>
-                <button type="button" onClick={onUseClassic}>{t('top.classicStyle')}</button>
                 <hr />
                 <button type="button" className="danger-item" onClick={onLogout}>{t('top.logoutFull')}</button>
               </div>
@@ -433,10 +477,10 @@ export default function ModernWorkspace({
           authHeaders={authHeaders}
           onUnauthorized={onUnauthorized}
           active={showChat}
-          presentation="focus"
           conversationRefreshKey={refreshKey}
-          openHire={hireOpen}
-          onHireConsumed={() => setHireOpen(false)}
+          openHire={hireOpen || openHire}
+          openSettings={openSettings}
+          onHireConsumed={() => { setHireOpen(false); onHireConsumed?.() }}
           onAgentHired={handleAgentHired}
           // 灵动岛深链优先于侧栏当前选中，否则审批跳转会被旧 selected 盖住
           focusAgentId={Number(focusAgentId) > 0 ? focusAgentId : (selected?.agent_id || 0)}
@@ -448,7 +492,7 @@ export default function ModernWorkspace({
         />
       </main>
       {hireGroupOpen && (
-        <div className="modal-mask" onMouseDown={() => setHireGroupOpen(false)}>
+        <div className="modal-mask" onMouseDown={() => { setHireGroupOpen(false); onHireConsumed?.() }}>
           <div className="modal-card modern-hire-group" onMouseDown={(event) => event.stopPropagation()}>
             <h2>{t('modern.pickGroupTitle')}</h2>
             <p className="muted">{t('modern.pickGroupHint')}</p>
@@ -460,12 +504,22 @@ export default function ModernWorkspace({
               </select>
             </label>
             <div className="modal-actions">
-              <button type="button" onClick={() => setHireGroupOpen(false)}>{t('modern.cancel')}</button>
+              <button type="button" onClick={() => { setHireGroupOpen(false); onHireConsumed?.() }}>{t('modern.cancel')}</button>
               <button type="button" className="primary" onClick={() => { setHireGroupOpen(false); setHireOpen(true) }}>{t('modern.enterMarket')}</button>
             </div>
           </div>
         </div>
       )}
+      <AgentGroupManager
+        open={groupManagerOpen}
+        authHeaders={authHeaders}
+        onUnauthorized={onUnauthorized}
+        onClose={() => setGroupManagerOpen(false)}
+        onChanged={async () => {
+          await Promise.all([loadFolders(), loadConversations()])
+          setRefreshKey((value) => value + 1)
+        }}
+      />
       <DismissAgentModal
         open={!!dismissTarget}
         agents={dismissTarget ? [dismissTarget] : []}

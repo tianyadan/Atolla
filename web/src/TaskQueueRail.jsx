@@ -45,6 +45,7 @@ export default function TaskQueueRail({
   active,
   refreshKey = 0,
   onContinue,
+  agentBusy = false,
   open: controlledOpen,
   onOpenChange,
   onBadgeChange,
@@ -63,6 +64,8 @@ export default function TaskQueueRail({
   /** fixed 气泡，避免被抽屉 overflow 裁切 */
   const [tip, setTip] = useState(null)
   const tipHideTimer = useRef(0)
+  const autoResumeTaskRef = useRef('')
+  const onContinueRef = useRef(onContinue)
   const [busy, setBusy] = useState(false)
   const [size, setSize] = useState(() => clampSize(loadSavedSize().w, loadSavedSize().h))
   const dragRef = useRef(null)
@@ -122,6 +125,10 @@ export default function TaskQueueRail({
   useEffect(() => () => window.clearTimeout(tipHideTimer.current), [])
 
   useEffect(() => {
+    onContinueRef.current = onContinue
+  }, [onContinue])
+
+  useEffect(() => {
     if (!open) {
       editingRef.current = false
       setHoverId(null)
@@ -156,6 +163,24 @@ export default function TaskQueueRail({
     return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, agentId, refreshKey])
+
+  // 入队已 claim、但页面刷新或运行时异常发生在 Ask 发出前时，会遗留 running 占位。
+  // 数字人重新空闲后自动调用幂等 continue；后端会拒绝重复派发 executing 项。
+  useEffect(() => {
+    const claimed = view.items.find((item) => item.status === 'running')
+    if (!claimed) {
+      autoResumeTaskRef.current = ''
+      return
+    }
+    if (!active || agentBusy || view.hold || !onContinueRef.current) return
+    const key = `${agentId}:${claimed.id}`
+    if (autoResumeTaskRef.current === key) return
+    autoResumeTaskRef.current = key
+    void Promise.resolve(onContinueRef.current()).then((ok) => {
+      // 请求本身失败时释放锁，下一轮轮询可以重试；成功派发后保持锁直到该 running 消失。
+      if (ok === false && autoResumeTaskRef.current === key) autoResumeTaskRef.current = ''
+    })
+  }, [active, agentBusy, agentId, view.hold, view.items])
 
   // 窗口变化时重新夹紧
   useEffect(() => {

@@ -93,8 +93,10 @@ export function jellyStateFromPhase(phase, fallback = 'working') {
   switch (String(phase || '').toLowerCase()) {
     case 'thinking': return 'ponder'
     // Agent 处理工具和生成回复时统一展示敲电脑动画。
+    case 'tool_call': return 'coding'
     case 'responding': return 'coding'
     case 'working': return 'coding'
+    case 'interaction_query': return 'waiting'
     case 'waiting': return 'waiting'
     case 'error': return 'error'
     case 'idle': return 'idle'

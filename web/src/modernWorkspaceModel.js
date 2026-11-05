@@ -1,7 +1,3 @@
-export function normalizeUIStyle(value) {
-  return value === 'modern' ? 'modern' : 'classic'
-}
-
 export function conversationDisplayTitle(item = {}) {
   return String(item.title || item.preview || '').trim() || '新对话'
 }
