@@ -87,3 +87,16 @@ export function jellyStateFromAgent(agent, opts = {}) {
   }
   return 'idle'
 }
+
+/** 把统一 agent_phase 映射为水母动作；未知阶段保留调用方回退状态。 */
+export function jellyStateFromPhase(phase, fallback = 'working') {
+  switch (String(phase || '').toLowerCase()) {
+    case 'thinking': return 'ponder'
+    case 'responding': return 'typing'
+    case 'working': return 'working'
+    case 'waiting': return 'waiting'
+    case 'error': return 'error'
+    case 'idle': return 'idle'
+    default: return fallback
+  }
+}

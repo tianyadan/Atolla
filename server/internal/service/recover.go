@@ -22,6 +22,34 @@ func activityFromSink(sink AskEventSink) agent.ActivityFn {
 	}
 }
 
+// phaseFromSink 把各 CLI 的统一阶段转成前端可直接消费的 SSE。
+func phaseFromSink(sink AskEventSink, agentID int64) agent.PhaseFn {
+	if sink == nil {
+		return nil
+	}
+	return func(p agent.PhaseEvent) {
+		emitAsk(sink, map[string]any{
+			"type": "agent_phase", "agent_id": agentID,
+			"phase": string(p.Phase), "engine": p.Engine,
+			"source": p.Source, "tool": p.Tool,
+		})
+	}
+}
+
+// finalAgentPhase 只为缺失终态的旧 CLI/fallback 补事件，不覆盖真实终态。
+func finalAgentPhase(last agent.AgentPhase, runErr error) (agent.AgentPhase, bool) {
+	if runErr != nil {
+		if last == agent.PhaseError {
+			return "", false
+		}
+		return agent.PhaseError, true
+	}
+	if last == agent.PhaseIdle || last == agent.PhaseError {
+		return "", false
+	}
+	return agent.PhaseIdle, true
+}
+
 // isTerminalKillErr 进程被超时/信号杀掉。
 func isTerminalKillErr(err error) bool {
 	if err == nil {

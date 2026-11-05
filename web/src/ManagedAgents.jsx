@@ -8,6 +8,7 @@ import {
   assignJellyColor,
   jellyColorPayload,
   jellyStateFromAgent,
+  jellyStateFromPhase,
   resolveJellyColor,
 } from './jellyColor.js'
 import {
@@ -840,12 +841,13 @@ export default function ManagedAgentsPanel({
           loading: true,
           runStartedAt: startedMs,
           liveActivity: local.liveActivity || { tool: '', summary: '后台运行中…', at: Date.now() },
+          agentPhase: local.agentPhase || 'working',
           // 页面刷新会清空模块内存；从服务端 running 状态补回 Runtime Detail 按钮。
           runtimeDetail: restoredRuntime,
         })
       } else if (!remoteBusy && local.loading && !local.abort) {
         patchAgentSession(id, {
-          loading: false, runStartedAt: 0, liveActivity: null, interrupting: false,
+          loading: false, runStartedAt: 0, liveActivity: null, agentPhase: '', interrupting: false,
         })
       }
     }
@@ -1331,6 +1333,8 @@ export default function ManagedAgentsPanel({
           liveActivity: { tool: ev.tool || '', summary: ev.summary || '运行中…', at: Date.now() },
           runtimeDetail: recordRuntimeTool(local.runtimeDetail, ev),
         })
+      } else if (ev.type === 'agent_phase') {
+        patchAgentSession(agentId, { agentPhase: ev.phase || '' })
       } else if (ev.type === 'chunk') {
         const piece = (ev.content || '').replace(/\\n/g, '\n')
         if (!piece) continue
@@ -1352,6 +1356,7 @@ export default function ManagedAgentsPanel({
       } else if (ev.type === 'error') {
         const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
+          agentPhase: 'error',
           runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'failed'),
         })
         setAgentChatLog(agentId, (prev) => {
@@ -1380,6 +1385,7 @@ export default function ManagedAgentsPanel({
       } else if (ev.type === 'done') {
         const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
+          agentPhase: 'idle',
           runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'completed'),
         })
         if (ev.conversation_id) patchAgentSession(agentId, { convId: ev.conversation_id })
@@ -1595,6 +1601,7 @@ export default function ManagedAgentsPanel({
     const startedAt = Date.now()
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
+      agentPhase: 'working',
       taskTokens: 0,
       liveActivity: { tool: '', summary: '启动中…', at: Date.now() },
       runtimeDetail: beginAgentRuntime(startedAt),
@@ -1683,7 +1690,7 @@ export default function ManagedAgentsPanel({
       pendingQueueNextRef.current = null
       patchAgentSession(agentId, {
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
-        interrupting: false, liveActivity: null,
+        interrupting: false, liveActivity: null, agentPhase: '',
         runtimeDetail: finishAgentRuntime(currentSession.runtimeDetail, currentSession.error ? 'failed' : 'completed'),
       })
       setTqRefreshKey((k) => k + 1)
@@ -2414,9 +2421,9 @@ export default function ManagedAgentsPanel({
                     className="ma-avatar ma-avatar-md"
                     color={resolveJellyColor(selected)}
                     size={36}
-                    state={jellyStateFromAgent(selected, {
-                      loading: getAgentSession(selected.id).loading,
-                    })}
+                    state={sess.loading
+                      ? jellyStateFromPhase(sess.agentPhase, 'working')
+                      : jellyStateFromAgent(selected)}
                   />
                   <h3 className="ma-detail-name">
                     {selected.name}
@@ -2579,9 +2586,9 @@ export default function ManagedAgentsPanel({
                             color={resolveJellyColor(selected)}
                             size={16}
                             state={
-                              m.role === 'assistant' && !(m.content || '').trim() && loading && i === chatLog.length - 1
-                                ? 'typing'
-                                : jellyStateFromAgent(selected, { loading })
+                              m.role === 'assistant' && loading && i === chatLog.length - 1
+                                ? jellyStateFromPhase(sess.agentPhase, 'working')
+                                : jellyStateFromAgent(selected)
                             }
                           />
                         )}
@@ -2664,6 +2671,7 @@ export default function ManagedAgentsPanel({
                     activity={sess.liveActivity}
                     runSec={liveRunSec(selected)}
                     taskTokens={sess.taskTokens || 0}
+                    phase={sess.agentPhase}
                     jellyColor={resolveJellyColor(selected)}
                   />
                 )}
@@ -3615,7 +3623,7 @@ function CopyTextButton({ text, className = 'ma-copy-btn' }) {
 }
 
 /** 运行态：跳动水母 + thinking 文案 + token + 工具活动条 */
-function RunStatus({ interrupting, activity, runSec, taskTokens, jellyColor = 'blue' }) {
+function RunStatus({ interrupting, activity, runSec, taskTokens, phase = '', jellyColor = 'blue' }) {
   const [phraseIdx, setPhraseIdx] = useState(0)
   useEffect(() => {
     const t = setInterval(() => {
@@ -3627,7 +3635,12 @@ function RunStatus({ interrupting, activity, runSec, taskTokens, jellyColor = 'b
   return (
     <div className="ma-run-status">
       <div className="ma-thinking" aria-live="polite">
-        <JellyAvatar className="ma-thinking-jelly" color={jellyColor} size={18} state="typing" />
+        <JellyAvatar
+          className="ma-thinking-jelly"
+          color={jellyColor}
+          size={18}
+          state={jellyStateFromPhase(phase, 'working')}
+        />
         <span className="ma-thinking-text">{phrase}</span>
         {runSec > 0 && <span className="ma-thinking-sec">{fmtSec(runSec)}</span>}
         {taskTokens > 0 && <span className="ma-thinking-tokens">{fmtToken(taskTokens)} tokens</span>}

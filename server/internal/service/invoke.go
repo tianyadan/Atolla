@@ -77,6 +77,27 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	// Ensure local CLI sandbox allowlists track DB before engine starts.
 	_ = s.SyncNetworkAllowlistToHome(ctx)
 	engineName := store.RepairEngineName(a.Engine)
+	emitPhase := phaseFromSink(onEvent, a.ID)
+	var lastPhase agent.AgentPhase
+	var onPhase agent.PhaseFn
+	if emitPhase != nil {
+		onPhase = func(p agent.PhaseEvent) {
+			lastPhase = p.Phase
+			emitPhase(p)
+		}
+		onPhase(agent.PhaseEvent{
+			Phase: agent.PhaseWorking, Engine: engineName, Source: agent.PhaseSourceDerived,
+		})
+		defer func() {
+			phase, ok := finalAgentPhase(lastPhase, runErr)
+			if !ok {
+				return
+			}
+			onPhase(agent.PhaseEvent{
+				Phase: phase, Engine: engineName, Source: agent.PhaseSourceDerived,
+			})
+		}()
+	}
 	bin := store.ResolveEngineBin(a.Engine, a.BinPath)
 	if bin == "" {
 		return "", 0, fmt.Errorf("engine binary not configured for %q", engineName)
@@ -201,7 +222,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				TimeoutS: s.Cfg.PermissionWaitSeconds() + 30,
 			}
 		}
-		return r.AskStreamWithImages(ctx, dir, sys, engineQ, history, onChunk, timeout, hook, onActivity, onMeta, resume, claudeImages)
+		return r.AskStreamWithImagesPhase(ctx, dir, sys, engineQ, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resume, claudeImages)
 	case "codex":
 		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
 			agent.EnsureCodexPermissionHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
@@ -235,7 +256,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
 		// 未限制工作区 → danger-full-access；绑定工作区 → workspace-write
 		codexSandbox := agent.CodexSandboxMode(workspaceBound)
-		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact, codexSandbox, hookEnv...)
+		out, ms, err := agent.CodexAskMetaExPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, onCmd, onCompact, codexSandbox, hookEnv...)
 		// thread 在本机已无 rollout：清掉粘着的 session，拼平台历史后无 resume 重试
 		if err != nil && resume != "" && agent.IsCodexResumeGone(err.Error()) {
 			_ = s.Store.ClearConversationEngineMeta(context.WithoutCancel(ctx), metaConv)
@@ -247,7 +268,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				"type":    "system_note",
 				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
 			})
-			return agent.CodexAskMetaEx(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact, codexSandbox, hookEnv...)
+			return agent.CodexAskMetaExPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, "", onCmd, onCompact, codexSandbox, hookEnv...)
 		}
 		return out, ms, err
 	default:
@@ -256,11 +277,14 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
 		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
-		ask := agent.GenericAskMeta
+		var out string
+		var ms int
+		var err error
 		if s.workspaceTrusted(dir) {
-			ask = agent.GenericAskMetaTrusted
+			out, ms, err = agent.GenericAskMetaTrustedPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, hookEnv...)
+		} else {
+			out, ms, err = agent.GenericAskMetaPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, hookEnv...)
 		}
-		out, ms, err := ask(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, hookEnv...)
 		if err == nil || !agent.IsCursorWorkspaceTrustRequired(err.Error()) || s.workspaceTrusted(dir) {
 			return out, ms, err
 		}
@@ -273,7 +297,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			return "", ms, fmt.Errorf("工作区信任未确认（%s）: %s", reason, dir)
 		}
 		s.rememberWorkspaceTrust(dir)
-		return agent.GenericAskMetaTrusted(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, resume, hookEnv...)
+		return agent.GenericAskMetaTrustedPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, hookEnv...)
 	}
 }
 

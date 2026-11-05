@@ -211,6 +211,11 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 // sandbox：Codex -s 模式；未限制工作区时应传 danger-full-access。
 // extraEnv：授权路由 AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承。
 func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox string, extraEnv ...string) (string, int, error) {
+	return CodexAskMetaExPhase(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeThread, onCommand, onCompact, sandbox, extraEnv...)
+}
+
+// CodexAskMetaExPhase 同 CodexAskMetaEx，并转发 Codex JSONL 原生运行阶段。
+func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox string, extraEnv ...string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -253,7 +258,7 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 		args = CodexArgs(dir, prompt, true, sb)
 	}
 
-	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand, onCompact, extraEnv)
+	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onPhase, onCommand, onCompact, extraEnv)
 	if err == nil {
 		return text, int(time.Since(start).Milliseconds()), nil
 	}
@@ -306,7 +311,7 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 
 func runCodexJSONStream(
 	ctx context.Context, bin, dir string, args []string,
-	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onCommand CodexCommandFn, onCompact func(),
+	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, onCommand CodexCommandFn, onCompact func(),
 	extraEnv []string,
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -342,6 +347,11 @@ func runCodexJSONStream(
 		line := sc.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
+		}
+		if onPhase != nil {
+			if phase, ok := ParseCodexPhase(line); ok {
+				onPhase(phase)
+			}
 		}
 		if IsCodexCompactionLine(line) {
 			sawJSON = true

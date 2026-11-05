@@ -7,6 +7,7 @@ import {
   isJellyColor,
   jellyColorPayload,
   jellyStateFromAgent,
+  jellyStateFromPhase,
   normalizeJellyColor,
   resolveJellyColor,
 } from './jellyColor.js'
@@ -65,4 +66,14 @@ test('jellyStateFromAgent 映射', () => {
   assert.equal(jellyStateFromAgent({ status: 'idle' }, { streaming: true }), 'typing')
   assert.equal(jellyStateFromAgent({ status: 'idle' }, { loading: true }), 'working')
   assert.equal(jellyStateFromAgent({ status: 'done' }), 'idle')
+})
+
+test('jellyStateFromPhase 使用思考动画并保留其他运行阶段', () => {
+  assert.equal(jellyStateFromPhase('thinking'), 'ponder')
+  assert.equal(jellyStateFromPhase('working'), 'working')
+  assert.equal(jellyStateFromPhase('responding'), 'typing')
+  assert.equal(jellyStateFromPhase('waiting'), 'waiting')
+  assert.equal(jellyStateFromPhase('error'), 'error')
+  assert.equal(jellyStateFromPhase('idle'), 'idle')
+  assert.equal(jellyStateFromPhase('unknown', 'working'), 'working')
 })

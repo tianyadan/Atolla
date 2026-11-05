@@ -21,6 +21,7 @@ function emptySession() {
     loadingMore: false,
     convId: 0,
     liveActivity: null,
+    agentPhase: '',
     runtimeDetail: null,
     lastRuntimeDetail: null,
     taskTokens: 0,

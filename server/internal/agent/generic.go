@@ -22,12 +22,22 @@ func GenericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // history 保留参数以兼容旧调用；v0.2.18 起调用方应传空，由引擎 resume 维护上下文。
 // extraEnv：AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承，避免同工作区串台。
 func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, false, extraEnv)
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, false, extraEnv)
+}
+
+// GenericAskMetaPhase 同 GenericAskMeta，并转发 Cursor 原生运行阶段。
+func GenericAskMetaPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, false, extraEnv)
 }
 
 // GenericAskMetaTrusted 在用户已确认工作区信任后，为 Cursor Agent 附加 --trust 再执行。
 func GenericAskMetaTrusted(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, true, extraEnv)
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, true, extraEnv)
+}
+
+// GenericAskMetaTrustedPhase 同 GenericAskMetaTrusted，并转发 Cursor 原生运行阶段。
+func GenericAskMetaTrustedPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, true, extraEnv)
 }
 
 // IsCursorWorkspaceTrustRequired 判断 CLI 是否因工作区未信任而中止（无交互模式无法自行确认）。
@@ -56,7 +66,7 @@ func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
 	return append(args, prompt)
 }
 
-func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, trust bool, extraEnv []string) (string, int, error) {
+func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, trust bool, extraEnv []string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -83,7 +93,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 
 	start := time.Now()
 	// 先真流式读 stream-json：中途 assistant 行立刻 onChunk，避免命令已展示而思考压到收尾。
-	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta, extraEnv)
+	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta, onPhase, extraEnv)
 	if streamErr != nil && IsCursorWorkspaceTrustRequired(streamErr.Error()) {
 		return "", int(time.Since(start).Milliseconds()), streamErr
 	}
@@ -125,7 +135,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // runCursorStreamJSON 边读边推送 assistant；result 优先作为最终落库正文。
 func runCursorStreamJSON(
 	ctx context.Context, bin, dir string, args []string,
-	onChunk func(string), onMeta MetaFn, extraEnv []string,
+	onChunk func(string), onMeta MetaFn, onPhase PhaseFn, extraEnv []string,
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	AttachKillable(cmd)
@@ -162,6 +172,11 @@ func runCursorStreamJSON(
 		var m map[string]interface{}
 		if json.Unmarshal([]byte(line), &m) != nil {
 			continue
+		}
+		if onPhase != nil {
+			if phase, ok := ParseCursorPhase([]byte(line)); ok {
+				onPhase(phase)
+			}
 		}
 		if sid := ExtractSessionID(m); sid != "" {
 			meta.SessionID = sid

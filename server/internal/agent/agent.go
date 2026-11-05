@@ -239,6 +239,11 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 
 // AskStreamWithImages 同 AskStream，可附带多模态图片（Claude content image blocks）。
 func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, resumeSession string, images []ImagePart) (string, int, error) {
+	return r.AskStreamWithImagesPhase(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, nil, resumeSession, images)
+}
+
+// AskStreamWithImagesPhase 同 AskStreamWithImages，并转发 Claude 原生运行阶段。
+func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, images []ImagePart) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -314,6 +319,11 @@ func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, que
 		line := scanner.Text()
 		if line == "" {
 			continue
+		}
+		if onPhase != nil {
+			if phase, ok := ParseClaudePhase([]byte(line)); ok {
+				onPhase(phase)
+			}
 		}
 		if meta, ok := ParseClaudeStreamMeta([]byte(line)); ok {
 			if meta.SessionID != "" {
