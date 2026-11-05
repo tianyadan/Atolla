@@ -92,8 +92,9 @@ export function jellyStateFromAgent(agent, opts = {}) {
 export function jellyStateFromPhase(phase, fallback = 'working') {
   switch (String(phase || '').toLowerCase()) {
     case 'thinking': return 'ponder'
-    case 'responding': return 'typing'
-    case 'working': return 'working'
+    // Agent 处理工具和生成回复时统一展示敲电脑动画。
+    case 'responding': return 'coding'
+    case 'working': return 'coding'
     case 'waiting': return 'waiting'
     case 'error': return 'error'
     case 'idle': return 'idle'
