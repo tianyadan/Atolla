@@ -23,12 +23,13 @@ test('pickSpriteScale 按尺寸选密度', () => {
   assert.equal(pickSpriteScale(16, 2), 2)
 })
 
-test('JELLY_ACTION_ROWS 为 8（含 ponder 第 8 行）', () => {
-  assert.equal(JELLY_ACTION_ROWS, 8)
+test('JELLY_ACTION_ROWS 为 9（含 coding 第 9 行）', () => {
+  assert.equal(JELLY_ACTION_ROWS, 9)
   assert.equal(JELLY_ACTION_ROW.ponder, 7)
+  assert.equal(JELLY_ACTION_ROW.coding, 8)
 })
 
-test('jellyActionRow 映射既有动作与 ponder', () => {
+test('jellyActionRow 映射既有动作与 coding', () => {
   assert.equal(jellyActionRow('idle'), 0)
   assert.equal(jellyActionRow('working'), 1)
   assert.equal(jellyActionRow('typing'), 1)
@@ -38,6 +39,9 @@ test('jellyActionRow 映射既有动作与 ponder', () => {
   assert.equal(jellyActionRow('error'), 5)
   assert.equal(jellyActionRow('celebrate'), 6)
   assert.equal(jellyActionRow('ponder'), 7)
-  // working 仍指向 typing，不映射到 ponder
+  assert.equal(jellyActionRow('coding'), 8)
+  // working 仍指向 typing，不映射到 coding / ponder
   assert.notEqual(jellyActionRow('working'), JELLY_ACTION_ROW.ponder)
+  assert.notEqual(jellyActionRow('working'), JELLY_ACTION_ROW.coding)
+  assert.notEqual(jellyActionRow('typing'), JELLY_ACTION_ROW.coding)
 })
