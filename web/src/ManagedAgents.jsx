@@ -1553,6 +1553,10 @@ export default function ManagedAgentsPanel({
         console.warn('ask post-refresh failed', postErr)
       }
     } catch (err) {
+      // 已被新一轮 Ask 接管时，旧流的 Abort 不写「已停止」、不收尾会话态。
+      if (getAgentSession(agentId).abort !== ac) {
+        return
+      }
       if (err?.name === 'AbortError') {
         patchAgentSession(agentId, {
           runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'interrupted'),
@@ -1579,6 +1583,10 @@ export default function ManagedAgentsPanel({
       }
     } finally {
       const currentSession = getAgentSession(agentId)
+      // 打断后立刻发起的新 Ask 会换掉 abort；旧请求不得清掉新一轮 loading / 活动态。
+      if (currentSession.abort !== ac) {
+        return
+      }
       const pending = currentSession.pendingInterrupt
       const pendingAtts = currentSession.pendingAttachments || []
       const queueNext = pendingQueueNextRef.current
@@ -1750,7 +1758,7 @@ export default function ManagedAgentsPanel({
     await sendQuestion(id, q, atts)
   }
 
-  /** 弹层：打断并优先执行 */
+  /** 弹层：打断并优先执行（取消当前、直发，不入队） */
   async function onTqInterrupt() {
     if (!selected || !tqChoice || tqChoiceBusy) return
     const id = selected.id
@@ -1767,10 +1775,12 @@ export default function ManagedAgentsPanel({
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || `打断失败(${res.status})`)
       setTqChoice(null)
-      const s = getAgentSession(id)
-      s.abort?.abort()
+      // 先开新 Ask（换掉 abort），再中止旧流，避免旧 finally 清掉第二轮 loading。
+      const prevAbort = getAgentSession(id).abort
+      const sendPromise = sendQuestion(id, q, atts)
+      prevAbort?.abort()
       setTqRefreshKey((k) => k + 1)
-      await sendQuestion(id, q, atts, { taskId: d.id })
+      await sendPromise
     } catch (err) {
       patchAgentSession(id, { error: String(err.message || err) })
     } finally {

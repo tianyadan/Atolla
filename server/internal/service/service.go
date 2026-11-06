@@ -13,7 +13,6 @@ import (
 	"atolla/server/config"
 	"atolla/server/internal/agent"
 	"atolla/server/internal/auth"
-	"atolla/server/internal/browsercontrol"
 	"atolla/server/internal/dbquery"
 	"atolla/server/internal/notify"
 	"atolla/server/internal/permission"
@@ -51,7 +50,6 @@ type Service struct {
 	WF           *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
-	Browser      *browsercontrol.Broker
 	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
 	remoteBridgeParent   context.Context
 	remoteBridgeCancel   context.CancelFunc
@@ -103,7 +101,6 @@ func New(cfg config.Config, st *store.Store) *Service {
 		compactPending:        &sync.Map{},
 		liveAssist:            &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
-		Browser:               browsercontrol.New(cfg.BrowserToken, cfg.BrowserAllowedDomains, cfg.BrowserAllowRemote),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
 	svc.Sched = NewScheduler(svc)

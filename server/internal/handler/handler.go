@@ -36,15 +36,6 @@ func (h *Handler) clientIP(c *gin.Context) string {
 func (h *Handler) Register(r *gin.Engine) {
 	api := r.Group("/api")
 	{
-		// Chrome MV3 浏览器控制：默认仅本机访问，REST 与 WebSocket 分别校验同一 Token。
-		browser := api.Group("/browser")
-		browser.Use(h.requireBrowserLocal())
-		browser.GET("/ws", h.BrowserControlWebSocket)
-		browserAuth := browser.Group("")
-		browserAuth.Use(h.requireBrowserToken())
-		browserAuth.GET("/status", h.BrowserControlStatus)
-		browserAuth.POST("/tasks", h.BrowserControlTask)
-
 		// 认证
 		api.POST("/auth/login", h.Login)
 		api.POST("/auth/register", h.RegisterAdmin)

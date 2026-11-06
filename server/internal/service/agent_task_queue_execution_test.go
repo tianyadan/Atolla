@@ -37,6 +37,37 @@ func TestBeginTaskQueueExecutionRejectsDuplicateAndCompletedTask(t *testing.T) {
 	}
 }
 
+func TestInterruptPreferCancelsRunningWithoutEnqueue(t *testing.T) {
+	st, err := store.NewWithDriver(store.DriverSQLite, filepath.Join(t.TempDir(), "queue-interrupt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{Store: st}
+	ctx := context.Background()
+	agentID, err := st.CreateManagedAgent(ctx, store.ManagedAgentInput{Name: "tq", Engine: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runningID, err := st.InsertAgentTaskQueue(ctx, store.AgentTaskQueueItem{
+		AgentID: agentID, Status: store.TaskRunning, Question: "旧任务", Position: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := svc.InterruptPreferAgentTask(ctx, agentID, "插话立刻执行", nil)
+	if err != nil || item != nil {
+		t.Fatalf("interrupt should not enqueue, item=%+v err=%v", item, err)
+	}
+	got, err := st.GetAgentTaskQueueItem(ctx, runningID)
+	if err != nil || got == nil || got.Status != store.TaskCancelled {
+		t.Fatalf("running should be cancelled, got=%+v err=%v", got, err)
+	}
+	active, err := st.CountAgentTaskActive(ctx, agentID)
+	if err != nil || active != 0 {
+		t.Fatalf("active=%d err=%v, want 0", active, err)
+	}
+}
+
 func TestContinueTaskQueueDoesNotRedispatchExecutingTask(t *testing.T) {
 	st, err := store.NewWithDriver(store.DriverSQLite, filepath.Join(t.TempDir(), "queue-continue.db"))
 	if err != nil {

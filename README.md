@@ -59,16 +59,6 @@ cp .env.example .env
 | SQLite（默认） | `./data/atolla.db` |
 | MySQL（可选） | `127.0.0.1:3307` |
 
-## Chrome 浏览器控制（可选）
-
-仓库内置轻量级 Manifest V3 扩展，可通过 Go REST API 获取标签页、打开白名单网页、读写 DOM，并可复用已登录的 ChatGPT 网页直接收发消息，全程不调用额外模型。默认只允许本机访问且必须配置独立 Token：
-
-```bash
-./scripts/start-browser-control.sh
-```
-
-安装、权限、安全边界与 curl 示例见 [browser-extension/README.md](browser-extension/README.md)。
-
 ## 技术栈
 
 Go（Gin）· React（Vite）· SQLite（默认）/ MySQL 8（可选）· 本机 CLI 引擎

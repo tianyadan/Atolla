@@ -48,17 +48,13 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		}
 		switch mode {
 		case "interrupt":
-			item, ierr := s.InterruptPreferAgentTask(ctx, agentID, q, tqAtts)
-			if ierr != nil {
+			if _, ierr := s.InterruptPreferAgentTask(ctx, agentID, q, tqAtts); ierr != nil {
 				return ierr
-			}
-			taskID := int64(0)
-			if item != nil {
-				taskID = item.ID
 			}
 			go func() {
 				bg := context.Background()
-				_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{TaskID: taskID})
+				// 打断后直发，不挂 task_id，避免插话写入队列轨。
+				_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{})
 				if askErr != nil {
 					log.Printf("remotebridge agent.ask interrupt agent=%d: %v", agentID, askErr)
 				}
@@ -66,7 +62,7 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 					s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
 				}
 			}()
-			log.Printf("remotebridge agent.ask agent=%d: busy -> interrupt task=%d", agentID, taskID)
+			log.Printf("remotebridge agent.ask agent=%d: busy -> interrupt direct", agentID)
 			return nil
 		case "direct":
 			return fmt.Errorf("agent busy")

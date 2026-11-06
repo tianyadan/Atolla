@@ -49,11 +49,6 @@ type Config struct {
 	ContextWindowClaude int64
 	ContextWindowCodex  int64
 	ContextWindowCursor int64
-
-	// Chrome MV3 浏览器控制扩展；Token 为空时模块保持禁用。
-	BrowserToken          string
-	BrowserAllowedDomains []string
-	BrowserAllowRemote    bool
 }
 
 func getenv(key, def string) string {
@@ -120,21 +115,7 @@ func Load() Config {
 		ContextWindowClaude: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "1000000"))),
 		ContextWindowCodex:  int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CODEX", "200000"))),
 		ContextWindowCursor: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CURSOR", "200000"))),
-
-		BrowserToken:          strings.TrimSpace(getenv("AVATAR_BROWSER_TOKEN", "")),
-		BrowserAllowedDomains: splitCSV(getenv("AVATAR_BROWSER_ALLOWED_DOMAINS", "localhost,127.0.0.1,chatgpt.com,chat.openai.com")),
-		BrowserAllowRemote:    getenv("AVATAR_BROWSER_ALLOW_REMOTE", "0") == "1",
 	}
-}
-
-func splitCSV(raw string) []string {
-	out := make([]string, 0)
-	for _, item := range strings.Split(raw, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			out = append(out, item)
-		}
-	}
-	return out
 }
 
 // ContextWindowForEngine 返回引擎默认上下文窗口；未知引擎回退 Claude 窗口。

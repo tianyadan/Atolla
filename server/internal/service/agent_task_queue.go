@@ -8,7 +8,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"atolla/server/internal/store"
 )
@@ -194,7 +193,8 @@ func (s *Service) claimNextIfIdleLocked(ctx context.Context, agentID int64) *sto
 	return next
 }
 
-// InterruptPreferAgentTask 打断当前 → paused，登记紧急任务为 running，由调用方发起 Ask。
+// InterruptPreferAgentTask 打断当前执行并立刻让位给调用方直发 Ask。
+// 不入队、不暂停：当前 running 标 cancelled；仅「加入队列」才写 queued。
 func (s *Service) InterruptPreferAgentTask(ctx context.Context, agentID int64, question string, atts []TaskQueueAttachment) (*store.AgentTaskQueueItem, error) {
 	question = strings.TrimSpace(question)
 	if question == "" && len(atts) == 0 {
@@ -203,73 +203,27 @@ func (s *Service) InterruptPreferAgentTask(ctx context.Context, agentID int64, q
 	unlock := s.taskQueueLock(agentID)
 	defer unlock()
 
-	a, err := s.Store.GetManagedAgent(ctx, agentID)
-	if err != nil || a == nil {
+	if a, err := s.Store.GetManagedAgent(ctx, agentID); err != nil || a == nil {
 		return nil, fmt.Errorf("agent not found")
 	}
 	occ, _ := s.Store.GetOccupancy(ctx, agentID)
 	if OccupancyBlocksUserChat(occ) {
 		return nil, ErrTaskQueueLocked
 	}
-	pausedN, err := s.Store.CountAgentTaskPaused(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	if pausedN >= store.TaskQueueMaxPaused {
-		return nil, ErrTaskQueuePauseFull
-	}
-	active, err := s.Store.CountAgentTaskActive(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	// 打断会多一条紧急 running；若已满且当前无 running 可替换则拒
 	running, err := s.Store.GetRunningAgentTask(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
-	if running == nil && active >= store.TaskQueueMaxActive {
-		return nil, ErrTaskQueueFull
-	}
 	if running != nil {
-		rank, err := s.Store.NextAgentTaskPauseRank(ctx, agentID)
-		if err != nil {
+		// 打断=放弃当前队列表项，不paused进轨，避免用户以为「插话进了队列」。
+		if _, err := s.Store.CompleteAgentTaskRunning(ctx, running.ID, store.TaskCancelled, "interrupted by user"); err != nil {
 			return nil, err
-		}
-		if ok, err := s.Store.PauseAgentTaskRunning(ctx, running.ID, rank); err != nil {
-			return nil, err
-		} else if !ok {
-			// 竞态：无 running 了
-			running = nil
 		}
 	}
-	// 停引擎；不走 StopManaged 的 cancelled+hold（打断要自动续）
+	// 停引擎；不 hold，便于后续仍可续跑用户此前主动入队的项。
 	s.stopManagedForInterrupt(agentID)
 	_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, false)
-
-	attJSON, err := marshalTaskAtts(atts)
-	if err != nil {
-		return nil, err
-	}
-	// 打断项也占新 position：展示时「越新越靠前」，不因 position=0 沉底
-	pos, err := s.Store.NextAgentTaskPosition(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	id, err := s.Store.InsertAgentTaskQueue(ctx, store.AgentTaskQueueItem{
-		AgentID:         agentID,
-		ConversationID:  a.ConversationID,
-		Status:          store.TaskRunning,
-		Question:        question,
-		AttachmentsJSON: attJSON,
-		Position:        pos,
-		StartedAt:       &now,
-		SilentNotify:    false,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.Store.GetAgentTaskQueueItem(ctx, id)
+	return nil, nil
 }
 
 // FinishAgentTaskAndPeekNext Ask 结束后幂等收尾；若未 hold 则 claim 下一条（不自动开跑）。
