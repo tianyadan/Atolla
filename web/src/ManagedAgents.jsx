@@ -2527,7 +2527,13 @@ export default function ManagedAgentsPanel({
         <div className="modal-mask" onClick={() => !busy && setCreateOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={createAgent}>
             <h2>自定义招聘</h2>
-            <JellyColorPicker value={newJellyColor} onChange={setNewJellyColor} disabled={busy} />
+            <JellyColorPicker
+              value={newJellyColor}
+              onChange={setNewJellyColor}
+              disabled={busy}
+              label="水母颜色"
+              previewSize={64}
+            />
             <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
               引擎
@@ -2566,11 +2572,14 @@ export default function ManagedAgentsPanel({
         <div className="modal-mask" onClick={() => !busy && setCopyOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={copyAgent}>
             <h2>复制数字员工</h2>
-            <div className="ma-avatar-edit">
-              <JellyAvatar color={copyJellyColor} size={36} state="idle" />
-              <p className="muted" style={{ margin: 0 }}>默认同源色，可改；不选则后端按新 id 分配。</p>
-            </div>
-            <JellyColorPicker value={copyJellyColor} onChange={setCopyJellyColor} disabled={busy} />
+            <p className="muted" style={{ margin: '0 0 8px' }}>默认同源色，可改；不选则后端按新 id 分配。</p>
+            <JellyColorPicker
+              value={copyJellyColor}
+              onChange={setCopyJellyColor}
+              disabled={busy}
+              label="水母颜色"
+              previewSize={56}
+            />
             <label>
               新名称
               <input value={copyName} onChange={(e) => setCopyName(e.target.value)} disabled={busy} autoFocus />
@@ -2624,12 +2633,13 @@ export default function ManagedAgentsPanel({
             {settingsTab === 'basic' ? (
               <form className="ma-settings-form" onSubmit={(e) => { e.preventDefault(); saveRules() }}>
                 <section className="ma-settings-section">
-                  <div className="ma-avatar-edit">
-                    <JellyAvatar color={jellyColorDraft} size={56} state="idle" />
-                    <div className="ma-avatar-actions">
-                      <JellyColorPicker value={jellyColorDraft} onChange={setJellyColorDraft} disabled={busy} label="水母颜色" />
-                    </div>
-                  </div>
+                  <JellyColorPicker
+                    value={jellyColorDraft}
+                    onChange={setJellyColorDraft}
+                    disabled={busy}
+                    label="水母颜色"
+                    previewSize={64}
+                  />
                   <div className="ma-settings-grid">
                     <label>
                       名称

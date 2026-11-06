@@ -281,13 +281,11 @@ export function AgentSettingsSheet({
                 引擎 <strong>{settings.engine || '—'}</strong>
                 {settings.skill_count > 0 ? ` · 技能 ${settings.skill_count}` : null}
               </p>
-              <div className="settings-jelly-preview">
-                <JellyAvatar color={jellyDraft} size={56} state="idle" />
-              </div>
               <JellyColorPicker
                 value={jellyDraft}
                 disabled={busy}
                 label="水母颜色"
+                previewSize={64}
                 onChange={(c) => {
                   setJellyDraft(c)
                   setOkMsg(null)

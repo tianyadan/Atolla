@@ -188,12 +188,6 @@ export default function TalentMarket({
           <>
             <div className="tm-head">
               <div className="tm-detail-identity">
-                <JellyAvatar
-                  className="tm-avatar tm-avatar-lg"
-                  color={jellyColor}
-                  size={44}
-                  state="idle"
-                />
                 <div>
                   <h2>{detail.name}</h2>
                   <p className="tm-title">{detail.title}</p>
@@ -224,7 +218,13 @@ export default function TalentMarket({
               <pre className="tm-prompt">{detail.rules_prompt}</pre>
               <p className="muted tm-hint">招聘后可在员工设置中随时修改提示词与技能。</p>
             </div>
-            <JellyColorPicker value={jellyColor} onChange={setJellyColor} disabled={busy} />
+            <JellyColorPicker
+              value={jellyColor}
+              onChange={setJellyColor}
+              disabled={busy}
+              label="水母颜色"
+              previewSize={56}
+            />
             <div className="tm-form-row">
               <label>
                 显示名称
