@@ -149,7 +149,13 @@
     "blue": 212,
     "green": 140,
     "purple": 262,
-    "red": 352
+    "red": 352,
+    "cyan": 185,
+    "teal": 168,
+    "pink": 330,
+    "lime": 88,
+    "coral": 14,
+    "sky": 198
   },
   "scales": [
     1,
@@ -165,7 +171,13 @@
       "blue",
       "green",
       "purple",
-      "red"
+      "red",
+      "cyan",
+      "teal",
+      "pink",
+      "lime",
+      "coral",
+      "sky"
     ],
     "existing_pr4_rows": {
       "float": "idle",

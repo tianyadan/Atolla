@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name            VARCHAR(128)   NOT NULL,
   avatar_url      VARCHAR(512)   NULL,
-  jelly_color     VARCHAR(16)    NOT NULL DEFAULT '', -- orange|yellow|blue|green|purple|red
+  jelly_color     VARCHAR(16)    NOT NULL DEFAULT '', -- orange|yellow|blue|green|purple|red|cyan|teal|pink|lime|coral|sky
   folder_id       INTEGER         NULL,
   engine          VARCHAR(32)    NOT NULL,           -- claude | codex | agent
   context_window_tokens INTEGER NOT NULL DEFAULT 1000000, -- display denominator only

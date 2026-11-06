@@ -8,19 +8,23 @@
 |------|------|------|
 | `jelly_color` | string | 小水母颜色，必有合法取值 |
 
-**合法取值（仅此六种）：** `orange` / `yellow` / `blue` / `green` / `purple` / `red`
+**合法取值（十二种）：**
+- 原有六色：`orange` / `yellow` / `blue` / `green` / `purple` / `red`
+- 新增六色（暗色 UI 高对比，无黑/近黑）：`cyan` / `teal` / `pink` / `lime` / `coral` / `sky`
 
-非法值接口返回 **400**，错误信息：`jelly_color must be orange|yellow|blue|green|purple|red`。
+非法值接口返回 **400**，错误信息：`jelly_color must be orange|yellow|blue|green|purple|red|cyan|teal|pink|lime|coral|sky`。
+
+已保存的旧色值仍然合法；本扩展只增加可选色，不改 API 字段名。
 
 ## 自动分配
 
 创建时若不传 `jelly_color`，后端按员工 `id` 稳定轮转：
 
 ```
-color = ["orange","yellow","blue","green","purple","red"][id % 6]
+color = ["orange","yellow","blue","green","purple","red","cyan","teal","pink","lime","coral","sky"][id % 12]
 ```
 
-已有员工在迁移 / 启动幂等补齐时用同一规则回填。
+已有员工在迁移 / 启动幂等补齐时：空或非法色用同一规则回填；已写入的合法色保持不变。
 
 ## 接口示例
 
@@ -75,5 +79,10 @@ color = ["orange","yellow","blue","green","purple","red"][id % 6]
 ## 数据库
 
 - 全量建表：`db/schema.sql` 中 `managed_agents.jelly_color`
-- 增量：`db/migrate_v0.5.10.sql`
+- 增量：`db/migrate_v0.5.10.sql`（历史六色回填；新色由应用层校验/分配）
 - 启动时 `Store.EnsureJellyColorSchema` 幂等加列并回填空/非法色
+
+## 素材
+
+- 精灵表：`web/public/jelly-sprites/jelly-{color}@{16,32,48}.png`（九行动作，无新增 action）
+- 设计预览：`design/jelly-colors-expand/`（含 `new-six-idle.png` 与 idle gif）

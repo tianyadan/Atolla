@@ -5,7 +5,20 @@ import { JELLY_COLORS, assignJellyColor } from './jellyColor.js'
 
 const DEMO_AGENTS = JELLY_COLORS.map((color, i) => ({
   id: i + 1,
-  name: ({ orange: '橙汁同学', yellow: '柠檬 intern', blue: '蓝莓助手', green: '青苔运维', purple: '紫晶助理', red: '赤焰销售' })[color],
+  name: ({
+    orange: '橙汁同学',
+    yellow: '柠檬 intern',
+    blue: '蓝莓助手',
+    green: '青苔运维',
+    purple: '紫晶助理',
+    red: '赤焰销售',
+    cyan: '青空 intern',
+    teal: '海藻运维',
+    pink: '樱花助理',
+    lime: '青柠同学',
+    coral: '珊瑚销售',
+    sky: '晴空助手',
+  })[color],
   jelly_color: color,
   status: i === 4 ? 'running' : 'idle',
 }))
@@ -66,7 +79,7 @@ export default function JellyPreview() {
       </section>
 
       <section style={{ maxWidth: 520, marginBottom: 24 }} data-shot="coding-colors">
-        <h2 style={{ fontSize: 16, marginBottom: 12 }}>coding 写代码 · 六色</h2>
+        <h2 style={{ fontSize: 16, marginBottom: 12 }}>coding 写代码 · 十二色</h2>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
           {JELLY_COLORS.map((c) => (
             <div key={c} style={{ textAlign: 'center' }}>
@@ -78,7 +91,7 @@ export default function JellyPreview() {
       </section>
 
       <section style={{ maxWidth: 520, marginBottom: 24 }} data-shot="ponder-colors">
-        <h2 style={{ fontSize: 16, marginBottom: 12 }}>ponder 思考 · 六色</h2>
+        <h2 style={{ fontSize: 16, marginBottom: 12 }}>ponder 思考 · 十二色</h2>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
           {JELLY_COLORS.map((c) => (
             <div key={c} style={{ textAlign: 'center' }}>

@@ -17,7 +17,7 @@ type Props = {
   label?: string
 }
 
-/** 六色水母选择行 */
+/** 十二色水母选择行 */
 export function JellyColorPicker({
   value,
   onChange,

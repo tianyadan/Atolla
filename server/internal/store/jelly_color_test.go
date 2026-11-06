@@ -17,7 +17,7 @@ func TestValidJellyColor(t *testing.T) {
 			t.Fatalf("case %q", c)
 		}
 	}
-	for _, bad := range []string{"", "pink", "ORANGE!", "teal", "blueish"} {
+	for _, bad := range []string{"", "black", "ORANGE!", "charcoal", "blueish", "navy"} {
 		if ValidJellyColor(bad) {
 			t.Fatalf("expected invalid %q", bad)
 		}
@@ -39,23 +39,32 @@ func TestNormalizeJellyColor(t *testing.T) {
 	if NormalizeJellyColor(" Blue ") != "blue" {
 		t.Fatal(NormalizeJellyColor(" Blue "))
 	}
-	if NormalizeJellyColor("cyan") != "" {
-		t.Fatal("cyan should normalize empty")
+	if NormalizeJellyColor(" Cyan ") != "cyan" {
+		t.Fatal(NormalizeJellyColor(" Cyan "))
+	}
+	if NormalizeJellyColor("black") != "" {
+		t.Fatal("black should normalize empty")
 	}
 }
 
 func TestAssignJellyColorStableRotation(t *testing.T) {
-	// 与 migrate_v0.5.10.sql 的 ELT(MOD(id,6)+1, ...) 对齐。
+	// 与 12 色轮转对齐：id % 12。
 	want := map[int64]string{
-		0: "orange",
-		1: "yellow",
-		2: "blue",
-		3: "green",
-		4: "purple",
-		5: "red",
-		6: "orange",
-		7: "yellow",
+		0:  "orange",
+		1:  "yellow",
+		2:  "blue",
+		3:  "green",
+		4:  "purple",
+		5:  "red",
+		6:  "cyan",
+		7:  "teal",
+		8:  "pink",
+		9:  "lime",
+		10: "coral",
+		11: "sky",
 		12: "orange",
+		13: "yellow",
+		24: "orange",
 	}
 	for id, c := range want {
 		if got := AssignJellyColor(id); got != c {
@@ -67,11 +76,11 @@ func TestAssignJellyColorStableRotation(t *testing.T) {
 	}
 	// 连续 id 应轮转分散。
 	seen := map[string]bool{}
-	for id := int64(1); id <= 6; id++ {
+	for id := int64(0); id < 12; id++ {
 		seen[AssignJellyColor(id)] = true
 	}
-	if len(seen) != 6 {
-		t.Fatalf("want 6 distinct in a cycle, got %d", len(seen))
+	if len(seen) != 12 {
+		t.Fatalf("want 12 distinct in a cycle, got %d", len(seen))
 	}
 }
 
@@ -84,20 +93,27 @@ func TestResolveJellyColor(t *testing.T) {
 	if err != nil || got != "red" {
 		t.Fatalf("explicit: %q %v", got, err)
 	}
-	_, err = ResolveJellyColor(2, "pink")
+	got, err = ResolveJellyColor(2, "coral")
+	if err != nil || got != "coral" {
+		t.Fatalf("explicit new: %q %v", got, err)
+	}
+	_, err = ResolveJellyColor(2, "black")
 	if !errors.Is(err, ErrInvalidJellyColor) {
 		t.Fatalf("want ErrInvalidJellyColor, got %v", err)
 	}
 }
 
 func TestBackfillJellyColorAssignmentMatchesSQL(t *testing.T) {
-	// 文档/迁移约定：空色回填 = AssignJellyColor(id)。
-	for id := int64(0); id < 24; id++ {
+	// 文档/迁移约定：空色回填 = AssignJellyColor(id)（现为 id % 12）。
+	if len(JellyColors) != 12 {
+		t.Fatalf("want 12 colors, got %d", len(JellyColors))
+	}
+	for id := int64(0); id < 36; id++ {
 		c := AssignJellyColor(id)
 		if !ValidJellyColor(c) {
 			t.Fatalf("assigned invalid for %d", id)
 		}
-		idx := int(id % 6)
+		idx := int(id % 12)
 		if c != JellyColors[idx] {
 			t.Fatalf("id=%d", id)
 		}

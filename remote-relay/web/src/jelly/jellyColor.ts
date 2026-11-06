@@ -1,6 +1,19 @@
 /** 像素水母颜色：与 PC / 后端 jelly_color 对齐 */
 
-export const JELLY_COLORS = ['orange', 'yellow', 'blue', 'green', 'purple', 'red'] as const
+export const JELLY_COLORS = [
+  'orange',
+  'yellow',
+  'blue',
+  'green',
+  'purple',
+  'red',
+  'cyan',
+  'teal',
+  'pink',
+  'lime',
+  'coral',
+  'sky',
+] as const
 
 export type JellyColor = (typeof JELLY_COLORS)[number]
 
@@ -18,13 +31,14 @@ export function normalizeJellyColor(value: unknown): JellyColor | '' {
 }
 
 /**
- * 与后端 AssignJellyColor 一致：数值 id 用 id % 6；
- * 非数值 id 用稳定哈希再 mod 6。
+ * 与后端 AssignJellyColor 一致：数值 id 用 id % 12；
+ * 非数值 id 用稳定哈希再 mod 12。
+ * 顺序：0=orange … 5=red, 6=cyan, 7=teal, 8=pink, 9=lime, 10=coral, 11=sky
  */
 export function assignJellyColor(id: string | number | null | undefined): JellyColor {
   const n = Number(id)
   if (Number.isFinite(n) && Number.isInteger(n)) {
-    const idx = ((n % 6) + 6) % 6
+    const idx = ((n % 12) + 12) % 12
     return JELLY_COLORS[idx]
   }
   const s = String(id ?? '')
@@ -33,7 +47,7 @@ export function assignJellyColor(id: string | number | null | undefined): JellyC
     h ^= s.charCodeAt(i)
     h = Math.imul(h, 16777619)
   }
-  return JELLY_COLORS[Math.abs(h) % 6]
+  return JELLY_COLORS[Math.abs(h) % 12]
 }
 
 /** 从员工 / mirror payload 解析展示色 */

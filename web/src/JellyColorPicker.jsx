@@ -11,7 +11,7 @@ const COLOR_LABEL = {
 }
 
 /**
- * 六色水母选择行（创建 / 编辑员工头像）。
+ * 十二色水母选择行（创建 / 编辑员工头像）。
  * @param {{
  *   value: string,
  *   onChange: (color: string) => void,

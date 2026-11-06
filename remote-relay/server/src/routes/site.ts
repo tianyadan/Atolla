@@ -99,14 +99,42 @@ const settingsUpdateBodySchema = z.object({
   rules_prompt: z.string(),
   /** Optional pixel jelly color; omit to leave unchanged on Mac */
   jelly_color: z
-    .enum(['orange', 'yellow', 'blue', 'green', 'purple', 'red'])
+    .enum([
+      'orange',
+      'yellow',
+      'blue',
+      'green',
+      'purple',
+      'red',
+      'cyan',
+      'teal',
+      'pink',
+      'lime',
+      'coral',
+      'sky',
+    ])
     .optional(),
 })
 
 const agentCreateBodySchema = z.object({
   name: z.string().min(1).max(80),
   engine: z.enum(['claude', 'codex', 'agent']),
-  jelly_color: z.enum(['orange', 'yellow', 'blue', 'green', 'purple', 'red']).optional(),
+  jelly_color: z
+    .enum([
+      'orange',
+      'yellow',
+      'blue',
+      'green',
+      'purple',
+      'red',
+      'cyan',
+      'teal',
+      'pink',
+      'lime',
+      'coral',
+      'sky',
+    ])
+    .optional(),
 })
 
 const skillInstallBodySchema = z.object({
