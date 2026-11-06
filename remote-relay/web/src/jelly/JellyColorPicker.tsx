@@ -11,10 +11,10 @@ export const JELLY_COLOR_LABEL: Record<JellyColor, string> = {
   green: '绿',
   purple: '紫',
   red: '红',
-  cyan: '青蓝',
+  cyan: '青',
   teal: '青绿',
   pink: '粉',
-  lime: '柠',
+  lime: '柠绿',
   coral: '珊瑚',
   sky: '天蓝',
 }
