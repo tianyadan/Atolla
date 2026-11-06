@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Atolla Browser Test</title></head>
+<body>
+  <label>姓名 <input id="name" type="text"></label>
+  <button id="apply" type="button">应用</button>
+  <output id="output">等待输入</output>
+  <script>
+    document.querySelector('#apply').addEventListener('click', () => {
+      document.querySelector('#output').textContent = `已输入：${document.querySelector('#name').value}`
+    })
+  </script>
+</body>
+</html>

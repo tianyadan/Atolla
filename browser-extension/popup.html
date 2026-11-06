@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Atolla Browser Control</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup-page">
+  <main class="popup-card">
+    <div class="popup-heading"><span class="status-dot" id="status-dot"></span><strong>Atolla Browser Control</strong></div>
+    <p id="status-text">正在读取状态…</p>
+    <p class="domains" id="domains"></p>
+    <div class="actions">
+      <button id="reconnect" type="button">重新连接</button>
+      <button id="options" type="button" class="secondary">设置</button>
+    </div>
+  </main>
+  <script type="module" src="popup.mjs"></script>
+</body>
+</html>

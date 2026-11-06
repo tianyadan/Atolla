@@ -69,6 +69,9 @@ func (s *Service) StopRemoteBridge() {
 func (s *Service) Shutdown() {
 	s.remoteBridgeShutdown.Do(func() {
 		s.StopRemoteBridge()
+		if s.Browser != nil {
+			s.Browser.Close()
+		}
 	})
 }
 

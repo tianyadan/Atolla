@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Atolla Browser Control",
+  "version": "0.2.1",
+  "description": "Atolla 本地浏览器控制模块，通过固定动作安全复用当前 Chrome 登录态并收发 ChatGPT 消息。",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Atolla Browser Control",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

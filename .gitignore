@@ -30,3 +30,5 @@ bin/
 macos/AtollaIsland/.build/
 macos/AtollaIsland/.swiftpm/
 macos/AtollaIsland/dist/
+/dist/browser-extension/
+/dist/browser-extension.zip

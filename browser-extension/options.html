@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Atolla Browser Control 设置</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="options-page">
+  <main class="panel">
+    <div class="eyebrow">ATOLLA / BROWSER CONTROL</div>
+    <h1>连接本机 Atolla</h1>
+    <p class="muted">Token 只保存在 Chrome 本地存储中。扩展仅连接本机后端，并按服务端域名白名单执行固定动作。</p>
+    <label>
+      <span>后端地址</span>
+      <input id="backend-url" type="url" spellcheck="false" placeholder="http://127.0.0.1:8080">
+    </label>
+    <label>
+      <span>Browser Token</span>
+      <input id="token" type="password" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="actions">
+      <button id="save" type="button">保存并连接</button>
+      <span id="message" role="status"></span>
+    </div>
+  </main>
+  <script type="module" src="options.mjs"></script>
+</body>
+</html>
