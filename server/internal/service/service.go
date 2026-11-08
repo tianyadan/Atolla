@@ -16,6 +16,7 @@ import (
 	"atolla/server/internal/dbquery"
 	"atolla/server/internal/notify"
 	"atolla/server/internal/permission"
+	"atolla/server/internal/plugin/githubidea"
 	"atolla/server/internal/remotebridge"
 	"atolla/server/internal/store"
 	"atolla/server/internal/testsrv"
@@ -50,6 +51,9 @@ type Service struct {
 	WF           *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
+	GitHubIdea   *githubidea.Manager
+	// DispatchClassifier 仅在规则无法归类时调用；不得直接选择执行者。
+	DispatchClassifier DispatchClassificationFallback
 	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
 	remoteBridgeParent   context.Context
 	remoteBridgeCancel   context.CancelFunc
@@ -74,7 +78,8 @@ type Service struct {
 	notifyOTPMu sync.Mutex
 	notifyOTP   *notifyBarkOTP
 
-	tqLocks *taskQueueLocks
+	tqLocksOnce sync.Once
+	tqLocks     *taskQueueLocks
 
 	cloneJobMap    *sync.Map
 	compactPending *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
@@ -101,6 +106,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		compactPending:        &sync.Map{},
 		liveAssist:            &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
+		GitHubIdea:            githubidea.NewManager(cfg.WorkspaceRoot),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
 	svc.Sched = NewScheduler(svc)

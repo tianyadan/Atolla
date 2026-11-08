@@ -8,6 +8,12 @@ const COLOR_LABEL: Record<JellyColor, string> = {
   green: '绿',
   purple: '紫',
   red: '红',
+  cyan: '青',
+  teal: '蓝绿',
+  pink: '粉',
+  lime: '青柠',
+  coral: '珊瑚',
+  sky: '天蓝',
 }
 
 type Props = {

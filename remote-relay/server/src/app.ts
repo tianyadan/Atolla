@@ -12,6 +12,7 @@ import { createSiteAuthRouter } from './routes/siteAuth.js'
 import { createDeviceRouter } from './routes/device.js'
 import { createSiteRouter } from './routes/site.js'
 import { createMetaRouter } from './routes/meta.js'
+import { createGitHubWebhookRouter } from './routes/githubWebhook.js'
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -66,7 +67,13 @@ export function createApp(db: RelayDatabase): Express {
   const unlockFailLock = new FailLockLimiter(UNLOCK_MAX_FAILURES, UNLOCK_LOCK_MS)
 
   app.use(cors())
-  app.use(express.json({ limit: '5mb' }))
+  app.use(express.json({
+    limit: '5mb',
+    verify: (req, _res, buf) => {
+      // GitHub HMAC 必须使用完全一致的原始字节，不能对解析后的 JSON 重新序列化。
+      ;(req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buf)
+    },
+  }))
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'atolla-remote-relay', ts: Date.now() })
@@ -78,6 +85,7 @@ export function createApp(db: RelayDatabase): Express {
     createDeviceRouter(db, instanceAuthRateLimiter, registerRateLimiter),
   )
   app.use('/api/meta', createMetaRouter(db))
+  app.use('/api/webhooks/github', createGitHubWebhookRouter(db))
   app.use('/api', createSiteRouter(db, unlockFailLock))
 
   attachWebUi(app)

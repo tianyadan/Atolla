@@ -4,14 +4,12 @@
 
 Run a fleet of digital colleagues on your own machine. Each colleague is a local Claude, Codex, or Cursor Agent. They work inside workspaces you allow, and they ask before doing anything risky.
 
-Current release: **v0.6.2**.
+Current release: **v0.6.5**.
 
-**v0.6.2 highlights:**
-- **Agent runtime detail**: Real-time visibility into each request's duration, model call traces, tool executions, token usage, and generation speed. Expand to see context utilization.
-- **Traceable model call history**: Backend records CLI-observable boundaries including input/output, cache tokens, and context window usage. Runtime records persist for 7 days post-task.
-- **Runtime detail survives refresh**: When the live session is lost, the frontend automatically fetches the most recent run from the server for seamless display.
-- **Remote relay panel redesign**: Server deployment, remote connection, and OTP login split into independent sections ordered by dependency. Deployment logs appear on-demand, persist across menu switches, and auto-clear 10 minutes after task completion.
-- **Task queue entry optimization**: Queue badge moved to the input toolbar; click the toolbar icon to view queue details.
+**v0.6.5 highlights:**
+- **GitHub Idea dispatch**: Listen for Issues, recommend agents by role, capability tags, and load, with idempotent queueing, audit history, and retry support.
+- **iOS and Siri**: List agents, query progress, send tasks, ask Receptionist, and improve deep links, task plans, and Dynamic Island synchronization.
+- **Remote access improvements**: Extend site sessions to 30 days and improve mobile credentials, usage widgets, and recovery flows.
 
 ![Atolla architecture](docs/architecture/atolla-architecture.png)
 

@@ -6,6 +6,7 @@ import request from 'supertest'
 import type { Express } from 'express'
 import { createApp } from './app.js'
 import { initDb, type RelayDatabase } from './db.js'
+import { claimPendingCommands, submitCommandResult } from './commands.js'
 
 const SITE_PASSWORD = 'secret-gate-pass'
 const INSTANCE_ID = 'mac-office-1'
@@ -36,7 +37,7 @@ async function unlockToken(siteTok: string): Promise<string> {
 }
 
 /** Register test instance */
-async function register(): Promise<void> {
+async function register(actions: string[] = ACTIONS): Promise<void> {
   const r = await request(app)
     .post('/api/device/register')
     .send({
@@ -44,7 +45,7 @@ async function register(): Promise<void> {
       display_name: DISPLAY_NAME,
       password: PASSWORD,
       registry_version: 1,
-      actions: ACTIONS,
+      actions,
     })
   expect(r.status).toBe(200)
 }
@@ -69,9 +70,234 @@ afterEach(() => {
   db.close()
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath)
   delete process.env.SITE_PASSWORD
+  delete process.env.RELAY_SIRI_RECEPTIONIST_WAIT_MS
 })
 
 describe('mirror snapshot ingest and site read', () => {
+  it('asks Receptionist through the Mac RPC and returns the stable Siri response', async () => {
+    await register([...ACTIONS, 'receptionist.ask'])
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+
+    const macSide = (async () => {
+      let command = claimPendingCommands(db, INSTANCE_ID, Date.now())[0]
+      for (let attempt = 0; !command && attempt < 100; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        command = claimPendingCommands(db, INSTANCE_ID, Date.now())[0]
+      }
+      expect(command?.action).toBe('receptionist.ask')
+      expect(command?.payload.question).toBe('今天有什么安排？')
+      const result = submitCommandResult(
+        db,
+        INSTANCE_ID,
+        command!.id,
+        'done',
+        { answer: '今天先完成 Siri 接入。', conversation_id: 12, reply_ms: 850 },
+      )
+      expect(result.ok).toBe(true)
+    })()
+
+    const [response] = await Promise.all([
+      request(app)
+        .post(`/api/instances/${INSTANCE_ID}/siri/receptionist/ask`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Instance-Unlock', unlock)
+        .send({ question: '今天有什么安排？' }),
+      macSide,
+    ])
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      answer: '今天先完成 Siri 接入。',
+      conversation_id: 12,
+      reply_ms: 850,
+    })
+  })
+
+  it('returns an explicit Mac offline code before asking Receptionist', async () => {
+    await register([...ACTIONS, 'receptionist.ask'])
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+    db.prepare('UPDATE instances SET last_heartbeat_at = ? WHERE instance_id = ?')
+      .run(Date.now() - 120_000, INSTANCE_ID)
+
+    const response = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/siri/receptionist/ask`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+      .send({ question: 'Mac 在线吗？' })
+
+    expect(response.status).toBe(503)
+    expect(response.body.code).toBe('MAC_OFFLINE')
+  })
+
+  it('degrades a slow Receptionist answer to an accepted Siri prompt', async () => {
+    process.env.RELAY_SIRI_RECEPTIONIST_WAIT_MS = '30'
+    await register([...ACTIONS, 'receptionist.ask'])
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+
+    const response = await request(app)
+      .post(`/api/instances/${INSTANCE_ID}/siri/receptionist/ask`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+      .send({ question: '请给出一份很长的回答。' })
+
+    expect(response.status).toBe(202)
+    expect(response.body).toMatchObject({
+      submitted: true,
+      pending: true,
+      answer: '',
+    })
+    expect(response.body.speech_text).toContain('稍后打开 Atolla 查看')
+  })
+
+
+
+  it('lists Siri agent entities and filters by group or working status', async () => {
+    await register()
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+
+    await devicePost('/api/device/snapshot/agents', {
+      agents: [
+        {
+          agent_id: 'a1',
+          display_name: 'Alpha',
+          engine: 'claude',
+          status: 'running',
+          payload: { folder_name: '研发组' },
+        },
+        {
+          agent_id: 'a2',
+          display_name: 'Beta',
+          engine: 'codex',
+          status: 'idle',
+          payload: { folder_name: '研发组' },
+        },
+        {
+          agent_id: 'a3',
+          display_name: 'Gamma',
+          engine: 'codex',
+          status: 'waiting',
+          payload: { folder_name: '运营组' },
+        },
+      ],
+    })
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'X-Instance-Unlock': unlock,
+    }
+    const all = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/siri/agents`)
+      .set(headers)
+    expect(all.status).toBe(200)
+    expect(all.body.agents).toHaveLength(3)
+    expect(all.body.agents[0]).toMatchObject({
+      id: `${INSTANCE_ID}:a1`,
+      instance_id: INSTANCE_ID,
+      agent_id: 'a1',
+      name: 'Alpha',
+      group_name: '研发组',
+      status: 'running',
+      working: true,
+    })
+    expect(all.body.agents[0].speech_text).toContain('Alpha')
+
+    const group = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/siri/agents?group=${encodeURIComponent('研发组')}`)
+      .set(headers)
+    expect(group.body.agents.map((agent: { agent_id: string }) => agent.agent_id)).toEqual(['a1', 'a2'])
+
+    const working = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/siri/agents?working=true`)
+      .set(headers)
+    expect(working.body.agents.map((agent: { agent_id: string }) => agent.agent_id)).toEqual(['a1', 'a3'])
+  })
+
+  it('adds group and agent id labels for duplicate Siri agent names', async () => {
+    await register()
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+    await devicePost('/api/device/snapshot/agents', {
+      agents: [
+        { agent_id: '11', display_name: '小安', status: 'idle', payload: { folder_name: '研发组' } },
+        { agent_id: '12', display_name: '小安', status: 'idle', payload: { folder_name: '运营组' } },
+        { agent_id: '13', display_name: '小安', status: 'idle', payload: { folder_name: '研发组' } },
+      ],
+    })
+
+    const response = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/siri/agents`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Instance-Unlock', unlock)
+    expect(response.status).toBe(200)
+    const labels = Object.fromEntries(
+      response.body.agents.map((agent: { agent_id: string; disambiguation_label: string }) => [
+        agent.agent_id,
+        agent.disambiguation_label,
+      ]),
+    )
+    expect(labels).toEqual({
+      '11': '小安（研发组，编号 11）',
+      '12': '小安（运营组）',
+      '13': '小安（研发组，编号 13）',
+    })
+  })
+
+  it('returns rules-based Siri status and explains offline stale mirrors', async () => {
+    await register()
+    const token = await siteToken()
+    const unlock = await unlockToken(token)
+    await devicePost('/api/device/snapshot/agents', {
+      agents: [{
+        agent_id: AGENT_ID,
+        display_name: 'Alpha',
+        status: 'running',
+        payload: { folder_name: '研发组' },
+      }],
+    })
+    await devicePost('/api/device/snapshot/tasks', {
+      tasks: [{
+        agent_id: AGENT_ID,
+        task_id: 'task-current',
+        status: 'running',
+        payload: { task_name: '实现 Siri', progress: 35 },
+      }],
+    })
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'X-Instance-Unlock': unlock,
+    }
+    const online = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/siri/agents/${AGENT_ID}/status`)
+      .set(headers)
+    expect(online.status).toBe(200)
+    expect(online.body).toMatchObject({
+      machine_status: 'online',
+      status: 'running',
+      progress: 35,
+      current_task: '实现 Siri',
+      stale: false,
+      source: 'rules',
+    })
+    expect(online.body.speech_text).toContain('进度百分之35')
+
+    const old = Date.now() - 120_000
+    db.prepare('UPDATE instances SET last_heartbeat_at = ? WHERE instance_id = ?').run(old, INSTANCE_ID)
+    db.prepare('UPDATE agents_mirror SET synced_at = ? WHERE instance_id = ?').run(old, INSTANCE_ID)
+    db.prepare('UPDATE tasks_mirror SET synced_at = ? WHERE instance_id = ?').run(old, INSTANCE_ID)
+
+    const offline = await request(app)
+      .get(`/api/instances/${INSTANCE_ID}/siri/agents/${AGENT_ID}/status`)
+      .set(headers)
+    expect(offline.body.machine_status).toBe('offline')
+    expect(offline.body.stale).toBe(true)
+    expect(offline.body.speech_text).toContain('离线')
+    expect(offline.body.speech_text).toContain('可能已经过期')
+  })
+
   it('prunes agents removed from a later full snapshot', async () => {
     await register()
     const token = await siteToken()

@@ -126,6 +126,30 @@ func (s *Store) GetVisitorByPublicID(ctx context.Context, publicID string) (*Vis
 	return v, err
 }
 
+// GetOrCreateSystemVisitor returns a stable non-cookie visitor for trusted system entry points
+// such as Siri. The fixed public ID keeps one isolated Receptionist conversation across calls.
+func (s *Store) GetOrCreateSystemVisitor(ctx context.Context, publicID, name string) (*Visitor, error) {
+	publicID = strings.TrimSpace(publicID)
+	name = strings.TrimSpace(name)
+	if publicID == "" || name == "" {
+		return nil, sql.ErrNoRows
+	}
+	if len([]rune(publicID)) > 64 {
+		publicID = string([]rune(publicID)[:64])
+	}
+	if len([]rune(name)) > 32 {
+		name = string([]rune(name)[:32])
+	}
+	query := `INSERT IGNORE INTO visitors (public_id, name) VALUES (?,?)`
+	if s.IsSQLite() {
+		query = `INSERT OR IGNORE INTO visitors (public_id, name) VALUES (?,?)`
+	}
+	if _, err := s.db.ExecContext(ctx, query, publicID, name); err != nil {
+		return nil, err
+	}
+	return s.GetVisitorByPublicID(ctx, publicID)
+}
+
 func scanVisitor(row interface{ Scan(dest ...any) error }) (*Visitor, error) {
 	var v Visitor
 	err := row.Scan(&v.ID, &v.PublicID, &v.Name, &v.CurrentConversationID, &v.CreatedAt, &v.LastSeenAt)

@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs'
 import fs from 'node:fs'
+import jwt, { type JwtPayload } from 'jsonwebtoken'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -28,6 +29,7 @@ async function login(
 beforeEach(() => {
   process.env.RELAY_JWT_SECRET = 'test-jwt-secret'
   delete process.env.RELAY_TRUST_PROXY
+  delete process.env.RELAY_JWT_TTL_HOURS
   delete process.env.NODE_ENV
   dbPath = path.join(os.tmpdir(), `relay-auth-test-${Date.now()}.db`)
   db = initDb(dbPath)
@@ -45,6 +47,7 @@ afterEach(() => {
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath)
   delete process.env.RELAY_JWT_SECRET
   delete process.env.RELAY_TRUST_PROXY
+  delete process.env.RELAY_JWT_TTL_HOURS
   delete process.env.NODE_ENV
 })
 
@@ -66,6 +69,28 @@ describe('site gate auth', () => {
       .set('Authorization', `Bearer ${r.body.token}`)
     expect(me.status).toBe(200)
     expect(me.body.tokenVersion).toBe(1)
+  })
+
+  it('issues JWT with a 30-day default lifetime', async () => {
+    const r = await login(SITE_PASSWORD)
+    expect(r.status).toBe(200)
+
+    const payload = jwt.decode(r.body.token) as JwtPayload
+    expect(payload.exp).toBeDefined()
+    expect(payload.iat).toBeDefined()
+    expect(payload.exp! - payload.iat!).toBe(720 * 3600)
+  })
+
+  it('allows RELAY_JWT_TTL_HOURS to override the default lifetime', async () => {
+    process.env.RELAY_JWT_TTL_HOURS = '48'
+
+    const r = await login(SITE_PASSWORD)
+    expect(r.status).toBe(200)
+
+    const payload = jwt.decode(r.body.token) as JwtPayload
+    expect(payload.exp).toBeDefined()
+    expect(payload.iat).toBeDefined()
+    expect(payload.exp! - payload.iat!).toBe(48 * 3600)
   })
 
   it('throttles login after five attempts per minute from same IP', async () => {

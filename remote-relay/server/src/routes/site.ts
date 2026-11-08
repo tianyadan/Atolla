@@ -36,6 +36,11 @@ import {
   normalizeMessagesLimit,
 } from '../mirror.js'
 import { routeParam } from '../params.js'
+import {
+  agentStatusProvider,
+  listSiriAgents,
+  SIRI_INSTANCE_ONLINE_THRESHOLD_MS,
+} from '../siri.js'
 
 const notifyPrefsBodySchema = z.object({
   task_done: z.boolean(),
@@ -154,6 +159,22 @@ const decideBodySchema = z.object({
   request_id: z.string().min(1),
   behavior: z.enum(['allow', 'deny', 'allow_session']),
 })
+
+const siriAgentsQuerySchema = z.object({
+  group: z.string().max(100).optional(),
+  working: z.enum(['true', 'false', '1', '0']).optional(),
+})
+
+const siriReceptionistAskBodySchema = z.object({
+  question: z.string().trim().min(1).max(4_000),
+})
+
+/** Keep Siri within its background execution window; configurable for integration tests. */
+function siriReceptionistWaitMs(): number {
+  const configured = Number.parseInt(process.env.RELAY_SIRI_RECEPTIONIST_WAIT_MS || '', 10)
+  if (!Number.isFinite(configured) || configured <= 0) return 20_000
+  return Math.min(configured, 60_000)
+}
 
 /** Extract bearer token from Authorization header */
 function readBearerToken(req: Request): string | null {
@@ -401,6 +422,53 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     res.json({ agents: result.agents })
   })
 
+  /** Siri: compact agent entities with optional group / working filters. */
+  router.get('/instances/:id/siri/agents', guard, needUnlock, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    if (!instanceId) {
+      res.status(400).json({ error: 'Invalid instance id' })
+      return
+    }
+    const parsed = siriAgentsQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid Siri agents query' })
+      return
+    }
+    const working = parsed.data.working == null
+      ? undefined
+      : parsed.data.working === 'true' || parsed.data.working === '1'
+    const result = listSiriAgents(db, instanceId, {
+      group: parsed.data.group,
+      working,
+    })
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error })
+      return
+    }
+    res.json({ agents: result.agents })
+  })
+
+  /** Siri: stable rules-based agent status contract. */
+  router.get(
+    '/instances/:id/siri/agents/:agentId/status',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const result = agentStatusProvider.getStatus(db, instanceId, agentId)
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json(result.status)
+    },
+  )
+
   router.get('/instances/:id/agents/:agentId/tasks', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     const agentId = routeParam(req.params.agentId)
@@ -568,6 +636,44 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
       res.json({ command: result.command })
     },
   )
+
+  /** Task plan active / confirm / reject / abort / resume（等 Mac RPC） */
+  router.get(
+    '/instances/:id/agents/:agentId/task-plan/active',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_plan.active', { agent_id: agentId })
+    },
+  )
+  for (const action of ['confirm', 'reject', 'abort', 'resume'] as const) {
+    router.post(
+      `/instances/:id/agents/:agentId/task-plan/:planId/${action}`,
+      guard,
+      needUnlock,
+      async (req: Request, res: Response) => {
+        const instanceId = routeParam(req.params.id)
+        const agentId = routeParam(req.params.agentId)
+        const planId = routeParam(req.params.planId)
+        if (!instanceId || !agentId || !planId) {
+          res.status(400).json({ error: 'Invalid instance, agent or plan id' })
+          return
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>
+        await respondRpc(res, instanceId, `agent.task_plan.${action}`, {
+          agent_id: agentId,
+          plan_id: planId,
+          steps: body.steps,
+        })
+      },
+    )
+  }
 
   /** Enqueue agent.set_auto_review */
   router.post(
@@ -812,6 +918,59 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     }
     res.json(result.body ?? {})
   }
+
+  /** Siri Receptionist: wait briefly for a full answer, then degrade to accepted/pending. */
+  router.post(
+    '/instances/:id/siri/receptionist/ask',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const parsed = siriReceptionistAskBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid Receptionist question' })
+        return
+      }
+      const instance = getInstanceRow(db, instanceId)
+      if (
+        !instance?.last_heartbeat_at
+        || Date.now() - instance.last_heartbeat_at >= SIRI_INSTANCE_ONLINE_THRESHOLD_MS
+      ) {
+        res.status(503).json({
+          error: 'Mac offline',
+          code: 'MAC_OFFLINE',
+        })
+        return
+      }
+      const result = await enqueueAndWait(
+        db,
+        instanceId,
+        'receptionist.ask',
+        { question: parsed.data.question },
+        siriReceptionistWaitMs(),
+      )
+      if (!result.ok) {
+        if (result.httpStatus === 504) {
+          res.status(202).json({
+            submitted: true,
+            pending: true,
+            answer: '',
+            conversation_id: 0,
+            reply_ms: 0,
+            speech_text: '问题已提交，回答时间较长，请稍后打开 Atolla 查看。',
+          })
+          return
+        }
+        res.status(result.httpStatus).json({ error: result.error })
+        return
+      }
+      res.json(result.body ?? {})
+    },
+  )
 
   /** 任务队列：列表（等 Mac 结果） */
   router.get(

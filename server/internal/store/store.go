@@ -338,7 +338,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureAgentTaskQueueSchema(ctx); err != nil {
 		return err
 	}
-	// 25) MySQL→SQLite 迁库曾把 VARCHAR 写成 BLOB，修回 TEXT 以免 role='user' 等比较失败
+	// 26) 规则调度：员工单选岗位 + 调度建议/审计记录。
+	if err := s.EnsureTaskDispatchSchema(ctx); err != nil {
+		return err
+	}
+	// 27) MySQL→SQLite 迁库曾把 VARCHAR 写成 BLOB，修回 TEXT 以免 role='user' 等比较失败
 	if err := s.repairSQLiteTextAffinity(ctx); err != nil {
 		return err
 	}

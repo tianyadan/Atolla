@@ -45,13 +45,23 @@ export function peekEnginesUsageCache(): EnginesUsageResponse | null {
   return usageMem.data
 }
 
-/** 写入缓存 */
-export function rememberEnginesUsage(data: EnginesUsageResponse): EnginesUsageResponse {
+/** 写入缓存；可选同步到 iOS 桌面小组件。 */
+export function rememberEnginesUsage(
+  data: EnginesUsageResponse,
+  opts?: { instanceId?: string; publishNative?: boolean },
+): EnginesUsageResponse {
   const ttlSec = Number(data.ttl_seconds)
   usageMem = {
     at: Date.now(),
     ttlMs: Number.isFinite(ttlSec) && ttlSec > 0 ? ttlSec * 1000 : USAGE_TTL_MS,
     data,
+  }
+  if (opts?.publishNative !== false) {
+    void import('../nativeUsage')
+      .then(({ publishNativeEnginesUsage }) =>
+        publishNativeEnginesUsage(data, opts?.instanceId),
+      )
+      .catch(() => {})
   }
   return data
 }

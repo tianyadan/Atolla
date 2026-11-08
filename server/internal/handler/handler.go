@@ -131,6 +131,11 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agents/:id/clear", h.AdminAgentsClear)
 			adm.POST("/admin/agents/:id/compress", h.AdminAgentsCompress)
 			adm.POST("/admin/agents/:id/task-plan", h.AdminAgentsTaskPlan)
+			adm.GET("/admin/agents/:id/task-plan/active", h.AdminAgentTaskPlanActive)
+			adm.POST("/admin/agents/:id/task-plan/:planId/confirm", h.AdminAgentTaskPlanConfirm)
+			adm.POST("/admin/agents/:id/task-plan/:planId/reject", h.AdminAgentTaskPlanReject)
+			adm.POST("/admin/agents/:id/task-plan/:planId/abort", h.AdminAgentTaskPlanAbort)
+			adm.POST("/admin/agents/:id/task-plan/:planId/resume", h.AdminAgentTaskPlanResume)
 			adm.POST("/admin/agents/:id/auto-approve-all", h.AdminAgentsAutoApproveAll)
 			adm.GET("/admin/agents/:id/tasks", h.AdminAgentsTasks)
 			adm.GET("/admin/agents/:id/command-audits", h.AdminAgentsCommandAudits)
@@ -158,6 +163,11 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)
 			adm.POST("/admin/notify-prefs/verify/send", h.AdminNotifyBarkVerifySend)
 			adm.POST("/admin/notify-prefs/verify/confirm", h.AdminNotifyBarkVerifyConfirm)
+
+			adm.GET("/admin/plugins/github-idea", h.AdminGitHubIdeaGet)
+			adm.PUT("/admin/plugins/github-idea", h.AdminGitHubIdeaPut)
+			adm.GET("/admin/plugins/github-idea/dispatches", h.AdminGitHubIdeaDispatches)
+			adm.POST("/admin/plugins/github-idea/dispatches/:id/reassign", h.AdminGitHubIdeaDispatchReassign)
 
 			adm.GET("/admin/watchdog/local", h.AdminWatchdogLocalGet)
 			adm.PUT("/admin/watchdog/local", h.AdminWatchdogLocalPut)

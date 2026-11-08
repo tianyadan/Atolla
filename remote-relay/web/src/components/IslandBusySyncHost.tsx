@@ -11,13 +11,15 @@ const POLL_MS = 3_000
 
 /**
  * 全局轮询忙碌数字人并上岛。
- * 必须挂在已登录布局里；聊天页 / 切后台也要同步（不能只靠 Agents 列表页）。
+ * 前台轮询；进后台只推最后一次态后停轮询（原生保留 Live Activity，不主动 end）。
  */
 export function IslandBusySyncHost() {
   const location = useLocation()
   const instanceId = parseInstanceId(location.pathname)
   const genRef = useRef(0)
   const instanceRef = useRef(instanceId)
+  const intervalRef = useRef<number | null>(null)
+  const appActiveRef = useRef(true)
 
   useEffect(() => {
     instanceRef.current = instanceId
@@ -29,7 +31,7 @@ export function IslandBusySyncHost() {
     // 离开实例或未解锁：立刻下岛，避免停轮询后锁屏残留
     if (!instanceId || !getUnlockToken(instanceId)) {
       resetIslandSyncKey()
-      void syncIslandPresentation({ activeKind: null, count: 0, items: [] })
+      void syncIslandPresentation({ activeKind: null, count: 0, items: [], presentation: 'list' })
       return
     }
 
@@ -37,6 +39,7 @@ export function IslandBusySyncHost() {
     let cancelled = false
     const gen = ++genRef.current
 
+    /** 拉取镜像并同步灵动岛 */
     async function tick() {
       const id = instanceRef.current
       if (cancelled || gen !== genRef.current || !id) return
@@ -48,43 +51,77 @@ export function IslandBusySyncHost() {
         ])
         if (cancelled || gen !== genRef.current) return
         const events = buildIslandEvents(id, agents, permissions)
-        await syncIslandPresentation(selectIslandPresentation(events))
+        await syncIslandPresentation(selectIslandPresentation(events), id)
       } catch {
         /* 未解锁 / 网络：下轮重试 */
       }
     }
 
-    void tick()
-    const intervalId = window.setInterval(() => void tick(), POLL_MS)
+    /** 仅前台开启轮询 */
+    function startPolling() {
+      stopPolling()
+      if (cancelled || !appActiveRef.current) return
+      intervalRef.current = window.setInterval(() => {
+        if (!appActiveRef.current) return
+        void tick()
+      }, POLL_MS)
+    }
 
-    const invalidate = () => void tick()
+    function stopPolling() {
+      if (intervalRef.current != null) {
+        window.clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+
+    void tick()
+    startPolling()
+
+    const invalidate = () => {
+      if (!appActiveRef.current) return
+      void tick()
+    }
     const unsubscribeInvalidation = subscribeIslandSyncInvalidation(invalidate)
 
-    // 前后台切换都立即校准；挂起后由原生延迟 dismiss，回前台再重建。
     let appHandle: { remove: () => Promise<void> } | undefined
-    void App.addListener('appStateChange', () => {
+    void App.addListener('appStateChange', ({ isActive }) => {
+      appActiveRef.current = isActive
       resetIslandSyncKey()
-      void tick()
+      if (isActive) {
+        // 回前台立刻校准并恢复轮询
+        void tick()
+        startPolling()
+      } else {
+        // 挂起前再推一次最新态，随后停轮询；由原生标「同步暂停」保留岛
+        stopPolling()
+        void tick()
+      }
     }).then((h) => {
       appHandle = h
     })
 
-    // 挂起前再推一次，供原生写入最新态后预约下岛
-    const onHide = () => {
-      resetIslandSyncKey()
-      void tick()
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        appActiveRef.current = false
+        stopPolling()
+        resetIslandSyncKey()
+        void tick()
+      } else if (document.visibilityState === 'visible') {
+        appActiveRef.current = true
+        resetIslandSyncKey()
+        void tick()
+        startPolling()
+      }
     }
-    document.addEventListener('visibilitychange', onHide)
-    window.addEventListener('pagehide', onHide)
+    document.addEventListener('visibilitychange', onVisibility)
 
     return () => {
       cancelled = true
-      window.clearInterval(intervalId)
+      stopPolling()
       unsubscribeInvalidation()
       void appHandle?.remove()
-      document.removeEventListener('visibilitychange', onHide)
-      window.removeEventListener('pagehide', onHide)
-      void syncIslandPresentation({ activeKind: null, count: 0, items: [] })
+      document.removeEventListener('visibilitychange', onVisibility)
+      void syncIslandPresentation({ activeKind: null, count: 0, items: [], presentation: 'list' })
     }
   }, [instanceId])
 

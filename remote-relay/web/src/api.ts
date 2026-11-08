@@ -1,4 +1,11 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
+import {
+  clearAllNativeUnlockTokens,
+  clearNativeSiteSession,
+  clearNativeUnlockToken,
+  syncNativeSiteToken,
+  syncNativeUnlockToken,
+} from './nativeCredentials'
 import { resolveApiUrl } from './utils/apiBase'
 
 /** Site JWT storage key */
@@ -94,12 +101,14 @@ export function getToken(): string | null {
 /** Persist site token after login */
 export function setToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token)
+  void syncNativeSiteToken(token)
 }
 
 /** Clear session token */
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
-  clearAllUnlockTokens()
+  clearAllLocalUnlockTokens()
+  void clearNativeSiteSession()
 }
 
 /** Persist unlock token for one instance (localStorage survives iOS tab discard) */
@@ -111,6 +120,7 @@ export function setUnlockToken(instanceId: string, token: string): void {
   } catch {
     /* ignore */
   }
+  void syncNativeUnlockToken(instanceId, token)
 }
 
 /** Read unlock token for instance (migrates legacy sessionStorage once) */
@@ -140,10 +150,17 @@ export function clearUnlockToken(instanceId: string): void {
   } catch {
     /* ignore */
   }
+  void clearNativeUnlockToken(instanceId)
 }
 
 /** Clear all unlock tokens */
 export function clearAllUnlockTokens(): void {
+  clearAllLocalUnlockTokens()
+  void clearAllNativeUnlockTokens()
+}
+
+/** Clear Web storage without scheduling a second native operation. */
+function clearAllLocalUnlockTokens(): void {
   const keys: string[] = []
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i)
@@ -244,6 +261,7 @@ async function request<T>(
     }
     const data = (native.data && typeof native.data === 'object' ? native.data : {}) as T & ApiError
     if (native.status < 200 || native.status >= 300) {
+      if (native.status === 401 && path !== '/api/auth/login') clearToken()
       const msg =
         typeof data.error === 'string' && data.error.trim()
           ? data.error
@@ -270,6 +288,7 @@ async function request<T>(
   const data = (await res.json().catch(() => ({}))) as T & ApiError
 
   if (!res.ok) {
+    if (res.status === 401 && path !== '/api/auth/login') clearToken()
     const msg =
       typeof data.error === 'string' && data.error.trim()
         ? data.error
@@ -477,6 +496,26 @@ export async function askAgent(
   )
 }
 
+export type TaskPlanStepDTO = {
+  id?: string
+  title: string
+  detail?: string
+  status?: string
+}
+
+export type ActiveTaskPlanDTO = {
+  plan_id: string
+  phase: string
+  frozen?: boolean
+  task_name?: string
+  progress?: number
+  message?: string
+  current_step?: number
+  total_count?: number
+  step_items?: TaskPlanStepDTO[]
+  queue_item_id?: number
+}
+
 export type TaskQueueItem = {
   id: number
   agent_id?: number
@@ -485,6 +524,10 @@ export type TaskQueueItem = {
   position?: number
   silent_notify?: boolean
   resume_hint?: boolean
+  kind?: string
+  plan_id?: string
+  locked?: boolean
+  plan?: ActiveTaskPlanDTO | null
 }
 
 export type TaskQueueView = {
@@ -615,6 +658,62 @@ export async function setAgentTaskPlan(
       method: 'POST',
       body: JSON.stringify({ enabled }),
     },
+  )
+}
+
+/** 拉取活跃任务计划（中继 RPC，body.plan） */
+export async function fetchActiveTaskPlan(
+  instanceId: string,
+  agentId: string,
+): Promise<ActiveTaskPlanDTO | null> {
+  const res = await request<{ plan?: ActiveTaskPlanDTO | null }>(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-plan/active`,
+  )
+  return res.plan ?? null
+}
+
+export async function confirmTaskPlan(
+  instanceId: string,
+  agentId: string,
+  planId: string,
+  steps?: TaskPlanStepDTO[],
+): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-plan/${encodeURIComponent(planId)}/confirm`,
+    { method: 'POST', body: JSON.stringify({ steps: steps ?? [] }) },
+  )
+}
+
+export async function rejectTaskPlan(
+  instanceId: string,
+  agentId: string,
+  planId: string,
+): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-plan/${encodeURIComponent(planId)}/reject`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export async function abortTaskPlan(
+  instanceId: string,
+  agentId: string,
+  planId: string,
+): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-plan/${encodeURIComponent(planId)}/abort`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export async function resumeTaskPlan(
+  instanceId: string,
+  agentId: string,
+  planId: string,
+): Promise<void> {
+  await request(
+    `/api/instances/${encodeURIComponent(instanceId)}/agents/${encodeURIComponent(agentId)}/task-plan/${encodeURIComponent(planId)}/resume`,
+    { method: 'POST', body: JSON.stringify({}) },
   )
 }
 

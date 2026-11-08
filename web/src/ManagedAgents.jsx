@@ -212,7 +212,6 @@ export default function ManagedAgentsPanel({
   const [runtimeDetailOpen, setRuntimeDetailOpen] = useState(false)
   const pendingQueueNextRef = useRef(null)
   const [question, setQuestion] = useState('')
-  const [tasks, setTasks] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
   const [talentMarketOpen, setTalentMarketOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
@@ -261,8 +260,6 @@ export default function ManagedAgentsPanel({
   const boxRef = useRef(null)
   /** 列表请求序号：慢返回的旧轮询不能盖掉刚创建出来的员工。 */
   const agentsLoadGen = useRef(0)
-  /** loadDetail 世代号：切换数字人后丢弃过期拉取，避免写错会话 */
-  const detailLoadGen = useRef(0)
   const stickBottomRef = useRef(true)
   /** 程序性滚底期间忽略 onScroll，避免把 stickBottom 误判为 false */
   const pinningScrollRef = useRef(false)
@@ -554,28 +551,16 @@ export default function ManagedAgentsPanel({
    * preferDb：Ask 回合结束后以 DB 为准，丢掉 SSE 无 id 命令挂尾，避免最终回复被顶出视口。
    */
   async function loadDetail(id, { force = false, preferDb = false } = {}) {
-    if (!id) {
-      if (!viewRef.current.selectedId) setTasks([])
-      return
-    }
-    const gen = ++detailLoadGen.current
+    if (!id) return
     const local = getAgentSession(id)
     const msgLimit = preferDb ? 100 : PAGE_SIZE
-    const [msgRes, taskRes] = await Promise.all([
-      fetch(`${API}/admin/agents/${id}/messages?limit=${msgLimit}`, { headers: authHeaders() }),
-      fetch(`${API}/admin/agents/${id}/tasks`, { headers: authHeaders() }),
-    ])
-    // 已发起更新的 loadDetail：只丢弃「写 tasks UI」；会话 chatLog 仍按 id 写入，互不串台
-    if (msgRes.status === 401 || taskRes.status === 401) { onUnauthorized?.(); return }
+    const msgRes = await fetch(`${API}/admin/agents/${id}/messages?limit=${msgLimit}`, { headers: authHeaders() })
+    // 会话 chatLog 按请求 id 写入，互不串台
+    if (msgRes.status === 401) { onUnauthorized?.(); return }
     const msgData = await msgRes.json().catch(() => ({}))
-    const taskData = await taskRes.json().catch(() => ({}))
     if (!msgRes.ok) return
     // 选中对话时 pc-viewer 已 mark-read；本地同步去掉蓝徽标 / 「未读」区
     setAgents((list) => list.map((a) => (a.id === id && a.task_unread ? { ...a, task_unread: false } : a)))
-    // 任务条是全局状态：只更新「当前正在看」的那位，避免 A 刷新写到 B 的进度区
-    if (viewRef.current.selectedId === id && gen === detailLoadGen.current) {
-      setTasks(taskData.items || [])
-    }
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
     if (force || preferDb || !getAgentSession(id).loading) {
       const fromDb = mapMsgs(msgData.items)
@@ -726,7 +711,7 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => {
     if (!selected) {
-      setRenameDraft(''); setRulesDraft(''); setTasks([])
+      setRenameDraft(''); setRulesDraft('')
       return
     }
     setRenameDraft(selected.name || '')
@@ -830,12 +815,6 @@ export default function ManagedAgentsPanel({
         syncLoadingFromAgentStatus(viewRef.current.agents)
       }).catch(() => {})
       if (sid) {
-        fetch(`${API}/admin/agents/${sid}/tasks`, { headers })
-          .then((r) => r.json())
-          .then((d) => {
-            if (viewRef.current.selectedId === sid) setTasks(d.items || [])
-          })
-          .catch(() => {})
         const local = getAgentSession(sid)
         // 本机 SSE 流式中跳过；刷新后恢复的 loading（无 abort）仍要轮询消息
         if (!local.loading || !local.abort) {
@@ -1350,8 +1329,6 @@ export default function ManagedAgentsPanel({
         if (turn > 0) patch.taskTokens = turn
 		// SSE usage 是本轮统计，只记录任务消耗；圆环统一由 /context 刷新。
         if (Object.keys(patch).length) patchAgentSession(agentId, patch)
-      } else if (ev.type === 'task_progress') {
-        // 触发 tasks 刷新由轮询承接
       } else if (ev.type === 'system_note') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,
@@ -1536,13 +1513,6 @@ export default function ManagedAgentsPanel({
         const parsed = parseSSE(buf)
         buf = parsed.rest
         applyEvents(agentId, parsed.events)
-        // 流式期间刷新任务进度
-        if (parsed.events.some((e) => e.type === 'task_progress' || e.type === 'invoke_status')) {
-          fetch(`${API}/admin/agents/${agentId}/tasks`, { headers: authHeaders() })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => { if (d && selectedId === agentId) setTasks(d.items || []) })
-            .catch(() => {})
-        }
       }
       try {
         await loadAgents(agentId)
@@ -1974,38 +1944,6 @@ export default function ManagedAgentsPanel({
   const workflowBusy = isWorkflowBusy(selected)
   const cloneInitBusy = isCloneInitBusy(selected)
   const chatLocked = isChatLocked(selected)
-  const liveTask = (tasks || []).find((t) => t.status === 'running' || t.status === 'waiting')
-  // 团队占用时不回落到已结束任务；结束后清空进度展示
-  const activeTask = liveTask || (workflowBusy ? {
-    task_name: selected?.occupancy?.task_name || selected?.occupancy?.source_name || '项目协作任务',
-    status: 'running',
-    progress: 0,
-    message: '项目协作执行中…',
-    payload: {},
-  } : null)
-  const activeProgress = Math.min(100, Math.max(0, activeTask?.progress || 0))
-  /** 优先 step_items（v1 协议）；兼容旧 steps 字符串数组 */
-  const planPayload = activeTask?.payload || {}
-  const stepItems = Array.isArray(planPayload.step_items) ? planPayload.step_items : null
-  const activeSteps = stepItems
-    ? stepItems.map((s) => s?.title || s?.Title || '')
-    : (planPayload.steps || [])
-  const activeStepIdx = planPayload.current_step ?? 0
-  const failedStepIdx = planPayload.failed ? (planPayload.failed_step ?? -1) : -1
-  const planPhase = planPayload.phase || ''
-  function stepClass(i) {
-    if (stepItems?.[i]?.status) {
-      const st = stepItems[i].status
-      if (st === 'failed') return 'failed'
-      if (st === 'done' || st === 'skipped') return 'done'
-      if (st === 'active') return 'current'
-      return ''
-    }
-    if (i === failedStepIdx) return 'failed'
-    if (i < activeStepIdx) return 'done'
-    if (i === activeStepIdx) return 'current'
-    return ''
-  }
 
   return (
     <section className="ma-panel ma-panel-focus">
@@ -2467,43 +2405,6 @@ export default function ManagedAgentsPanel({
                   该同事正在项目协作中执行任务，对话暂不可用；完成后将自动恢复对话窗口。
                   {occupancyLine(selected) ? `（${occupancyLine(selected)}）` : ''}
                 </p>
-              )}
-
-              {taskPlanOn && (
-              <div className="ma-progress-panel">
-                <div className="ma-progress-head">
-                  <strong>{t('composer.taskPlan')}</strong>
-                  {activeTask ? (
-                    <span className={`ma-status st-${statusClass(activeTask.status)}`}>
-                      {planPhase === 'planning' ? t('composer.planning') : statusZh(activeTask.status, t)}
-                    </span>
-                  ) : (
-                    <span className="muted">{t('composer.noActiveTask')}</span>
-                  )}
-                </div>
-                {activeTask && (
-                  <>
-                    <div className="ma-progress-title">{activeTask.task_name || activeTask.task_id}</div>
-                    <div className="agent-progress-bar">
-                      <div style={{ width: `${activeProgress}%` }} />
-                    </div>
-                    <p className="muted ma-progress-msg">{activeTask.message || `${activeProgress}%`}</p>
-                    {activeSteps.length > 0 && (
-                      <ol className="ma-progress-steps">
-                        {activeSteps.map((s, i) => {
-                          const cls = stepClass(i)
-                          return (
-                            <li key={i} className={cls}>
-                              {cls === 'failed' ? <span className="step-x">✕</span> : null}
-                              {s}
-                            </li>
-                          )
-                        })}
-                      </ol>
-                    )}
-                  </>
-                )}
-              </div>
               )}
             </div>
           )}

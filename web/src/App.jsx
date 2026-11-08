@@ -22,6 +22,7 @@ import DbSettings from './DbSettings.jsx'
 import WatchdogSettings from './WatchdogSettings.jsx'
 import IslandSettings from './IslandSettings.jsx'
 import JevSettings from './JevSettings.jsx'
+import GitHubIdeaSettings from './GitHubIdeaSettings.jsx'
 import ModernWorkspace from './ModernWorkspace.jsx'
 import { initLocale } from './i18n/locale.js'
 import { useLocale } from './i18n/useLocale.js'
@@ -406,6 +407,11 @@ export default function App() {
                 <h2 className="settings-page-title">{t('settings.title')}</h2>
                 <LanguageSettings />
                 <NotifySettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
+                <GitHubIdeaSettings
                   authHeaders={authHeaders}
                   onUnauthorized={() => clearAuth('登录已过期')}
                   active={adminMenu === 'settings'}

@@ -44,9 +44,12 @@ func (t *taskQueueLocks) lock(agentID int64) func() {
 }
 
 func (s *Service) taskQueueLock(agentID int64) func() {
-	if s.tqLocks == nil {
-		s.tqLocks = &taskQueueLocks{}
-	}
+	// Webhook 可能并发首次触发，使用 Once 避免队列锁容器初始化竞态。
+	s.tqLocksOnce.Do(func() {
+		if s.tqLocks == nil {
+			s.tqLocks = &taskQueueLocks{}
+		}
+	})
 	return s.tqLocks.lock(agentID)
 }
 
@@ -58,11 +61,20 @@ type TaskQueueAttachment struct {
 	Name string `json:"name"`
 }
 
+// TaskQueueItemView 队列项 + 可选 Plan 展开快照。
+type TaskQueueItemView struct {
+	store.AgentTaskQueueItem
+	Kind   string              `json:"kind,omitempty"` // task_plan | ""
+	PlanID string              `json:"plan_id,omitempty"`
+	Plan   *ActiveTaskPlanView `json:"plan,omitempty"`
+	Locked bool                `json:"locked,omitempty"` // Plan 不可普通删改
+}
+
 // TaskQueueView 列表 API 视图。
 type TaskQueueView struct {
-	Items  []store.AgentTaskQueueItem `json:"items"`
-	Hold   bool                       `json:"hold"`
-	Active int                        `json:"active"`
+	Items  []TaskQueueItemView `json:"items"`
+	Hold   bool                `json:"hold"`
+	Active int                 `json:"active"`
 }
 
 // ListTaskQueue 读取队列轨数据。
@@ -76,13 +88,29 @@ func (s *Service) ListTaskQueue(ctx context.Context, agentID int64) (TaskQueueVi
 	if items == nil {
 		items = []store.AgentTaskQueueItem{}
 	}
-	// executing 仅用于后端防重；前端继续沿用 running，避免改变既有状态与样式协议。
+	out := make([]TaskQueueItemView, 0, len(items))
 	for i := range items {
-		if items[i].Status == store.TaskExecuting {
-			items[i].Status = store.TaskRunning
+		it := items[i]
+		if it.Status == store.TaskExecuting {
+			it.Status = store.TaskRunning
 		}
+		row := TaskQueueItemView{AgentTaskQueueItem: it}
+		if planID, title, ok := ParsePlanQueueQuestion(it.Question); ok {
+			row.Kind = "task_plan"
+			row.PlanID = planID
+			row.Locked = true
+			if title != "" {
+				row.Question = "计划 · " + title
+			} else {
+				row.Question = "计划 · 任务计划"
+			}
+			if view, _ := s.LookupActiveTaskPlan(ctx, agentID); view != nil && view.PlanID == planID {
+				row.Plan = view
+			}
+		}
+		out = append(out, row)
 	}
-	return TaskQueueView{Items: items, Hold: hold, Active: active}, nil
+	return TaskQueueView{Items: out, Hold: hold, Active: active}, nil
 }
 
 // beginTaskQueueExecution 校验任务归属并原子取得唯一派发权。
@@ -216,8 +244,12 @@ func (s *Service) InterruptPreferAgentTask(ctx context.Context, agentID int64, q
 	}
 	if running != nil {
 		// 打断=放弃当前队列表项，不paused进轨，避免用户以为「插话进了队列」。
-		if _, err := s.Store.CompleteAgentTaskRunning(ctx, running.ID, store.TaskCancelled, "interrupted by user"); err != nil {
+		completed, err := s.Store.CompleteAgentTaskRunning(ctx, running.ID, store.TaskCancelled, "interrupted by user")
+		if err != nil {
 			return nil, err
+		}
+		if completed {
+			s.writeBackGitHubIdeaTask(running.ID, store.TaskCancelled, "interrupted by user")
 		}
 	}
 	// 停引擎；不 hold，便于后续仍可续跑用户此前主动入队的项。
@@ -245,6 +277,8 @@ func (s *Service) FinishAgentTaskAndPeekNext(ctx context.Context, agentID, taskI
 		if !completed {
 			return nil, nil
 		}
+		// GitHub Idea 任务在统一终态点回写 Markdown；非插件任务没有绑定，会被快速忽略。
+		s.writeBackGitHubIdeaTask(taskID, status, errText)
 	}
 	// 注意：taskID==0 时禁止 Complete「当前 running」——打断直发后紧急任务已是 running，误收尾会毁掉它
 
@@ -294,10 +328,17 @@ func (s *Service) ContinueAgentTaskQueue(ctx context.Context, agentID int64) (*s
 	return s.Store.ClaimQueuedAgentTask(ctx, agentID)
 }
 
-// CancelAgentTaskQueueItem 取消 queued/paused。
+// CancelAgentTaskQueueItem 取消 queued/paused。Plan 原子项不可普通取消。
 func (s *Service) CancelAgentTaskQueueItem(ctx context.Context, agentID, taskID int64) error {
 	unlock := s.taskQueueLock(agentID)
 	defer unlock()
+	it, err := s.Store.GetAgentTaskQueueItem(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if IsPlanQueueItem(it) {
+		return fmt.Errorf("计划任务不可删除，请使用终止计划")
+	}
 	ok, err := s.Store.CancelAgentTask(ctx, agentID, taskID)
 	if err != nil {
 		return err
@@ -305,10 +346,11 @@ func (s *Service) CancelAgentTaskQueueItem(ctx context.Context, agentID, taskID 
 	if !ok {
 		return fmt.Errorf("task not cancellable")
 	}
+	s.writeBackGitHubIdeaTask(taskID, store.TaskCancelled, "cancelled by user")
 	return nil
 }
 
-// UpdateAgentTaskQueueQuestion 改写未执行项（queued/paused）问题文案。
+// UpdateAgentTaskQueueQuestion 改写未执行项（queued/paused）问题文案。Plan 原子项不可改。
 func (s *Service) UpdateAgentTaskQueueQuestion(ctx context.Context, agentID, taskID int64, question string) error {
 	question = strings.TrimSpace(question)
 	if question == "" {
@@ -316,6 +358,13 @@ func (s *Service) UpdateAgentTaskQueueQuestion(ctx context.Context, agentID, tas
 	}
 	unlock := s.taskQueueLock(agentID)
 	defer unlock()
+	it, err := s.Store.GetAgentTaskQueueItem(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if IsPlanQueueItem(it) {
+		return fmt.Errorf("计划任务不可编辑文案")
+	}
 	ok, err := s.Store.UpdateAgentTaskQuestion(ctx, agentID, taskID, question)
 	if err != nil {
 		return err
@@ -350,6 +399,11 @@ func (s *Service) RepairAgentTaskQueueOnBoot(ctx context.Context) {
 // autoRunClaimedTaskQueueItem 无 SSE 客户端时由服务端串行续跑（手机入队链）。
 func (s *Service) autoRunClaimedTaskQueueItem(agentID int64, next *store.AgentTaskQueueItem) {
 	if next == nil || next.ID <= 0 {
+		return
+	}
+	// Plan 原子项：走逐步执行，不把标记文案当用户提问。
+	if planID, _, ok := ParsePlanQueueQuestion(next.Question); ok {
+		go s.runConfirmedTaskPlan(agentID, planID, next.ID)
 		return
 	}
 	atts := TaskQueueAttsToChat(ParseTaskQueueAttachments(next.AttachmentsJSON))
@@ -422,7 +476,9 @@ func (s *Service) StopManagedAndHoldQueue(agentID int64) bool {
 	unlock := s.taskQueueLock(agentID)
 	defer unlock()
 	if cur, _ := s.Store.GetRunningAgentTask(ctx, agentID); cur != nil {
-		_, _ = s.Store.CompleteAgentTaskRunning(ctx, cur.ID, store.TaskCancelled, "stopped by user")
+		if completed, _ := s.Store.CompleteAgentTaskRunning(ctx, cur.ID, store.TaskCancelled, "stopped by user"); completed {
+			s.writeBackGitHubIdeaTask(cur.ID, store.TaskCancelled, "stopped by user")
+		}
 	}
 	_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, true)
 	return stopped

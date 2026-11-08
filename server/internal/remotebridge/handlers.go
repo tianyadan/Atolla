@@ -29,6 +29,22 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 			folderName[f.ID] = f.Name
 		}
 	}
+	// 活跃任务规划（waiting/running/paused）：按 agent 挂到 payload.task_plan。
+	planByAgent := map[string]map[string]any{}
+	if tasks, terr := ec.Store.AgentTasks(ec.Context, "managed", ""); terr == nil {
+		for _, t := range tasks {
+			id := strings.TrimSpace(t.AgentID)
+			if id == "" || planByAgent[id] != nil {
+				continue
+			}
+			st := strings.ToLower(strings.TrimSpace(t.Status))
+			if st != "running" && st != "waiting" && st != "paused" {
+				continue
+			}
+			planByAgent[id] = buildTaskPlanMirror(t)
+		}
+	}
+
 	// Empty list still posts so relay can prune deleted agents from the mirror.
 	rows := make([]map[string]any, 0, len(agents))
 	for _, a := range agents {
@@ -69,7 +85,8 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 		}
 		estimated := agent.InferEstimated(a.Engine, ctxSource)
 		usedPercent := agent.PercentOf(usedTokens, windowTokens)
-		payload := buildAgentMirrorPayload(a, fn, agentMirrorUsage{
+		live, _ := GetAgentLive(a.ID)
+		payload := buildAgentMirrorPayloadEx(a, fn, agentMirrorUsage{
 			UsedTokens:       usedTokens,
 			WindowTokens:     windowTokens,
 			UsedPercent:      usedPercent,
@@ -77,7 +94,7 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 			ContextSource:    ctxSource,
 			ContextUpdatedAt: ctxUpdated,
 			Anomaly:          anomaly,
-		})
+		}, live, planByAgent[strconv.FormatInt(a.ID, 10)])
 		rows = append(rows, map[string]any{
 			"agent_id":     strconv.FormatInt(a.ID, 10),
 			"display_name": a.Name,
@@ -111,11 +128,7 @@ func handleSyncTasks(ec *ExecContext) (any, error) {
 			"agent_id": agentID,
 			"task_id":  t.TaskID,
 			"status":   t.Status,
-			"payload": map[string]any{
-				"task_name": t.TaskName,
-				"progress":  t.Progress,
-				"message":   t.Message,
-			},
+			"payload":  buildTaskPlanMirror(t),
 		})
 	}
 	if err := ec.Client.PostTasksSnapshot(ec.Context, rows); err != nil {
