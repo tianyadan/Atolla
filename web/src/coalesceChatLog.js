@@ -101,6 +101,7 @@ export function coalesceChatLog(local = [], fromDb = []) {
     time: bestLocalAsst.time,
     replySec: bestLocalAsst.replySec,
     attachments: bestLocalAsst.attachments || [],
+    uid: bestLocalAsst.uid,
   })
   return merged
 }
@@ -128,6 +129,7 @@ function appendPendingLocalUsers(merged, local) {
       attachments: m.attachments || [],
       time: m.time,
       pending: true,
+      uid: m.uid,
     })
   }
 }

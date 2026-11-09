@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { marked } from 'marked'
+import { hasTextSelection } from './selectionGuard.js'
 
 const API = '/api'
 
@@ -19,8 +20,12 @@ export function compactMarkdown(src) {
 }
 
 /**
- * 数字员工 Markdown：鉴权拉取工作区图片，支持相对路径 / file:// / 绝对路径。
- * 选中文字时暂缓改写 innerHTML，避免流式刷新打断复制。
+ * 数字员工 Markdown。
+ *
+ * innerHTML 由这里命令式写入，**不用 dangerouslySetInnerHTML**：
+ * 父组件每秒重渲染（运行计时等）会传新的 {__html} 对象，React 会把内容相同的
+ * 子节点整段重建 —— 用户正选中的文字会瞬间丢失。命令式写入可以做到
+ * 「字符串没变就一行 DOM 都不动」，选中就稳定了。
  */
 export default function AgentMarkdown({ content, agentId, authHeaders, className = 'msg-body msg-body-flat' }) {
   const html = useMemo(
@@ -31,23 +36,39 @@ export default function AgentMarkdown({ content, agentId, authHeaders, className
   const pendingHtml = useRef(html)
   const [renderHtml, setRenderHtml] = useState(html)
 
+  // 正文变化：有选区时先挂着，等选完再落
   useEffect(() => {
     pendingHtml.current = html
-    if (selectionInside(ref.current)) return
+    // 跨消息拖选时另一条也会走到这里，所以判断整个页面的选区，而不是只看本条
+    if (hasTextSelection()) return
     setRenderHtml(html)
   }, [html])
 
   useEffect(() => {
     const flush = () => {
       if (pendingHtml.current === renderHtml) return
-      if (selectionInside(ref.current)) return
+      if (hasTextSelection()) return
       setRenderHtml(pendingHtml.current)
     }
     document.addEventListener('selectionchange', flush)
-    return () => document.removeEventListener('selectionchange', flush)
+    document.addEventListener('pointerup', flush)
+    return () => {
+      document.removeEventListener('selectionchange', flush)
+      document.removeEventListener('pointerup', flush)
+    }
   }, [renderHtml])
 
-  useEffect(() => {
+  // 只有内容真的变了才写 DOM；相同内容重写 innerHTML 会毁掉选区
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (el.__mdHtml === renderHtml) return
+    el.__mdHtml = renderHtml
+    el.innerHTML = renderHtml
+  }, [renderHtml])
+
+  // 写入后再做图片鉴权替换
+  const applyImages = useCallback(() => {
     const root = ref.current
     if (!root || !agentId) return undefined
     const imgs = [...root.querySelectorAll('img')]
@@ -85,7 +106,9 @@ export default function AgentMarkdown({ content, agentId, authHeaders, className
     }
     // authHeaders 可能每次 render 新引用；仅随正文/数字员工变化重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderHtml, agentId])
+  }, [agentId])
 
-  return <div ref={ref} className={className} dangerouslySetInnerHTML={{ __html: renderHtml }} />
+  useLayoutEffect(() => applyImages(), [applyImages, renderHtml])
+
+  return <div ref={ref} className={className} />
 }

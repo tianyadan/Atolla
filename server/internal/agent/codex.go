@@ -25,10 +25,11 @@ type CodexCommandFn func(CodexCommandEvent)
 
 // CodexEvent 一行 JSONL 解析结果。
 type CodexEvent struct {
-	Activity *Activity
-	Chunk    string
-	Meta     *RunMeta
-	Command  *CodexCommandEvent
+	Activity  *Activity
+	Chunk     string
+	Reasoning bool // Chunk 来自 reasoning/thought 事件：仅前端折叠展示，不写入正文
+	Meta      *RunMeta
+	Command   *CodexCommandEvent
 }
 
 // CodexSandboxMode 按是否绑定工作区选择 Codex 沙箱：
@@ -161,6 +162,7 @@ func ParseCodexJSONLLine(line []byte) (CodexEvent, bool) {
 			}
 			if strings.TrimSpace(text) != "" && (typ == "item.completed" || typ == "item.started") {
 				ev.Chunk = text
+				ev.Reasoning = true
 				ok = true
 			} else if typ == "item.started" {
 				ev.Activity = &Activity{Tool: "codex", Summary: "思考中…"}
@@ -388,6 +390,13 @@ func runCodexJSONStream(
 				lastAct = key
 				onActivity(*ev.Activity)
 			}
+		}
+		if ev.Chunk != "" && ev.Reasoning {
+			// 思考正文只给前端折叠展示，不进入本轮正文（否则会写进数据库）
+			if onChunk != nil {
+				onChunk(ev.Chunk)
+			}
+			continue
 		}
 		if ev.Chunk != "" {
 			raw := strings.TrimSpace(ev.Chunk)

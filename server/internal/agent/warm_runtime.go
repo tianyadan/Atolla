@@ -127,8 +127,10 @@ func (r *WarmRuntime) Ask(ctx context.Context, dir, systemPrompt, question, hist
 			}
 			return full.String(), int(time.Since(start).Milliseconds()), runErr
 		case line := <-w.lines:
-			if onPhase != nil {
-				if phase, ok := ParseClaudePhase(line); ok {
+			linePhase := AgentPhase("")
+			if phase, ok := ParseClaudePhase(line); ok {
+				linePhase = phase.Phase
+				if onPhase != nil {
 					onPhase(phase)
 				}
 			}
@@ -158,10 +160,17 @@ func (r *WarmRuntime) Ask(ctx context.Context, dir, systemPrompt, question, hist
 				}
 			}
 			text, snapshot, isResult := claudeLineText(line)
-			if text != "" && strings.TrimSpace(text) != "No response requested." && (!snapshot || full.Len() == 0) {
-				full.WriteString(text)
-				if onChunk != nil {
-					onChunk(text)
+			if text != "" && strings.TrimSpace(text) != "No response requested." {
+				if linePhase == PhaseThinking {
+					// 思考增量只用于前端折叠展示，不进入本轮正文
+					if onChunk != nil {
+						onChunk(text)
+					}
+				} else if !snapshot || full.Len() == 0 {
+					full.WriteString(text)
+					if onChunk != nil {
+						onChunk(text)
+					}
 				}
 			}
 			if isResult {

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
-import AgentMarkdown, { selectionInside } from './agentMarkdown.jsx'
+import AgentMarkdown from './agentMarkdown.jsx'
+import StaticHtml from './staticHtml.jsx'
+import { hasTextSelection, isSelectingText } from './selectionGuard.js'
 import JellyAvatar from './JellyAvatar.jsx'
 import JellyColorPicker from './JellyColorPicker.jsx'
 import {
@@ -61,6 +63,51 @@ const ENGINES = [
 ]
 const JOB_ROLES = ['前端', '后端', '移动端', '测试', '运维', '设计', '文档']
 
+/** 本地消息稳定 key：无 DB id 的流式/乐观消息在数组重排后也不能重新挂载。 */
+let localMsgSeq = 0
+function localMsgUid() {
+  localMsgSeq += 1
+  return `u${localMsgSeq}-${Date.now().toString(36)}`
+}
+
+function messageKey(m, i) {
+  if (m?.id != null) return `db-${m.id}`
+  if (m?.uid) return m.uid
+  return `i${i}`
+}
+
+/** 思考流式节流：约 60ms 合并一次，避免每个 delta 都触发整页重渲染 */
+const THINKING_FLUSH_MS = 60
+const thinkingBuf = new Map()
+const thinkingTimers = new Map()
+
+function flushThinking(agentId) {
+  const timer = thinkingTimers.get(agentId)
+  if (timer) {
+    clearTimeout(timer)
+    thinkingTimers.delete(agentId)
+  }
+  const piece = thinkingBuf.get(agentId) || ''
+  thinkingBuf.delete(agentId)
+  if (!piece) return
+  const sess = getAgentSession(agentId)
+  patchAgentSession(agentId, { liveThinking: `${sess.liveThinking || ''}${piece}` })
+}
+
+function queueThinking(agentId, piece) {
+  if (!piece) return
+  thinkingBuf.set(agentId, (thinkingBuf.get(agentId) || '') + piece)
+  if (thinkingTimers.has(agentId)) return
+  thinkingTimers.set(agentId, setTimeout(() => flushThinking(agentId), THINKING_FLUSH_MS))
+}
+
+function resetThinking(agentId) {
+  const timer = thinkingTimers.get(agentId)
+  if (timer) clearTimeout(timer)
+  thinkingTimers.delete(agentId)
+  thinkingBuf.delete(agentId)
+}
+
 /** 引擎错误展示压成约 1～2 行，完整内容放 title。 */
 function shortErrorText(raw, max = 140) {
   let t = String(raw || '').trim()
@@ -75,24 +122,40 @@ function shortErrorText(raw, max = 140) {
   return `${t.slice(0, max)}…`
 }
 
-/** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默） */
-const THINKING_PHRASES = [
-  'thinking',
-  'pondering',
-  'brewing ideas',
-  'consulting the rubber duck',
-  'untangling spaghetti',
-  'asking the void politely',
-  'compiling vibes',
-  'negotiating with reality',
-  'warming up neurons',
-  'reading tea leaves',
-  'sharpening virtual pencils',
-  'counting token sheep',
-  'channeling inner Claude',
-  'politely poking the model',
-  'assembling coherent thoughts',
-]
+/** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默）；跟随系统语言 */
+const THINKING_PHRASES = {
+  'zh-CN': [
+    '思考中',
+    '琢磨中',
+    '构思中',
+    '翻找线索',
+    '整理思路',
+    '推敲细节',
+    '核对上下文',
+    '权衡方案',
+    '理顺逻辑',
+    '逐条排查',
+    '准备动手',
+    '酝酿灵感',
+  ],
+  en: [
+    'thinking',
+    'pondering',
+    'brewing ideas',
+    'consulting the rubber duck',
+    'untangling spaghetti',
+    'asking the void politely',
+    'compiling vibes',
+    'negotiating with reality',
+    'warming up neurons',
+    'reading tea leaves',
+    'sharpening virtual pencils',
+    'counting token sheep',
+    'channeling inner Claude',
+    'politely poking the model',
+    'assembling coherent thoughts',
+  ],
+}
 
 const SCHEDULE_PRESETS = [
   { id: '', label: '自定义 cron', cron: '' },
@@ -202,7 +265,7 @@ export default function ManagedAgentsPanel({
   openHire = false, onHireConsumed, openSettings = false,
   conversationRefreshKey = 0, onAgentHired,
 }) {
-  const { t } = useLocale()
+  const { locale, t } = useLocale()
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
   /** 忙碌发送二选一弹层：{ question, attachments, hideEnqueue } */
@@ -268,6 +331,10 @@ export default function ManagedAgentsPanel({
   const stickBottomRef = useRef(true)
   /** 程序性滚底期间忽略 onScroll，避免把 stickBottom 误判为 false */
   const pinningScrollRef = useRef(false)
+  /** 选字期间被推迟落盘的聊天快照，选区结束后补上 */
+  const pendingChatLogRef = useRef(null)
+  /** 上次滚底时的高度，内容没变就不重复滚 */
+  const lastPinnedHeightRef = useRef(-1)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
 
@@ -279,7 +346,10 @@ export default function ManagedAgentsPanel({
   const activeTaskPlan = sess.activeTaskPlan
   const loading = !!sess.loading
   const compressing = !!sess.compressing
-  const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog, sessVer])
+  // 只用 chatLog 引用做依赖：sessVer 每 2~5 秒被轮询顶一次，会让数组换引用并触发多余的滚底
+  const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog])
+  // 思考过程：仅本轮流式可见（不落库），在消息流末尾折叠展示
+  const liveThinking = sess.liveThinking || ''
   const interrupting = !!sess.interrupting
   const permQueue = sess.permQueue || []
   const autoOn = !!sess.autoOn
@@ -620,9 +690,12 @@ export default function ManagedAgentsPanel({
       } else {
         next = fromDb
       }
-      // 划选复制中不要整表替换聊天 DOM（仅当前窗口有选区）
-      const skipDom = viewRef.current.selectedId === id && selectionInside(boxRef.current)
-      if (!skipDom) {
+      // 划选/拖选中不要整表替换聊天 DOM；先把最新快照存起来，等选区结束再落盘
+      const skipDom = viewRef.current.selectedId === id && isSelectingText()
+      if (skipDom) {
+        pendingChatLogRef.current = { id, next }
+      } else {
+        pendingChatLogRef.current = null
         setAgentChatLog(id, next)
       }
       patchAgentSession(id, {
@@ -650,6 +723,8 @@ export default function ManagedAgentsPanel({
 
   async function loadOlder() {
     if (!selectedId || sess.loadingMore || !sess.hasMore || loading) return
+    // 有选区时插历史会挪动选中的文字
+    if (hasTextSelection()) return
     const agentId = selectedId
     const oldestId = chatLog.find((m) => m.id)?.id
     if (!oldestId) return
@@ -771,13 +846,19 @@ export default function ManagedAgentsPanel({
       return []
     })
     setLightboxSrc('')
+    // 换人后高度缓存作废，否则可能跳过首次贴底
+    lastPinnedHeightRef.current = -1
   }, [selectedId])
 
   /** 把对话区钉在底部（双 rAF 等用户气泡 / RunStatus 布局完成） */
   function scrollChatToBottom() {
     stickBottomRef.current = true
     const el = boxRef.current
-    if (!el || selectionInside(el)) return
+    // 按住鼠标（可能正要拖选）或有选区时都不许滚，滚底会把锚点带走
+    if (!el || isSelectingText()) return
+    // 高度没变说明没有新内容，不必重复滚动
+    if (el.scrollHeight === lastPinnedHeightRef.current) return
+    lastPinnedHeightRef.current = el.scrollHeight
     pinningScrollRef.current = true
     const pin = () => { el.scrollTop = el.scrollHeight }
     pin()
@@ -795,6 +876,24 @@ export default function ManagedAgentsPanel({
     scrollChatToBottom()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatLog, loading, active, permQueue.length])
+
+  // 选区结束（或松手且没有选区）时，把选字期间攒下的聊天快照补进去
+  useEffect(() => {
+    const flush = () => {
+      if (isSelectingText()) return
+      const pending = pendingChatLogRef.current
+      if (!pending) return
+      pendingChatLogRef.current = null
+      // 选字期间 SSE 仍在往本地追加，直接覆盖会丢新内容；按 id 与最新本地状态合并
+      setAgentChatLog(pending.id, (prev) => coalesceChatLog(prev, pending.next))
+    }
+    document.addEventListener('selectionchange', flush)
+    document.addEventListener('pointerup', flush)
+    return () => {
+      document.removeEventListener('selectionchange', flush)
+      document.removeEventListener('pointerup', flush)
+    }
+  }, [])
 
   /** 刷新后无本地 SSE：按服务端 running 恢复 loading，并在终态清掉「幽灵忙碌」 */
   function syncLoadingFromAgentStatus(list) {
@@ -887,7 +986,8 @@ export default function ManagedAgentsPanel({
     if (pinningScrollRef.current) return
     // 阈值略放宽：亚像素 / RunStatus 增高时仍视为贴底
     stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96
-    if (el.scrollTop < 40) loadOlder()
+    // 划选时不往光标上方插历史消息，否则选区会被撑大
+    if (el.scrollTop < 40 && !hasTextSelection()) loadOlder()
   }
 
   async function createAgent(e) {
@@ -1026,7 +1126,7 @@ export default function ManagedAgentsPanel({
     if (!res.ok) return
     setAgentChatLog(selected.id, (prev) => [
       ...prev,
-      { role: 'status', content: d.text || '', time: Date.now() },
+      { role: 'status', content: d.text || '', time: Date.now(), uid: localMsgUid() },
     ])
     stickBottomRef.current = true
     await refreshAgentContext(selected.id, true)
@@ -1335,11 +1435,17 @@ export default function ManagedAgentsPanel({
             const next = stripRepeatedAssistantTail(cur + piece)
             n[n.length - 1] = { ...last, content: next }
           } else {
-            n.push({ role: 'assistant', content: stripRepeatedAssistantTail(piece), time: Date.now() })
+            n.push({ role: 'assistant', content: stripRepeatedAssistantTail(piece), time: Date.now(), uid: localMsgUid() })
           }
           return n
         })
+      } else if (ev.type === 'reasoning') {
+        // 思考过程：只进折叠区，不写入 chatLog、不落库；按 ~60ms 合并渲染
+        const piece = (ev.content || '').replace(/\\n/g, '\n')
+        if (!piece) continue
+        queueThinking(agentId, piece)
       } else if (ev.type === 'error') {
+        flushThinking(agentId)
         const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
           agentPhase: 'error',
@@ -1350,7 +1456,7 @@ export default function ManagedAgentsPanel({
           if (n.length && n[n.length - 1].role === 'assistant') {
             n[n.length - 1] = { ...n[n.length - 1], content: `❌ ${ev.message || '出错'}`, error: true }
           } else {
-            n.push({ role: 'assistant', content: `❌ ${ev.message || '出错'}`, error: true })
+            n.push({ role: 'assistant', content: `❌ ${ev.message || '出错'}`, error: true, uid: localMsgUid() })
           }
           return n
         })
@@ -1369,6 +1475,7 @@ export default function ManagedAgentsPanel({
           return n
         })
       } else if (ev.type === 'done') {
+        flushThinking(agentId)
         const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
           agentPhase: 'idle',
@@ -1427,6 +1534,7 @@ export default function ManagedAgentsPanel({
               calleeName: ev.callee_name,
               collapsed: true,
               time: Date.now(),
+              uid: localMsgUid(),
             },
           ])
         }
@@ -1444,7 +1552,7 @@ export default function ManagedAgentsPanel({
       } else if (ev.type === 'system_note') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,
-          { role: 'system', content: ev.content || '系统提示', time: Date.now() },
+          { role: 'system', content: ev.content || '系统提示', time: Date.now(), uid: localMsgUid() },
         ])
       } else if (ev.type === 'context_compacted') {
 		// 压缩后的真实上下文值以随后 rollout token_count 快照为准。
@@ -1452,7 +1560,7 @@ export default function ManagedAgentsPanel({
         if (getAgentSession(agentId).loading) {
           setAgentChatLog(agentId, (prev) => [
             ...prev,
-            { role: 'system', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now() },
+            { role: 'system', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now(), uid: localMsgUid() },
           ])
         } else {
           setAgentChatLog(agentId, (prev) => {
@@ -1480,7 +1588,12 @@ export default function ManagedAgentsPanel({
               }
             }
             const next = [
-              { role: 'assistant', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now() },
+              {
+                role: 'assistant',
+                content: ev.content || '📦 上下文已由引擎压缩，会话已保留',
+                time: Date.now(),
+                uid: localMsgUid(),
+              },
             ]
             if (lastUser) next.push(lastUser)
             if (lastAsst) next.push(lastAsst)
@@ -1499,7 +1612,7 @@ export default function ManagedAgentsPanel({
       } else if (ev.type === 'permission_auto') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,
-          { role: 'auto', content: `${ev.tool_name} · ${(ev.summary || '').slice(0, 80)}`, note: ev.note },
+          { role: 'auto', content: `${ev.tool_name} · ${(ev.summary || '').slice(0, 80)}`, note: ev.note, uid: localMsgUid() },
         ])
         patchAgentSession(agentId, {
           liveActivity: {
@@ -1524,6 +1637,7 @@ export default function ManagedAgentsPanel({
             meaning: ev.meaning || '',
             note: ev.note || ev.output || '',
             time: Date.now(),
+            uid: localMsgUid(),
           },
         ])
       } else if (ev.type === 'permission_resolved') {
@@ -1583,9 +1697,11 @@ export default function ManagedAgentsPanel({
     // 先钉底再改会话，避免中间一次 effect 读到旧的 stickBottom=false
     stickBottomRef.current = true
     const startedAt = Date.now()
+    resetThinking(agentId)
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
       agentPhase: 'working',
+      liveThinking: '',
       taskTokens: 0,
       liveActivity: { tool: '', summary: '启动中…', at: Date.now() },
       runtimeDetail: beginAgentRuntime(startedAt),
@@ -1594,7 +1710,7 @@ export default function ManagedAgentsPanel({
     // pending: 轮询 force 校准时由 coalesce 保留，避免乐观气泡被冲掉
     setAgentChatLog(agentId, (prev) => [
       ...prev,
-      { role: 'user', content: q, attachments: atts, time: Date.now(), pending: true },
+      { role: 'user', content: q, attachments: atts, time: Date.now(), pending: true, uid: localMsgUid() },
     ])
     scrollChatToBottom()
     pendingQueueNextRef.current = null
@@ -1607,6 +1723,7 @@ export default function ManagedAgentsPanel({
           attachments: atts,
           task_id: taskId || undefined,
           resume_prefix: resumePrefix || undefined,
+          locale,
         }),
         signal: ac.signal,
       })
@@ -1653,7 +1770,7 @@ export default function ManagedAgentsPanel({
                 return n
               }
             }
-            n.push({ role: 'assistant', content: '⏹ 已停止', error: true, time: Date.now() })
+            n.push({ role: 'assistant', content: '⏹ 已停止', error: true, time: Date.now(), uid: localMsgUid() })
             return n
           })
         }
@@ -1997,7 +2114,7 @@ export default function ManagedAgentsPanel({
           error: true,
         }
       } else {
-        n.push({ role: 'assistant', content: '⏹ 已终止本次对话', error: true, time: Date.now() })
+        n.push({ role: 'assistant', content: '⏹ 已终止本次对话', error: true, time: Date.now(), uid: localMsgUid() })
       }
       return n
     })
@@ -2214,7 +2331,7 @@ export default function ManagedAgentsPanel({
                   <p className="empty-chat">给同事下达任务后，需授权的命令会在此确认</p>
                 )}
                 {chatLog.map((m, i) => (
-                  <div key={`${selectedId}-${m.id || `i${i}`}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
+                  <div key={`${selectedId}-${messageKey(m, i)}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
                     <div className="msg-label">
                       <span>
                         {m.role === 'invoke_quote' && (
@@ -2284,7 +2401,7 @@ export default function ManagedAgentsPanel({
                           <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
                         )}
                         {m.content ? (
-                          <div dangerouslySetInnerHTML={{ __html: escapeHtml(m.content) }} />
+                          <StaticHtml html={escapeHtml(m.content)} />
                         ) : null}
                       </div>
                     )}
@@ -2298,6 +2415,7 @@ export default function ManagedAgentsPanel({
                     onDecide={decide}
                   />
                 )}
+                {liveThinking ? <ThinkingFold text={liveThinking} live={loading} /> : null}
                 {loading && (
                   <RunStatus
                     interrupting={interrupting}
@@ -3184,16 +3302,50 @@ function CopyTextButton({ text, className = 'ma-copy-btn' }) {
   )
 }
 
+/** 思考过程折叠区：默认收起，点击展开；内容仅来自本轮 SSE，不落库 */
+function ThinkingFold({ text, live }) {
+  const { t } = useLocale()
+  const bodyRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const chars = (text || '').length
+  // 展开时跟到底部，方便看最新思考
+  useEffect(() => {
+    if (!open || !live) return
+    const el = bodyRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [text, open, live])
+  if (!text) return null
+  return (
+    <details
+      className={`ma-think-fold${live ? ' is-live' : ''}`}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary>
+        <span className="ma-think-caret" aria-hidden="true">›</span>
+        <span className={`ma-think-title${live ? ' is-shimmer' : ''}`}>
+          {live ? t('chat.thinking.live') : t('chat.thinking.done')}
+        </span>
+        <span className="ma-think-chars">{t('chat.thinking.chars', { n: chars })}</span>
+      </summary>
+      <div className="ma-think-body" ref={bodyRef}>{text}</div>
+    </details>
+  )
+}
+
 /** 运行态：跳动水母 + thinking 文案 + token + 工具活动条 */
 function RunStatus({ interrupting, activity, runSec, taskTokens, phase = '', jellyColor = 'blue' }) {
+  const { locale, t } = useLocale()
+  const phrases = THINKING_PHRASES[locale] || THINKING_PHRASES['zh-CN']
   const [phraseIdx, setPhraseIdx] = useState(0)
   useEffect(() => {
-    const t = setInterval(() => {
-      setPhraseIdx((i) => (i + 1) % THINKING_PHRASES.length)
+    const timer = setInterval(() => {
+      setPhraseIdx((i) => (i + 1) % phrases.length)
     }, 2400)
-    return () => clearInterval(t)
-  }, [])
-  const phrase = interrupting ? 'interrupting' : THINKING_PHRASES[phraseIdx]
+    return () => clearInterval(timer)
+  }, [phrases.length])
+  const phrase = interrupting
+    ? t('chat.thinking.interrupting')
+    : phrases[phraseIdx % phrases.length]
   return (
     <div className="ma-run-status">
       <div className="ma-thinking" aria-live="polite">

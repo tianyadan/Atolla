@@ -53,6 +53,17 @@ func AgentPolicyBlock(a *store.ManagedAgent) string {
 	return b.String()
 }
 
+// LanguageDirective 按界面语言约束内部思考与回复语言；空 locale 返回空串。
+func LanguageDirective(locale string) string {
+	switch strings.ToLower(strings.TrimSpace(locale)) {
+	case "en", "en-us", "en-gb":
+		return "【UI language】Think and reply in English, including your internal reasoning (thinking) content. If the user explicitly asks for another language, follow the user's request."
+	case "zh", "zh-cn", "zh-hans", "zh-hant", "zh-tw":
+		return "【界面语言】请使用简体中文进行内部思考（thinking）和回复。若用户明确要求使用其他语言，则以用户要求为准。"
+	}
+	return ""
+}
+
 // MaybeReinforcePolicy 每 10 轮用户消息附加策略重申。
 func MaybeReinforcePolicy(a *store.ManagedAgent, userTurnCount int, question string) string {
 	if userTurnCount > 0 && userTurnCount%10 == 0 {

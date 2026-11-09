@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 
 	"atolla/server/internal/agent"
 	"atolla/server/internal/store"
@@ -111,7 +112,26 @@ func (s *Service) SpeakInGroup(ctx context.Context, groupID, speakerAgentID int6
 	})
 
 	sys := s.buildGroupSpeakSystem(runCtx, detail, a, member.GroupTag)
+	// 群聊不展示思考：按阶段丢弃 thinking 增量，避免被当成发言内容
+	var thinkingPhase atomic.Bool
+	{
+		inner := onEvent
+		onEvent = func(ev map[string]any) {
+			if ev != nil {
+				if t, _ := ev["type"].(string); t == "agent_phase" {
+					phase, _ := ev["phase"].(string)
+					thinkingPhase.Store(phase == string(agent.PhaseThinking))
+				}
+			}
+			if inner != nil {
+				inner(ev)
+			}
+		}
+	}
 	onChunk := func(chunk string) {
+		if thinkingPhase.Load() {
+			return
+		}
 		emitAsk(onEvent, map[string]any{
 			"type":             "chunk",
 			"content":          chunk,

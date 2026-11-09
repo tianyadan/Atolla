@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"atolla/server/config"
@@ -673,7 +674,21 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 	onMeta := func(m agent.RunMeta) {
 		s.RememberEngineMeta(context.WithoutCancel(ctx), 0, convID, m)
 	}
-	full, ms, aerr := s.Agent.AskStream(ctx, dir, sysPrompt, req.Question, history, onChunk, timeout, hook, nil, onMeta, resume)
+	// 对外接待不展示思考：按运行阶段丢 thinking 增量（正文本身已不含思考）
+	var thinkingPhase atomic.Bool
+	onPhase := func(p agent.PhaseEvent) {
+		thinkingPhase.Store(p.Phase == agent.PhaseThinking)
+	}
+	streamChunk := onChunk
+	if onChunk != nil {
+		streamChunk = func(chunk string) {
+			if thinkingPhase.Load() {
+				return
+			}
+			onChunk(chunk)
+		}
+	}
+	full, ms, aerr := s.Agent.AskStreamWithImagesPhase(ctx, dir, sysPrompt, req.Question, history, streamChunk, timeout, hook, nil, onMeta, onPhase, resume, nil)
 
 	status := "ok"
 	content := full
