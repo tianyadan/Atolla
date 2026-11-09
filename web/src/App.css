@@ -1964,13 +1964,9 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
 }
 .ma-copy-btn:hover { color: #f5f5f5; border-color: #777777; }
 .ma-copy-btn.is-copied, .cmd-copy.is-copied { color: #86efac; border-color: #166534; }
-/* 思考过程折叠区（不落库，仅本轮流式可见） */
+/* 思考过程折叠区（不落库，仅本轮流式可见；无外框，仅标题 + 可选分隔线） */
 .ma-think-fold {
   margin: 10px 0 2px;
-  padding: 6px 10px 8px;
-  border: 1px solid #242424;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
 }
 .ma-think-fold > summary {
   display: flex; align-items: center; gap: 6px;
@@ -1978,14 +1974,30 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
   color: #9a9a9a; font-size: 12px;
 }
 .ma-think-fold > summary::-webkit-details-marker { display: none; }
-.ma-think-caret { display: inline-block; transition: transform 0.16s ease; font-size: 11px; }
+.ma-think-caret { display: inline-block; transition: transform 0.16s ease; font-size: 11px; color: #666666; }
 .ma-think-fold[open] .ma-think-caret { transform: rotate(90deg); }
-.ma-think-label { font-weight: 500; }
-.ma-think-fold.is-live .ma-think-label { color: #d6d6d6; }
+.ma-think-title { font-weight: 500; font-size: 13px; letter-spacing: 0.02em; }
+/* 思考中：柔光带缓慢扫过（与运行态 loading 同一套光效，周期 2s 缓入缓出） */
+.ma-think-title.is-shimmer {
+  display: inline-flex;
+  background: linear-gradient(105deg, #8a8a8a 0%, #dddddd 35%, #777777 55%, #f5f5f5 75%, #8a8a8a 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ma-think-shine 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ma-think-title.is-shimmer {
+    animation: none;
+    background: none;
+    color: #cfcfcf;
+    -webkit-text-fill-color: #cfcfcf;
+  }
+}
 .ma-think-chars { margin-left: auto; color: #666666; font-size: 11px; }
 .ma-think-body {
-  margin-top: 8px; padding-top: 8px;
-  border-top: 1px dashed #242424;
+  margin-top: 6px; padding-top: 6px;
   white-space: pre-wrap; word-break: break-word;
   color: #9a9a9a; line-height: 1.7; font-size: 12.5px;
   max-height: 340px; overflow: auto;

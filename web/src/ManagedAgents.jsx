@@ -76,6 +76,38 @@ function messageKey(m, i) {
   return `i${i}`
 }
 
+/** 思考流式节流：约 60ms 合并一次，避免每个 delta 都触发整页重渲染 */
+const THINKING_FLUSH_MS = 60
+const thinkingBuf = new Map()
+const thinkingTimers = new Map()
+
+function flushThinking(agentId) {
+  const timer = thinkingTimers.get(agentId)
+  if (timer) {
+    clearTimeout(timer)
+    thinkingTimers.delete(agentId)
+  }
+  const piece = thinkingBuf.get(agentId) || ''
+  thinkingBuf.delete(agentId)
+  if (!piece) return
+  const sess = getAgentSession(agentId)
+  patchAgentSession(agentId, { liveThinking: `${sess.liveThinking || ''}${piece}` })
+}
+
+function queueThinking(agentId, piece) {
+  if (!piece) return
+  thinkingBuf.set(agentId, (thinkingBuf.get(agentId) || '') + piece)
+  if (thinkingTimers.has(agentId)) return
+  thinkingTimers.set(agentId, setTimeout(() => flushThinking(agentId), THINKING_FLUSH_MS))
+}
+
+function resetThinking(agentId) {
+  const timer = thinkingTimers.get(agentId)
+  if (timer) clearTimeout(timer)
+  thinkingTimers.delete(agentId)
+  thinkingBuf.delete(agentId)
+}
+
 /** 引擎错误展示压成约 1～2 行，完整内容放 title。 */
 function shortErrorText(raw, max = 140) {
   let t = String(raw || '').trim()
@@ -90,24 +122,40 @@ function shortErrorText(raw, max = 140) {
   return `${t.slice(0, max)}…`
 }
 
-/** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默） */
-const THINKING_PHRASES = [
-  'thinking',
-  'pondering',
-  'brewing ideas',
-  'consulting the rubber duck',
-  'untangling spaghetti',
-  'asking the void politely',
-  'compiling vibes',
-  'negotiating with reality',
-  'warming up neurons',
-  'reading tea leaves',
-  'sharpening virtual pencils',
-  'counting token sheep',
-  'channeling inner Claude',
-  'politely poking the model',
-  'assembling coherent thoughts',
-]
+/** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默）；跟随系统语言 */
+const THINKING_PHRASES = {
+  'zh-CN': [
+    '思考中',
+    '琢磨中',
+    '构思中',
+    '翻找线索',
+    '整理思路',
+    '推敲细节',
+    '核对上下文',
+    '权衡方案',
+    '理顺逻辑',
+    '逐条排查',
+    '准备动手',
+    '酝酿灵感',
+  ],
+  en: [
+    'thinking',
+    'pondering',
+    'brewing ideas',
+    'consulting the rubber duck',
+    'untangling spaghetti',
+    'asking the void politely',
+    'compiling vibes',
+    'negotiating with reality',
+    'warming up neurons',
+    'reading tea leaves',
+    'sharpening virtual pencils',
+    'counting token sheep',
+    'channeling inner Claude',
+    'politely poking the model',
+    'assembling coherent thoughts',
+  ],
+}
 
 const SCHEDULE_PRESETS = [
   { id: '', label: '自定义 cron', cron: '' },
@@ -217,7 +265,7 @@ export default function ManagedAgentsPanel({
   openHire = false, onHireConsumed, openSettings = false,
   conversationRefreshKey = 0, onAgentHired,
 }) {
-  const { t } = useLocale()
+  const { locale, t } = useLocale()
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
   /** 忙碌发送二选一弹层：{ question, attachments, hideEnqueue } */
@@ -1392,12 +1440,12 @@ export default function ManagedAgentsPanel({
           return n
         })
       } else if (ev.type === 'reasoning') {
-        // 思考过程：只进折叠区，不写入 chatLog、不落库
+        // 思考过程：只进折叠区，不写入 chatLog、不落库；按 ~60ms 合并渲染
         const piece = (ev.content || '').replace(/\\n/g, '\n')
         if (!piece) continue
-        const local = getAgentSession(agentId)
-        patchAgentSession(agentId, { liveThinking: `${local.liveThinking || ''}${piece}` })
+        queueThinking(agentId, piece)
       } else if (ev.type === 'error') {
+        flushThinking(agentId)
         const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
           agentPhase: 'error',
@@ -1427,6 +1475,7 @@ export default function ManagedAgentsPanel({
           return n
         })
       } else if (ev.type === 'done') {
+        flushThinking(agentId)
         const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
           agentPhase: 'idle',
@@ -1648,6 +1697,7 @@ export default function ManagedAgentsPanel({
     // 先钉底再改会话，避免中间一次 effect 读到旧的 stickBottom=false
     stickBottomRef.current = true
     const startedAt = Date.now()
+    resetThinking(agentId)
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
       agentPhase: 'working',
@@ -1673,6 +1723,7 @@ export default function ManagedAgentsPanel({
           attachments: atts,
           task_id: taskId || undefined,
           resume_prefix: resumePrefix || undefined,
+          locale,
         }),
         signal: ac.signal,
       })
@@ -3253,6 +3304,7 @@ function CopyTextButton({ text, className = 'ma-copy-btn' }) {
 
 /** 思考过程折叠区：默认收起，点击展开；内容仅来自本轮 SSE，不落库 */
 function ThinkingFold({ text, live }) {
+  const { t } = useLocale()
   const bodyRef = useRef(null)
   const [open, setOpen] = useState(false)
   const chars = (text || '').length
@@ -3270,8 +3322,10 @@ function ThinkingFold({ text, live }) {
     >
       <summary>
         <span className="ma-think-caret" aria-hidden="true">›</span>
-        <span className="ma-think-label">{live ? '正在思考' : '思考过程'}</span>
-        <span className="ma-think-chars">{chars} 字</span>
+        <span className={`ma-think-title${live ? ' is-shimmer' : ''}`}>
+          {live ? t('chat.thinking.live') : t('chat.thinking.done')}
+        </span>
+        <span className="ma-think-chars">{t('chat.thinking.chars', { n: chars })}</span>
       </summary>
       <div className="ma-think-body" ref={bodyRef}>{text}</div>
     </details>
@@ -3280,14 +3334,18 @@ function ThinkingFold({ text, live }) {
 
 /** 运行态：跳动水母 + thinking 文案 + token + 工具活动条 */
 function RunStatus({ interrupting, activity, runSec, taskTokens, phase = '', jellyColor = 'blue' }) {
+  const { locale, t } = useLocale()
+  const phrases = THINKING_PHRASES[locale] || THINKING_PHRASES['zh-CN']
   const [phraseIdx, setPhraseIdx] = useState(0)
   useEffect(() => {
-    const t = setInterval(() => {
-      setPhraseIdx((i) => (i + 1) % THINKING_PHRASES.length)
+    const timer = setInterval(() => {
+      setPhraseIdx((i) => (i + 1) % phrases.length)
     }, 2400)
-    return () => clearInterval(t)
-  }, [])
-  const phrase = interrupting ? 'interrupting' : THINKING_PHRASES[phraseIdx]
+    return () => clearInterval(timer)
+  }, [phrases.length])
+  const phrase = interrupting
+    ? t('chat.thinking.interrupting')
+    : phrases[phraseIdx % phrases.length]
   return (
     <div className="ma-run-status">
       <div className="ma-thinking" aria-live="polite">

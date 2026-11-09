@@ -188,6 +188,8 @@ func (s *Service) AskManagedWithTask(ctx context.Context, agentID int64, questio
 type AskUserFacingOpts struct {
 	TaskID       int64
 	ResumePrefix bool
+	// Locale 界面语言（zh-CN / en），用于约束思考与回复语言。
+	Locale string
 }
 
 // askManagedUserFacing 后台或手机发起的主会话 Ask，写入数字员工审计。
@@ -255,6 +257,7 @@ func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, quest
 		bindMainConv: true,
 		attachments:  NormalizeChatAttachments(atts),
 		agentAudit:   &agentAskAudit{Source: source},
+		locale:       opts.Locale,
 	}, onEvent)
 	ok := askErr == nil
 	errText := ""
@@ -319,6 +322,8 @@ type askCoreOpts struct {
 	visitorAudit *visitorAskAudit
 	// agentAudit 非空时：数字员工主会话 Ask 写入审计看板（后台/手机）。
 	agentAudit *agentAskAudit
+	// locale 界面语言（zh-CN / en）：约束思考与回复语言，空则不加指令。
+	locale string
 }
 
 // visitorAskAudit 前台一轮 Ask 的审计上下文。
@@ -565,6 +570,9 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	sys = s.consumeSystemReinject(runCtx, convID, sys)
 	userTurns, _ := s.Store.CountUserMessages(runCtx, convID)
 	q := MaybeReinforcePolicy(a, userTurns, engineQuestion)
+	if d := LanguageDirective(opts.locale); d != "" {
+		q = d + "\n\n" + q
+	}
 
 	// 默认靠引擎 resume；session 丢失或需 reinject（换工作区/压缩）时拼平台历史
 	history := ""

@@ -430,6 +430,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 		Question     string `json:"question"`
 		TaskID       int64  `json:"task_id"`
 		ResumePrefix bool   `json:"resume_prefix"`
+		Locale       string `json:"locale"`
 		Attachments  []struct {
 			ID   string `json:"id"`
 			URL  string `json:"url"`
@@ -570,7 +571,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 				}
 			}
 			sendEvent(ev)
-		}, service.AskUserFacingOpts{TaskID: body.TaskID, ResumePrefix: body.ResumePrefix})
+		}, service.AskUserFacingOpts{TaskID: body.TaskID, ResumePrefix: body.ResumePrefix, Locale: body.Locale})
 		if askErr != nil {
 			sendEvent(map[string]interface{}{"type": "error", "message": askErr.Error()})
 			return
