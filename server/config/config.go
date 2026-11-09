@@ -49,6 +49,10 @@ type Config struct {
 	ContextWindowClaude int64
 	ContextWindowCodex  int64
 	ContextWindowCursor int64
+
+	// 会话运行时：空闲进程短时保温；达到内存阈值时统一释放空闲实例。
+	SessionWarmTTLSeconds int
+	SessionWarmMemoryMB   int
 }
 
 func getenv(key, def string) string {
@@ -115,7 +119,29 @@ func Load() Config {
 		ContextWindowClaude: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "1000000"))),
 		ContextWindowCodex:  int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CODEX", "200000"))),
 		ContextWindowCursor: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CURSOR", "200000"))),
+
+		SessionWarmTTLSeconds: clampWarmTTLSeconds(atoi(getenv("AVATAR_SESSION_WARM_TTL_SEC", "60"))),
+		SessionWarmMemoryMB:   clampWarmMemoryMB(atoi(getenv("AVATAR_SESSION_WARM_MEMORY_MB", "2048"))),
 	}
+}
+
+const (
+	DefaultSessionWarmTTLSeconds = 60
+	DefaultSessionWarmMemoryMB   = 2048
+)
+
+func clampWarmTTLSeconds(n int) int {
+	if n < 0 || n > 3600 {
+		return DefaultSessionWarmTTLSeconds
+	}
+	return n
+}
+
+func clampWarmMemoryMB(n int) int {
+	if n < 128 || n > 32768 {
+		return DefaultSessionWarmMemoryMB
+	}
+	return n
 }
 
 // ContextWindowForEngine 返回引擎默认上下文窗口；未知引擎回退 Claude 窗口。

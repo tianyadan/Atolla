@@ -154,6 +154,9 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.GET("/admin/browser-use", h.AdminBrowserUseStatus)
 			adm.POST("/admin/browser-use/ensure", h.AdminBrowserUseEnsure)
 			adm.GET("/admin/engines/usage", h.AdminEnginesUsage)
+			adm.GET("/admin/runtime-settings", h.AdminRuntimeSettingsGet)
+			adm.PUT("/admin/runtime-settings", h.AdminRuntimeSettingsPut)
+			adm.POST("/admin/runtime-settings/restart", h.AdminRuntimeRestart)
 
 			adm.GET("/admin/db/status", h.AdminDBStatus)
 			adm.POST("/admin/db/switch", h.AdminDBSwitch)

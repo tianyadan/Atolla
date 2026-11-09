@@ -68,6 +68,7 @@ func (s *Service) StopRemoteBridge() {
 // Shutdown stops background workers tied to process lifetime (remote bridge, etc.).
 func (s *Service) Shutdown() {
 	s.remoteBridgeShutdown.Do(func() {
+		s.closeAgentRunners()
 		s.StopRemoteBridge()
 	})
 }

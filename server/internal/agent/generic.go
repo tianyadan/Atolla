@@ -142,7 +142,7 @@ func runCursorStreamJSON(
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "cursor")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
@@ -621,7 +621,7 @@ func runOnce(ctx context.Context, bin, dir string, args []string, extraEnv []str
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "cursor")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}

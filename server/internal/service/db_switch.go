@@ -245,7 +245,8 @@ func startRestart(repoRoot string) bool {
 	if _, err := os.Stat(script); err != nil {
 		return false
 	}
-	cmd := exec.Command("bash", script)
+	// 设置页重启必须脱离当前 HTTP 进程，避免脚本进入前台模式后悬挂。
+	cmd := exec.Command("bash", script, "--daemon")
 	cmd.Dir = repoRoot
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = nil

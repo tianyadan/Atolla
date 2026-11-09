@@ -84,8 +84,8 @@ export async function copyText(text) {
 }
 
 /** 拉取本机引擎检测与是否还需注册管理员。 */
-export async function fetchSetupStatus() {
-  const res = await fetch('/api/setup/status')
+export async function fetchSetupStatus(force = false) {
+  const res = await fetch(`/api/setup/status${force ? '?fresh=1' : ''}`)
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `检查失败(${res.status})`)
   const byId = {}
@@ -96,6 +96,9 @@ export async function fetchSetupStatus() {
       ...meta,
       installed: !!byId[meta.id]?.installed,
       path: byId[meta.id]?.path || '',
+      actualVersion: byId[meta.id]?.version || '',
+      healthy: !!byId[meta.id]?.healthy,
+      checkedAt: byId[meta.id]?.checked_at || '',
     })),
   }
 }

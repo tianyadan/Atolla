@@ -55,6 +55,7 @@ func NormalizeCodexSandbox(s string) string {
 func CodexArgs(dir, prompt string, jsonMode bool, sandbox string) []string {
 	args := []string{
 		"exec",
+		"-c", "check_for_update_on_startup=false",
 		"--skip-git-repo-check",
 		"-s", NormalizeCodexSandbox(sandbox),
 	}
@@ -242,14 +243,14 @@ func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, 
 	var args []string
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
 		args = []string{
-			"exec", "--json", "--skip-git-repo-check", "-s", sb,
+			"exec", "-c", "check_for_update_on_startup=false", "--json", "--skip-git-repo-check", "-s", sb,
 			"--dangerously-bypass-hook-trust",
 			"resume", rs, prompt,
 		}
 		if strings.TrimSpace(dir) != "" {
 			// -C 需在 resume 子命令前
 			args = []string{
-				"exec", "--json", "--skip-git-repo-check", "-s", sb,
+				"exec", "-c", "check_for_update_on_startup=false", "--json", "--skip-git-repo-check", "-s", sb,
 				"--dangerously-bypass-hook-trust",
 				"-C", dir, "resume", rs, prompt,
 			}
@@ -268,7 +269,7 @@ func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, 
 	}
 	fallbackArgs := CodexArgs(dir, prompt, false, sb)
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
-		fallbackArgs = []string{"exec", "--skip-git-repo-check", "-s", sb, "--dangerously-bypass-hook-trust"}
+		fallbackArgs = []string{"exec", "-c", "check_for_update_on_startup=false", "--skip-git-repo-check", "-s", sb, "--dangerously-bypass-hook-trust"}
 		if strings.TrimSpace(dir) != "" {
 			fallbackArgs = append(fallbackArgs, "-C", dir)
 		}
@@ -279,7 +280,7 @@ func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, 
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "codex")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
@@ -319,7 +320,7 @@ func runCodexJSONStream(
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "codex")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}

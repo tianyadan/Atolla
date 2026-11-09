@@ -208,7 +208,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	}()
 	switch strings.ToLower(engineName) {
 	case "claude":
-		r := agent.NewRunner(bin)
+		r := s.claudeRunner(bin)
 		hook := agent.HookSpec{}
 		// HookBin 存在即注入：PreToolUse + Pre/PostCompact（压缩同步不依赖 PermissionEnabled）
 		if !noHook && s.Cfg.HookBin != "" {

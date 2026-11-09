@@ -23,6 +23,7 @@ import WatchdogSettings from './WatchdogSettings.jsx'
 import IslandSettings from './IslandSettings.jsx'
 import JevSettings from './JevSettings.jsx'
 import GitHubIdeaSettings from './GitHubIdeaSettings.jsx'
+import RuntimeSettings from './RuntimeSettings.jsx'
 import AppPanel from './AppPanel.jsx'
 import ModernWorkspace from './ModernWorkspace.jsx'
 import { initLocale } from './i18n/locale.js'
@@ -419,6 +420,11 @@ export default function App() {
                   active={adminMenu === 'settings'}
                 />
                 <WatchdogSettings
+                  authHeaders={authHeaders}
+                  onUnauthorized={() => clearAuth('登录已过期')}
+                  active={adminMenu === 'settings'}
+                />
+                <RuntimeSettings
                   authHeaders={authHeaders}
                   onUnauthorized={() => clearAuth('登录已过期')}
                   active={adminMenu === 'settings'}

@@ -73,7 +73,7 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
     setBusy(true)
     setErr('')
     try {
-      const data = await fetchSetupStatus()
+      const data = await fetchSetupStatus(force)
       setEngines(data.engines)
 
       if (typeof authHeaders !== 'function') return

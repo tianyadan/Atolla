@@ -34,6 +34,25 @@ func TestHardDenyDiskAndSQL(t *testing.T) {
 	}
 }
 
+func TestHardDenyLockedCLIUpdates(t *testing.T) {
+	denied := []string{
+		"claude update",
+		"codex upgrade",
+		"agent update",
+		"npm install -g @anthropic-ai/claude-code@latest",
+		"npm update -g @openai/codex",
+		"brew upgrade codex",
+	}
+	for _, cmd := range denied {
+		if !IsHardDeny(FromShell("claude", 1, 1, cmd, "/ws", "")) {
+			t.Fatalf("locked CLI update must be denied: %s", cmd)
+		}
+	}
+	if IsHardDeny(FromShell("claude", 1, 1, "npm install axios", "/ws", "")) {
+		t.Fatal("ordinary project dependency install must not be hard denied")
+	}
+}
+
 func TestSafeAllowReadOnly(t *testing.T) {
 	for _, cmd := range []string{"ls", "pwd", "cat README.md", "head -n 20 a.txt", "grep foo x", "git status", "git log", "git diff", "git branch"} {
 		a := FromShell("claude", 1, 1, cmd, "/ws", "")

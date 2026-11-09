@@ -33,7 +33,7 @@ func ClaudeProbeContext(ctx context.Context, bin, dir, sessionID string, timeout
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "claude")
 	cmd.Stdin = bytes.NewReader(nil)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

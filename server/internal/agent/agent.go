@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -65,11 +66,42 @@ type Result struct {
 
 // Runner 用 claude -p 运行分身回答。
 type Runner struct {
-	bin string
+	bin  string
+	mu   sync.Mutex
+	warm *WarmRuntime
 }
 
 func NewRunner(bin string) *Runner {
 	return &Runner{bin: bin}
+}
+
+// ConfigureWarmRuntime 配置 Claude 会话进程保温；ttl=0 时关闭并释放已有实例。
+func (r *Runner) ConfigureWarmRuntime(ttl time.Duration, memoryLimitMB int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.warm != nil {
+		r.warm.Close()
+		r.warm = nil
+	}
+	if ttl > 0 {
+		r.warm = NewWarmRuntime(r.bin, ttl, memoryLimitMB)
+	}
+}
+
+// Close 释放全部保温中的 CLI 子进程。
+func (r *Runner) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.warm != nil {
+		r.warm.Close()
+		r.warm = nil
+	}
+}
+
+func (r *Runner) warmRuntime() *WarmRuntime {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.warm
 }
 
 // HookSpec 描述注入给 CLI 的 PreToolUse hook。
@@ -247,6 +279,9 @@ func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
+	if warm := r.warmRuntime(); warm != nil && hook.ConvID > 0 {
+		return warm.Ask(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resumeSession, images)
+	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -277,7 +312,7 @@ func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt
 	cmd := exec.CommandContext(cctx, r.bin, args...)
 	AttachKillable(cmd)
 	cmd.Dir = dir
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "claude")
 	if env := hook.Environ(); len(env) > 0 {
 		cmd.Env = append(cmd.Env, env...)
 	}

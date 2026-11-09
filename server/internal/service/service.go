@@ -41,6 +41,8 @@ type Service struct {
 	Cfg          config.Config
 	Store        *store.Store
 	Agent        *agent.Runner
+	runnerMu     sync.Mutex
+	agentRunners map[string]*agent.Runner
 	DBQuery      *dbquery.Client
 	Perms        *permission.Hub
 	Reviewer     *permission.Reviewer
@@ -98,6 +100,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		Cfg:                   cfg,
 		Store:                 st,
 		Agent:                 agent.NewRunner(cfg.ClaudeBin),
+		agentRunners:          map[string]*agent.Runner{},
 		DBQuery:               mustDBQuery(cfg.DataDBDSN),
 		Perms:                 permission.NewHub(cfg.PermissionWaitSeconds()),
 		Reviewer:              newReviewer(cfg),
@@ -112,6 +115,8 @@ func New(cfg config.Config, st *store.Store) *Service {
 		GitHubIdea:            githubidea.NewManager(cfg.WorkspaceRoot),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
+	svc.Agent.ConfigureWarmRuntime(time.Duration(cfg.SessionWarmTTLSeconds)*time.Second, cfg.SessionWarmMemoryMB)
+	svc.agentRunners[cfg.ClaudeBin] = svc.Agent
 	svc.Sched = NewScheduler(svc)
 	svc.Memory = NewMemoryService(st)
 	svc.WF = newWorkflowEngine(svc)
@@ -132,6 +137,39 @@ func New(cfg config.Config, st *store.Store) *Service {
 	svc.RepairAgentTaskQueueOnBoot(context.Background())
 	svc.startRemoteBridge(cfg.WorkspaceRoot)
 	return svc
+}
+
+// claudeRunner 按 CLI 路径复用 Runner，确保托管数字员工也进入同一会话保温池。
+func (s *Service) claudeRunner(bin string) *agent.Runner {
+	bin = strings.TrimSpace(bin)
+	if bin == "" {
+		bin = strings.TrimSpace(s.Cfg.ClaudeBin)
+	}
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if s.agentRunners == nil {
+		s.agentRunners = map[string]*agent.Runner{}
+	}
+	if r := s.agentRunners[bin]; r != nil {
+		return r
+	}
+	r := agent.NewRunner(bin)
+	r.ConfigureWarmRuntime(time.Duration(s.Cfg.SessionWarmTTLSeconds)*time.Second, s.Cfg.SessionWarmMemoryMB)
+	s.agentRunners[bin] = r
+	return r
+}
+
+func (s *Service) closeAgentRunners() {
+	s.runnerMu.Lock()
+	runners := make([]*agent.Runner, 0, len(s.agentRunners))
+	for _, r := range s.agentRunners {
+		runners = append(runners, r)
+	}
+	s.agentRunners = map[string]*agent.Runner{}
+	s.runnerMu.Unlock()
+	for _, r := range runners {
+		r.Close()
+	}
 }
 
 // HandlePermissionRequest 统一 Permission Gateway：Hard Deny → Safe → Session → JEVOS → 人工。
