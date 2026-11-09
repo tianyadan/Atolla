@@ -4041,6 +4041,26 @@ html.force-light .instances-dark {
   margin-bottom: 12px;
 }
 
+.jelly-color-picker-preview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.jelly-color-picker-action {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #8a8a8a);
+}
+
+.jelly-color-picker-action select {
+  min-width: 120px;
+  font-size: 13px;
+}
+
 .jelly-color-picker-label {
   font-size: 12px;
   color: var(--muted, #8a8a8a);

@@ -23,33 +23,18 @@ const DEMO_AGENTS = JELLY_COLORS.map((color, i) => ({
   status: i === 4 ? 'running' : 'idle',
 }))
 
-/** 手动预览可切换的动作（含 ponder / coding；SSE 未接入） */
-const PREVIEW_STATES = [
-  { id: 'idle', label: 'idle 漂浮' },
-  { id: 'typing', label: 'typing 跳动' },
-  { id: 'working', label: 'working→typing' },
-  { id: 'waiting', label: 'waiting 闪' },
-  { id: 'error', label: 'error' },
-  { id: 'sleep', label: 'sleep' },
-  { id: 'eat', label: 'eat' },
-  { id: 'celebrate', label: 'celebrate' },
-  { id: 'ponder', label: 'ponder 思考' },
-  { id: 'coding', label: 'coding 写代码' },
-]
-
 /**
  * 本地预览页：用真实 JellyAvatar / JellyColorPicker 组件截图用。
  * 访问 /?jellyPreview=1
  */
 export default function JellyPreview() {
   const [color, setColor] = useState(() => assignJellyColor('preview'))
-  const [previewState, setPreviewState] = useState('coding')
 
   return (
     <div style={{ padding: 24, background: '#0a0a0a', minHeight: '100vh', color: '#f5f5f5', fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
       <section className="modal-card ma-settings" style={{ maxWidth: 480, marginBottom: 24 }} data-shot="picker">
         <h2>自定义招聘</h2>
-        <JellyColorPicker value={color} onChange={setColor} />
+        <JellyColorPicker value={color} onChange={setColor} previewSize={72} />
         <label>
           名称
           <input value="新同事" readOnly />
@@ -60,22 +45,6 @@ export default function JellyPreview() {
             <option value="claude">Claude</option>
           </select>
         </label>
-        <label style={{ display: 'block', marginTop: 12 }}>
-          动作预览
-          <select
-            value={previewState}
-            onChange={(e) => setPreviewState(e.target.value)}
-            style={{ display: 'block', width: '100%', marginTop: 6 }}
-          >
-            {PREVIEW_STATES.map((s) => (
-              <option key={s.id} value={s.id}>{s.label}</option>
-            ))}
-          </select>
-        </label>
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <JellyAvatar color={color} size={72} state={previewState} />
-          <span className="muted">预览 · {color} · {previewState}</span>
-        </div>
       </section>
 
       <section style={{ maxWidth: 520, marginBottom: 24 }} data-shot="coding-colors">

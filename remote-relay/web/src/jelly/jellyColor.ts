@@ -76,6 +76,7 @@ export function resolveMirrorJellyColor(
   })
 }
 
+/** 运行态映射用（列表/对话）；完整精灵动作见 jellySprite.JellyActionState */
 export type JellyAvatarState = 'idle' | 'working' | 'typing' | 'waiting' | 'error'
 
 /** 把 agent 状态映射为 JellyAvatar state */

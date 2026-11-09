@@ -12,8 +12,10 @@ test('jellySpriteUrl 拼出正确路径', () => {
   assert.equal(jellySpriteUrl('blue', 1), '/jelly-sprites/jelly-blue@16.png')
   assert.equal(jellySpriteUrl('orange', 2), '/jelly-sprites/jelly-orange@32.png')
   assert.equal(jellySpriteUrl('red', 3), '/jelly-sprites/jelly-red@48.png')
+  assert.equal(jellySpriteUrl('pink', 1), '/jelly-sprites/jelly-pink@16.png')
+  assert.equal(jellySpriteUrl('sky', 2), '/jelly-sprites/jelly-sky@32.png')
   // 非法色回退 blue
-  assert.equal(jellySpriteUrl('pink', 1), '/jelly-sprites/jelly-blue@16.png')
+  assert.equal(jellySpriteUrl('black', 1), '/jelly-sprites/jelly-blue@16.png')
 })
 
 test('pickSpriteScale 按尺寸选密度', () => {
