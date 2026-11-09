@@ -564,7 +564,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 			if ev == nil {
 				return
 			}
-			if t, _ := ev["type"].(string); t == "chunk" {
+			if t, _ := ev["type"].(string); t == "chunk" || t == "reasoning" {
 				if ctn, ok := ev["content"].(string); ok {
 					ev["content"] = strings.ReplaceAll(ctn, "\n", "\\n")
 				}

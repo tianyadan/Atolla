@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"atolla/server/internal/agent"
@@ -369,10 +370,16 @@ func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question
 
 func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fixedConvID int64, question string, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
 	// 先包装 onEvent，再定义 onChunk，确保 usage / 工具事件能写入审计。
-	if opts.visitorAudit != nil || opts.agentAudit != nil {
+	// thinkingPhase 记录引擎当前是否在思考：思考增量走 reasoning 事件，不进正文也不进库。
+	var thinkingPhase atomic.Bool
+	{
 		inner := onEvent
 		onEvent = func(ev map[string]any) {
 			if ev != nil {
+				if t, _ := ev["type"].(string); t == "agent_phase" {
+					phase, _ := ev["phase"].(string)
+					thinkingPhase.Store(phase == string(agent.PhaseThinking))
+				}
 				if t, _ := ev["type"].(string); t == "usage" {
 					in := toInt64Any(ev["input_tokens"])
 					out := toInt64Any(ev["output_tokens"])
@@ -448,6 +455,11 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	liveBuf := s.beginLiveAssistant(convID, agentID)
 	defer s.abandonLiveAssistant(convID)
 	onChunk := func(chunk string) {
+		// 思考过程单独推给前端折叠区：不进入本轮正文、不落库、也不进移动端实时缓冲
+		if thinkingPhase.Load() {
+			emitAsk(onEvent, map[string]any{"type": "reasoning", "content": chunk})
+			return
+		}
 		if liveBuf != nil {
 			liveBuf.appendChunk(chunk)
 		}

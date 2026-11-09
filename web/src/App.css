@@ -1964,6 +1964,32 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
 }
 .ma-copy-btn:hover { color: #f5f5f5; border-color: #777777; }
 .ma-copy-btn.is-copied, .cmd-copy.is-copied { color: #86efac; border-color: #166534; }
+/* 思考过程折叠区（不落库，仅本轮流式可见） */
+.ma-think-fold {
+  margin: 10px 0 2px;
+  padding: 6px 10px 8px;
+  border: 1px solid #242424;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.ma-think-fold > summary {
+  display: flex; align-items: center; gap: 6px;
+  list-style: none; cursor: pointer; user-select: none;
+  color: #9a9a9a; font-size: 12px;
+}
+.ma-think-fold > summary::-webkit-details-marker { display: none; }
+.ma-think-caret { display: inline-block; transition: transform 0.16s ease; font-size: 11px; }
+.ma-think-fold[open] .ma-think-caret { transform: rotate(90deg); }
+.ma-think-label { font-weight: 500; }
+.ma-think-fold.is-live .ma-think-label { color: #d6d6d6; }
+.ma-think-chars { margin-left: auto; color: #666666; font-size: 11px; }
+.ma-think-body {
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed #242424;
+  white-space: pre-wrap; word-break: break-word;
+  color: #9a9a9a; line-height: 1.7; font-size: 12.5px;
+  max-height: 340px; overflow: auto;
+}
 .ma-run-status { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .ma-thinking {
   display: inline-flex; align-items: baseline; gap: 6px;

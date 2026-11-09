@@ -238,8 +238,8 @@ func claudeDeltaText(delta map[string]interface{}) string {
 	}
 }
 
-// assistantMessageText 拼接 assistant 里的 thinking + text（跳过 tool_use）。
-// 思考块在引擎侧往往先于命令产出；若不展示会被压到最后的 result。
+// assistantMessageText 只取 assistant 里的 text（跳过 thinking / tool_use）。
+// 思考过程由 onChunk 单独推给前端折叠展示，不进入本轮正文，避免写库。
 func assistantMessageText(msg map[string]interface{}) string {
 	if msg == nil {
 		return ""
@@ -248,14 +248,7 @@ func assistantMessageText(msg map[string]interface{}) string {
 	var b strings.Builder
 	for _, it := range arr {
 		m, _ := it.(map[string]interface{})
-		switch strField(m, "type") {
-		case "thinking":
-			t := strField(m, "thinking")
-			if t == "" {
-				t = strField(m, "text")
-			}
-			b.WriteString(t)
-		case "text":
+		if strField(m, "type") == "text" {
 			b.WriteString(strField(m, "text"))
 		}
 	}
@@ -355,8 +348,10 @@ func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt
 		if line == "" {
 			continue
 		}
-		if onPhase != nil {
-			if phase, ok := ParseClaudePhase([]byte(line)); ok {
+		linePhase := AgentPhase("")
+		if phase, ok := ParseClaudePhase([]byte(line)); ok {
+			linePhase = phase.Phase
+			if onPhase != nil {
 				onPhase(phase)
 			}
 		}
@@ -401,7 +396,12 @@ func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt
 		// 合成句「No response requested.」是 CLI 把本轮当成本地命令时的空转，不能当成正文，
 		// 否则后面的真回复快照会因为 full 非空被丢掉。
 		if text != "" && strings.TrimSpace(text) != "No response requested." {
-			if !snapshot || full.Len() == 0 {
+			if linePhase == PhaseThinking {
+				// 思考增量只推给前端折叠展示，不写入本轮正文
+				if onChunk != nil {
+					onChunk(text)
+				}
+			} else if !snapshot || full.Len() == 0 {
 				full.WriteString(text)
 				if onChunk != nil {
 					onChunk(text)

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import JellyAvatar from './JellyAvatar.jsx'
+import StaticHtml from './staticHtml.jsx'
 import { resolveJellyColor } from './jellyColor.js'
 import {
   MAX_CHAT_IMAGES,
@@ -468,7 +469,7 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
                     {m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1 ? (
                       <JellyAvatar color={recvJellyColor} size={18} state="typing" />
                     ) : m.content ? (
-                      <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content || '') }} />
+                      <StaticHtml html={marked.parse(m.content || '')} />
                     ) : null}
                   </div>
                 </div>

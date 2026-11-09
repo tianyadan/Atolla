@@ -13,7 +13,16 @@ func TestClaudeLineTextDelta(t *testing.T) {
 func TestClaudeLineTextAssistantSnapshot(t *testing.T) {
 	line := []byte(`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"先想一步"},{"type":"text","text":"抱歉，刚才漏了"}]}}`)
 	text, snapshot, isResult := claudeLineText(line)
-	if text != "先想一步抱歉，刚才漏了" || !snapshot || isResult {
+	// 思考块不进入正文快照（避免写库），只保留 text
+	if text != "抱歉，刚才漏了" || !snapshot || isResult {
+		t.Fatalf("got %q snapshot=%v result=%v", text, snapshot, isResult)
+	}
+}
+
+func TestClaudeLineTextAssistantThinkingOnly(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"只有思考"}]}}`)
+	text, snapshot, isResult := claudeLineText(line)
+	if text != "" || !snapshot || isResult {
 		t.Fatalf("got %q snapshot=%v result=%v", text, snapshot, isResult)
 	}
 }
