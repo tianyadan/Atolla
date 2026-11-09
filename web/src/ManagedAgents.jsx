@@ -39,6 +39,7 @@ import { runningElapsedSec } from './taskTiming.js'
 import { useLocale } from './i18n/useLocale.js'
 import TaskQueueRail from './TaskQueueRail.jsx'
 import TaskQueueChoiceSheet from './TaskQueueChoiceSheet.jsx'
+import TaskPlanConfirmSheet from './TaskPlanConfirmSheet.jsx'
 import AgentRuntimeDetail from './AgentRuntimeDetail.jsx'
 import {
   beginAgentRuntime,
@@ -58,6 +59,7 @@ const ENGINES = [
   { id: 'codex', label: 'Codex', color: '#10a37f' },
   { id: 'agent', label: 'Cursor', color: '#6366f1' },
 ]
+const JOB_ROLES = ['前端', '后端', '移动端', '测试', '运维', '设计', '文档']
 
 /** 引擎错误展示压成约 1～2 行，完整内容放 title。 */
 function shortErrorText(raw, max = 140) {
@@ -212,7 +214,6 @@ export default function ManagedAgentsPanel({
   const [runtimeDetailOpen, setRuntimeDetailOpen] = useState(false)
   const pendingQueueNextRef = useRef(null)
   const [question, setQuestion] = useState('')
-  const [tasks, setTasks] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
   const [talentMarketOpen, setTalentMarketOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
@@ -225,6 +226,7 @@ export default function ManagedAgentsPanel({
   const [legacyMounts, setLegacyMounts] = useState([])
   const [newName, setNewName] = useState('新同事')
   const [newEngine, setNewEngine] = useState('claude')
+  const [newJobRole, setNewJobRole] = useState('')
   const [newContextWindow, setNewContextWindow] = useState(1000000)
   const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
   const [newRules, setNewRules] = useState('')
@@ -248,6 +250,7 @@ export default function ManagedAgentsPanel({
   const composerFileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
+  const [jobRoleDraft, setJobRoleDraft] = useState('')
   const [rulesDraft, setRulesDraft] = useState('')
   const [permBusy, setPermBusy] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -256,13 +259,12 @@ export default function ManagedAgentsPanel({
   const [jevReady, setJevReady] = useState(false)
   const [jevHint, setJevHint] = useState('')
   const [taskPlanSaving, setTaskPlanSaving] = useState(false)
+  const [taskPlanDecisionBusy, setTaskPlanDecisionBusy] = useState(false)
   const [, setTick] = useState(0)
   const [sessVer, setSessVer] = useState(0)
   const boxRef = useRef(null)
   /** 列表请求序号：慢返回的旧轮询不能盖掉刚创建出来的员工。 */
   const agentsLoadGen = useRef(0)
-  /** loadDetail 世代号：切换数字人后丢弃过期拉取，避免写错会话 */
-  const detailLoadGen = useRef(0)
   const stickBottomRef = useRef(true)
   /** 程序性滚底期间忽略 onScroll，避免把 stickBottom 误判为 false */
   const pinningScrollRef = useRef(false)
@@ -274,6 +276,7 @@ export default function ManagedAgentsPanel({
   // sessVer：外部 session patch 必须驱动重渲染，否则 permQueue 更新不刷新审批卡
   void sessVer
   const sess = getAgentSession(selectedId)
+  const activeTaskPlan = sess.activeTaskPlan
   const loading = !!sess.loading
   const compressing = !!sess.compressing
   const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog, sessVer])
@@ -397,6 +400,43 @@ export default function ManagedAgentsPanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, selectedId, active, selected?.conversation_id, selected?.status, focusApprovalRequestId])
+
+  // Task Plan 由 PC 与移动端共用后端状态；轮询负责跨端确认后及时收起弹层。
+  useEffect(() => {
+    if (!selectedId || !active) return undefined
+    const agentId = selectedId
+    let stopped = false
+
+    const pull = async () => {
+      try {
+        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+          headers: authHeaders(),
+        })
+        if (res.status === 401) {
+          onUnauthorized?.()
+          return
+        }
+        if (!res.ok) return
+
+        const data = await res.json().catch(() => ({}))
+        if (stopped || viewRef.current.selectedId !== agentId) return
+        const plan = data?.plan
+        const awaiting = plan?.phase === 'awaiting_confirm' && !plan?.frozen
+        patchAgentSession(agentId, { activeTaskPlan: awaiting ? plan : null })
+        if (awaiting) setTqChoice(null)
+      } catch {
+        // 临时离线时保留当前编辑内容，恢复连接后再同步服务端状态。
+      }
+    }
+
+    void pull()
+    const timer = window.setInterval(() => void pull(), 2000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, active])
 
   // 窗口重新可见时补拉审批（岛点进来若未整页刷新，也能恢复弹窗）
   useEffect(() => {
@@ -554,28 +594,16 @@ export default function ManagedAgentsPanel({
    * preferDb：Ask 回合结束后以 DB 为准，丢掉 SSE 无 id 命令挂尾，避免最终回复被顶出视口。
    */
   async function loadDetail(id, { force = false, preferDb = false } = {}) {
-    if (!id) {
-      if (!viewRef.current.selectedId) setTasks([])
-      return
-    }
-    const gen = ++detailLoadGen.current
+    if (!id) return
     const local = getAgentSession(id)
     const msgLimit = preferDb ? 100 : PAGE_SIZE
-    const [msgRes, taskRes] = await Promise.all([
-      fetch(`${API}/admin/agents/${id}/messages?limit=${msgLimit}`, { headers: authHeaders() }),
-      fetch(`${API}/admin/agents/${id}/tasks`, { headers: authHeaders() }),
-    ])
-    // 已发起更新的 loadDetail：只丢弃「写 tasks UI」；会话 chatLog 仍按 id 写入，互不串台
-    if (msgRes.status === 401 || taskRes.status === 401) { onUnauthorized?.(); return }
+    const msgRes = await fetch(`${API}/admin/agents/${id}/messages?limit=${msgLimit}`, { headers: authHeaders() })
+    // 会话 chatLog 按请求 id 写入，互不串台
+    if (msgRes.status === 401) { onUnauthorized?.(); return }
     const msgData = await msgRes.json().catch(() => ({}))
-    const taskData = await taskRes.json().catch(() => ({}))
     if (!msgRes.ok) return
     // 选中对话时 pc-viewer 已 mark-read；本地同步去掉蓝徽标 / 「未读」区
     setAgents((list) => list.map((a) => (a.id === id && a.task_unread ? { ...a, task_unread: false } : a)))
-    // 任务条是全局状态：只更新「当前正在看」的那位，避免 A 刷新写到 B 的进度区
-    if (viewRef.current.selectedId === id && gen === detailLoadGen.current) {
-      setTasks(taskData.items || [])
-    }
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
     if (force || preferDb || !getAgentSession(id).loading) {
       const fromDb = mapMsgs(msgData.items)
@@ -726,7 +754,7 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => {
     if (!selected) {
-      setRenameDraft(''); setRulesDraft(''); setTasks([])
+      setRenameDraft(''); setRulesDraft('')
       return
     }
     setRenameDraft(selected.name || '')
@@ -830,12 +858,6 @@ export default function ManagedAgentsPanel({
         syncLoadingFromAgentStatus(viewRef.current.agents)
       }).catch(() => {})
       if (sid) {
-        fetch(`${API}/admin/agents/${sid}/tasks`, { headers })
-          .then((r) => r.json())
-          .then((d) => {
-            if (viewRef.current.selectedId === sid) setTasks(d.items || [])
-          })
-          .catch(() => {})
         const local = getAgentSession(sid)
         // 本机 SSE 流式中跳过；刷新后恢复的 loading（无 abort）仍要轮询消息
         if (!local.loading || !local.abort) {
@@ -879,6 +901,7 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: newName.trim() || '未命名员工',
+          job_role: newJobRole,
           engine: newEngine,
           context_window_tokens: newContextWindow,
           rules_prompt: newRules,
@@ -909,6 +932,7 @@ export default function ManagedAgentsPanel({
         setSelectedId(created.id)
       }
       setCreateOpen(false)
+      setNewJobRole('')
       setNewPolicy(emptyPolicy())
       setNewJellyColor(assignJellyColor(String(Date.now())))
       await loadAgents(d?.id, { forceSelect: true })
@@ -965,6 +989,7 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: renameDraft.trim() || selected.name,
+          job_role: jobRoleDraft,
           context_window_tokens: contextWindowDraft,
           rules_prompt: rulesDraft,
           allow_write: !!policyDraft.allow_write,
@@ -984,7 +1009,7 @@ export default function ManagedAgentsPanel({
         return
       }
       setAgents((prev) => prev.map((a) => (
-        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft } : a
+        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft, job_role: jobRoleDraft } : a
       )))
       setSettingsOpen(false)
       await loadAgents(selected.id)
@@ -1016,6 +1041,7 @@ export default function ManagedAgentsPanel({
   function openSelectedSettings(tab = 'basic') {
     if (!selected) return
     setRenameDraft(selected.name || '')
+    setJobRoleDraft(selected.job_role || '')
     setRulesDraft(selected.rules_prompt || '')
     setPolicyDraft(policyFromAgent(selected))
     setContextWindowDraft(selected.context_window_tokens || 1000000)
@@ -1176,6 +1202,55 @@ export default function ManagedAgentsPanel({
     }
   }
 
+  /** 确认或拒绝当前计划；任一端处理成功后共享状态会让另一端自动收起。 */
+  async function decideTaskPlan(action, steps = []) {
+    const agentId = selectedId
+    const planId = String(getAgentSession(agentId).activeTaskPlan?.plan_id || '')
+    if (!agentId || !planId || taskPlanDecisionBusy) return
+
+    setTaskPlanDecisionBusy(true)
+    try {
+      const res = await fetch(
+        `${API}/admin/agents/${agentId}/task-plan/${encodeURIComponent(planId)}/${action}`,
+        {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: action === 'confirm' ? JSON.stringify({ steps }) : '{}',
+        },
+      )
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || `任务计划${action === 'confirm' ? '确认' : '拒绝'}失败`)
+      }
+
+      patchAgentSession(agentId, { activeTaskPlan: null, error: '' })
+      await loadAgents(agentId)
+    } catch (error) {
+      patchAgentSession(agentId, { error: String(error?.message || error) })
+
+      // 另一端抢先处理时补拉真实状态，避免 PC 保留已过期的计划弹层。
+      try {
+        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+          headers: authHeaders(),
+        })
+        const data = await res.json().catch(() => ({}))
+        const plan = data?.plan
+        if (res.ok && (plan?.phase !== 'awaiting_confirm' || plan?.frozen)) {
+          patchAgentSession(agentId, { activeTaskPlan: null })
+        }
+      } catch {
+        // 离线时保留错误与计划，便于用户恢复连接后重试。
+      }
+    } finally {
+      setTaskPlanDecisionBusy(false)
+    }
+  }
+
   async function decide(requestId, behavior) {
     if (permBusy) return
     setPermBusy(true)
@@ -1230,6 +1305,22 @@ export default function ManagedAgentsPanel({
         })
       } else if (ev.type === 'agent_phase') {
         patchAgentSession(agentId, { agentPhase: ev.phase || '' })
+      } else if (ev.type === 'task_plan_awaiting_confirm') {
+        const payload = ev.payload || {}
+        patchAgentSession(agentId, {
+          activeTaskPlan: {
+            plan_id: ev.task_id || payload.task_id || '',
+            phase: 'awaiting_confirm',
+            frozen: !!payload.frozen,
+            task_name: payload.task_name || '',
+            progress: Number(payload.progress) || 0,
+            message: payload.message || '',
+            current_step: Number(payload.current_step) || 0,
+            total_count: Number(payload.total_count) || 0,
+            step_items: Array.isArray(payload.step_items) ? payload.step_items : [],
+          },
+        })
+        setTqChoice(null)
       } else if (ev.type === 'chunk') {
         const piece = (ev.content || '').replace(/\\n/g, '\n')
         if (!piece) continue
@@ -1350,8 +1441,6 @@ export default function ManagedAgentsPanel({
         if (turn > 0) patch.taskTokens = turn
 		// SSE usage 是本轮统计，只记录任务消耗；圆环统一由 /context 刷新。
         if (Object.keys(patch).length) patchAgentSession(agentId, patch)
-      } else if (ev.type === 'task_progress') {
-        // 触发 tasks 刷新由轮询承接
       } else if (ev.type === 'system_note') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,
@@ -1536,13 +1625,6 @@ export default function ManagedAgentsPanel({
         const parsed = parseSSE(buf)
         buf = parsed.rest
         applyEvents(agentId, parsed.events)
-        // 流式期间刷新任务进度
-        if (parsed.events.some((e) => e.type === 'task_progress' || e.type === 'invoke_status')) {
-          fetch(`${API}/admin/agents/${agentId}/tasks`, { headers: authHeaders() })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => { if (d && selectedId === agentId) setTasks(d.items || []) })
-            .catch(() => {})
-        }
       }
       try {
         await loadAgents(agentId)
@@ -1553,6 +1635,10 @@ export default function ManagedAgentsPanel({
         console.warn('ask post-refresh failed', postErr)
       }
     } catch (err) {
+      // 已被新一轮 Ask 接管时，旧流的 Abort 不写「已停止」、不收尾会话态。
+      if (getAgentSession(agentId).abort !== ac) {
+        return
+      }
       if (err?.name === 'AbortError') {
         patchAgentSession(agentId, {
           runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'interrupted'),
@@ -1579,6 +1665,10 @@ export default function ManagedAgentsPanel({
       }
     } finally {
       const currentSession = getAgentSession(agentId)
+      // 打断后立刻发起的新 Ask 会换掉 abort；旧请求不得清掉新一轮 loading / 活动态。
+      if (currentSession.abort !== ac) {
+        return
+      }
       const pending = currentSession.pendingInterrupt
       const pendingAtts = currentSession.pendingAttachments || []
       const queueNext = pendingQueueNextRef.current
@@ -1750,7 +1840,7 @@ export default function ManagedAgentsPanel({
     await sendQuestion(id, q, atts)
   }
 
-  /** 弹层：打断并优先执行 */
+  /** 弹层：打断并优先执行（取消当前、直发，不入队） */
   async function onTqInterrupt() {
     if (!selected || !tqChoice || tqChoiceBusy) return
     const id = selected.id
@@ -1767,10 +1857,12 @@ export default function ManagedAgentsPanel({
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || `打断失败(${res.status})`)
       setTqChoice(null)
-      const s = getAgentSession(id)
-      s.abort?.abort()
+      // 先开新 Ask（换掉 abort），再中止旧流，避免旧 finally 清掉第二轮 loading。
+      const prevAbort = getAgentSession(id).abort
+      const sendPromise = sendQuestion(id, q, atts)
+      prevAbort?.abort()
       setTqRefreshKey((k) => k + 1)
-      await sendQuestion(id, q, atts, { taskId: d.id })
+      await sendPromise
     } catch (err) {
       patchAgentSession(id, { error: String(err.message || err) })
     } finally {
@@ -1964,38 +2056,6 @@ export default function ManagedAgentsPanel({
   const workflowBusy = isWorkflowBusy(selected)
   const cloneInitBusy = isCloneInitBusy(selected)
   const chatLocked = isChatLocked(selected)
-  const liveTask = (tasks || []).find((t) => t.status === 'running' || t.status === 'waiting')
-  // 团队占用时不回落到已结束任务；结束后清空进度展示
-  const activeTask = liveTask || (workflowBusy ? {
-    task_name: selected?.occupancy?.task_name || selected?.occupancy?.source_name || '项目协作任务',
-    status: 'running',
-    progress: 0,
-    message: '项目协作执行中…',
-    payload: {},
-  } : null)
-  const activeProgress = Math.min(100, Math.max(0, activeTask?.progress || 0))
-  /** 优先 step_items（v1 协议）；兼容旧 steps 字符串数组 */
-  const planPayload = activeTask?.payload || {}
-  const stepItems = Array.isArray(planPayload.step_items) ? planPayload.step_items : null
-  const activeSteps = stepItems
-    ? stepItems.map((s) => s?.title || s?.Title || '')
-    : (planPayload.steps || [])
-  const activeStepIdx = planPayload.current_step ?? 0
-  const failedStepIdx = planPayload.failed ? (planPayload.failed_step ?? -1) : -1
-  const planPhase = planPayload.phase || ''
-  function stepClass(i) {
-    if (stepItems?.[i]?.status) {
-      const st = stepItems[i].status
-      if (st === 'failed') return 'failed'
-      if (st === 'done' || st === 'skipped') return 'done'
-      if (st === 'active') return 'current'
-      return ''
-    }
-    if (i === failedStepIdx) return 'failed'
-    if (i < activeStepIdx) return 'done'
-    if (i === activeStepIdx) return 'current'
-    return ''
-  }
 
   return (
     <section className="ma-panel ma-panel-focus">
@@ -2324,6 +2384,14 @@ export default function ManagedAgentsPanel({
                     </button> : null}
                   </div>
                   <div className="ma-composer-wrap">
+                    <TaskPlanConfirmSheet
+                      open={activeTaskPlan?.phase === 'awaiting_confirm' && !activeTaskPlan?.frozen}
+                      plan={activeTaskPlan}
+                      busy={taskPlanDecisionBusy}
+                      onConfirm={(steps) => void decideTaskPlan('confirm', steps)}
+                      onReject={() => void decideTaskPlan('reject')}
+                      onError={(message) => patchAgentSession(selectedId, { error: message })}
+                    />
                     <GroupChatOfferSheet
                       open={!!groupOffer}
                       agents={agents}
@@ -2458,43 +2526,6 @@ export default function ManagedAgentsPanel({
                   {occupancyLine(selected) ? `（${occupancyLine(selected)}）` : ''}
                 </p>
               )}
-
-              {taskPlanOn && (
-              <div className="ma-progress-panel">
-                <div className="ma-progress-head">
-                  <strong>{t('composer.taskPlan')}</strong>
-                  {activeTask ? (
-                    <span className={`ma-status st-${statusClass(activeTask.status)}`}>
-                      {planPhase === 'planning' ? t('composer.planning') : statusZh(activeTask.status, t)}
-                    </span>
-                  ) : (
-                    <span className="muted">{t('composer.noActiveTask')}</span>
-                  )}
-                </div>
-                {activeTask && (
-                  <>
-                    <div className="ma-progress-title">{activeTask.task_name || activeTask.task_id}</div>
-                    <div className="agent-progress-bar">
-                      <div style={{ width: `${activeProgress}%` }} />
-                    </div>
-                    <p className="muted ma-progress-msg">{activeTask.message || `${activeProgress}%`}</p>
-                    {activeSteps.length > 0 && (
-                      <ol className="ma-progress-steps">
-                        {activeSteps.map((s, i) => {
-                          const cls = stepClass(i)
-                          return (
-                            <li key={i} className={cls}>
-                              {cls === 'failed' ? <span className="step-x">✕</span> : null}
-                              {s}
-                            </li>
-                          )
-                        })}
-                      </ol>
-                    )}
-                  </>
-                )}
-              </div>
-              )}
             </div>
           )}
           {sess.error && <p className="error ma-last-error">{shortErrorText(sess.error)}</p>}
@@ -2535,6 +2566,13 @@ export default function ManagedAgentsPanel({
               previewSize={64}
             />
             <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
+            <label>
+              调度岗位
+              <select value={newJobRole} onChange={(e) => setNewJobRole(e.target.value)} disabled={busy}>
+                <option value="">未配置（不参与岗位匹配）</option>
+                {JOB_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+            </label>
             <label>
               引擎
               <select value={newEngine} onChange={(e) => setNewEngine(e.target.value)} disabled={busy}>
@@ -2644,6 +2682,13 @@ export default function ManagedAgentsPanel({
                     <label>
                       名称
                       <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
+                    </label>
+                    <label>
+                      调度岗位
+                      <select value={jobRoleDraft} onChange={(e) => setJobRoleDraft(e.target.value)} disabled={busy}>
+                        <option value="">未配置（不参与岗位匹配）</option>
+                        {JOB_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                      </select>
                     </label>
                     <label>
                       上下文窗口

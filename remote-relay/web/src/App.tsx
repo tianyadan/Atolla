@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAuth } from './components/RequireAuth'
 import { NativeDeepLinkHost } from './components/NativeDeepLinkHost'
+import { NativeCredentialSyncHost } from './components/NativeCredentialSyncHost'
 import { SplashOverlay } from './components/SplashOverlay'
 import { AgentsPage } from './pages/Agents'
 import { ChangelogPage } from './pages/Changelog'
@@ -18,6 +19,7 @@ export default function App() {
     <BrowserRouter>
       <SplashOverlay />
       <NativeDeepLinkHost />
+      <NativeCredentialSyncHost />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route element={<RequireAuth />}>

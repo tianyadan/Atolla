@@ -262,8 +262,9 @@ var (
 	reDateTime    = regexp.MustCompile(`(?i)\bDATETIME(?:\(\d+\))?`)
 	reCharset     = regexp.MustCompile(`(?i)\s*DEFAULT CHARSET\s*=\s*\w+`)
 	reEnum        = regexp.MustCompile(`(?i)\bENUM\s*\([^)]*\)`)
-	reUniqueKey  = regexp.MustCompile(`(?i),?\s*UNIQUE\s+KEY\s+\w+\s*\(([^)]+)\)`)
-	reKeyIdx     = regexp.MustCompile(`(?i),?\s*(?:KEY|INDEX)\s+\w+\s*\([^)]+\)`)
+	reUniqueKey = regexp.MustCompile(`(?i),?\s*UNIQUE\s+KEY\s+\w+\s*\(([^)]+)\)`)
+	// \b 避免把 source_key / idempotency_key 列名里的 key 当成 MySQL KEY 索引语法吃掉。
+	reKeyIdx     = regexp.MustCompile(`(?i),?\s*\b(?:KEY|INDEX)\s+\w+\s*\([^)]+\)`)
 	reConstraint = regexp.MustCompile(`(?i),?\s*(?:CONSTRAINT\s+\w+\s+)?FOREIGN KEY\s*\([^)]+\)\s*REFERENCES\s+\w+\s*\([^)]+\)(?:\s+ON DELETE\s+\w+(?:\s+\w+)?)?(?:\s+ON UPDATE\s+\w+(?:\s+\w+)?)?`)
 	reIdPKLine   = regexp.MustCompile(`(?i)\bid\s+INTEGER\s+NOT NULL\s*,`)
 	rePrimaryId  = regexp.MustCompile(`(?i),?\s*PRIMARY KEY\s*\(\s*id\s*\)`)

@@ -19,6 +19,13 @@ type ReceptionistPublic struct {
 	Engine     string `json:"engine,omitempty"`
 }
 
+// SiriReceptionistReply is the stable bridge response consumed by Relay and App Intents.
+type SiriReceptionistReply struct {
+	Answer         string `json:"answer"`
+	ConversationID int64  `json:"conversation_id"`
+	ReplyMs        int    `json:"reply_ms"`
+}
+
 // GetReceptionistPublic 公开拉取前台助理（无则 configured=false）。
 func (s *Service) GetReceptionistPublic(ctx context.Context) (ReceptionistPublic, error) {
 	a, err := s.Store.GetReceptionist(ctx)
@@ -129,6 +136,54 @@ func (s *Service) AskReceptionistWith(ctx context.Context, visitorID, agentID, c
 		attachments:  atts,
 		visitorAudit: &visitorAskAudit{VisitorID: visitorID, IP: ip, UA: ua},
 	}, onEvent)
+}
+
+// AskSiriReceptionist implements remotebridge.AgentRuntime and reuses the existing
+// Receptionist execution path without exposing a public visitor cookie to Siri.
+func (s *Service) AskSiriReceptionist(ctx context.Context, question string) (any, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return nil, fmt.Errorf("question required")
+	}
+	receptionist, err := s.Store.GetReceptionist(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if receptionist == nil {
+		return nil, fmt.Errorf("receptionist not configured")
+	}
+	visitor, err := s.Store.GetOrCreateSystemVisitor(ctx, "atolla-siri", "Siri")
+	if err != nil {
+		return nil, fmt.Errorf("prepare Siri visitor: %w", err)
+	}
+	if visitor == nil {
+		return nil, fmt.Errorf("prepare Siri visitor: empty visitor")
+	}
+	conversationID, err := s.EnsureVisitorConversation(ctx, visitor, receptionist.ID, "siri")
+	if err != nil {
+		return nil, err
+	}
+	message, err := s.AskReceptionist(
+		ctx,
+		visitor.ID,
+		receptionist.ID,
+		conversationID,
+		question,
+		"siri",
+		"Atolla App Intent",
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if message == nil || strings.TrimSpace(message.Content) == "" {
+		return nil, fmt.Errorf("receptionist returned empty answer")
+	}
+	return SiriReceptionistReply{
+		Answer:         message.Content,
+		ConversationID: conversationID,
+		ReplyMs:        message.ReplyMs,
+	}, nil
 }
 
 // EnrichAgentsFolderNames 为列表补充分组名。

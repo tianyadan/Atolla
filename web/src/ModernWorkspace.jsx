@@ -37,6 +37,7 @@ function buildMoreGroups(t) {
       { id: 'network-allowlist', label: t('nav.networkAllowlist'), icon: 'globe' },
     ],
     [
+      { id: 'app', label: t('nav.app'), icon: 'phone' },
       { id: 'settings', label: t('nav.settings'), icon: 'settings' },
       { id: 'manual', label: t('nav.manual'), icon: 'book' },
     ],

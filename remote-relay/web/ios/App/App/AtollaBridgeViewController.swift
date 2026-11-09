@@ -6,5 +6,7 @@ class AtollaBridgeViewController: CAPBridgeViewController {
   override open func capacitorDidLoad() {
     super.capacitorDidLoad()
     bridge?.registerPluginInstance(AtollaIslandPlugin())
+    bridge?.registerPluginInstance(AtollaCredentialPlugin())
+    bridge?.registerPluginInstance(AtollaUsagePlugin())
   }
 }

@@ -42,7 +42,9 @@ export function EngineUsageChip({ instanceId, engine }: Props) {
     setBusy(true)
     setErr(null)
     try {
-      const next = rememberEnginesUsage(await fetchEnginesUsage(instanceId, { fresh: force }))
+      const next = rememberEnginesUsage(await fetchEnginesUsage(instanceId, { fresh: force }), {
+        instanceId,
+      })
       setData(next)
     } catch (e) {
       setErr(e instanceof Error ? e.message : '用量加载失败')

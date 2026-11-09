@@ -28,6 +28,7 @@ function emptySession() {
     contextUsed: 0,
     contextWindow: 0,
     contextEstimated: true, // Codex/Cursor 默认估算；Claude probe 成功后为 false
+    activeTaskPlan: null, // 待确认计划跨页保留；任一客户端处理后由轮询清空
   }
 }
 

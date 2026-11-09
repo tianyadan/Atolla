@@ -13,6 +13,7 @@
     "cap:sync": "npm run build && npx cap sync ios",
     "cap:open": "npx cap open ios",
     "ios:widget": "ruby ios/scripts/ensure_island_widget.rb",
+    "ios:device": "bash scripts/ios-build-and-run-device.sh",
     "ios": "npm run cap:sync && npm run ios:widget && npx cap open ios"
   },
   "dependencies": {

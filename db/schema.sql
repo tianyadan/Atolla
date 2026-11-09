@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   avatar_url      VARCHAR(512)   NULL,
   jelly_color     VARCHAR(16)    NOT NULL DEFAULT '', -- orange|yellow|blue|green|purple|red|cyan|teal|pink|lime|coral|sky
   folder_id       BIGINT         NULL,
+  job_role        VARCHAR(64)    NOT NULL DEFAULT '', -- 调度岗位（单选）
   engine          VARCHAR(32)    NOT NULL,           -- claude | codex | agent
   context_window_tokens BIGINT NOT NULL DEFAULT 1000000, -- display denominator only
   bin_path        VARCHAR(512)   NOT NULL DEFAULT '',
@@ -504,4 +505,55 @@ CREATE TABLE IF NOT EXISTS agent_legacy_memory_mounts (
   UNIQUE KEY uk_alm_mem (legacy_memory_id),
   KEY idx_alm_agent (agent_id),
   CONSTRAINT fk_alm_agent FOREIGN KEY (agent_id) REFERENCES managed_agents(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 规则调度建议：每个来源修订一条记录，精确重复由 idempotency_key 拦截。
+CREATE TABLE IF NOT EXISTS task_dispatches (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  source_type VARCHAR(32) NOT NULL,
+  source_key VARCHAR(512) NOT NULL,
+  source_key_hash CHAR(64) NOT NULL,
+  source_revision VARCHAR(128) NOT NULL,
+  event_action VARCHAR(32) NOT NULL,
+  delivery_id VARCHAR(128) NOT NULL DEFAULT '',
+  idempotency_key CHAR(64) NOT NULL,
+  parent_dispatch_id BIGINT NULL,
+  superseded_by_id BIGINT NULL,
+  source_url VARCHAR(1024) NOT NULL DEFAULT '',
+  task_title VARCHAR(512) NOT NULL DEFAULT '',
+  task_body LONGTEXT NULL,
+  task_type VARCHAR(64) NOT NULL DEFAULT '',
+  required_role VARCHAR(64) NOT NULL DEFAULT '',
+  required_capabilities_json JSON NOT NULL,
+  optional_tags_json JSON NOT NULL,
+  required_permissions_json JSON NOT NULL,
+  priority VARCHAR(16) NOT NULL DEFAULT 'normal',
+  deadline_at DATETIME NULL,
+  status VARCHAR(32) NOT NULL,
+  state_version INT NOT NULL DEFAULT 1,
+  recommended_agent_id BIGINT NULL,
+  assigned_agent_id BIGINT NULL,
+  queue_task_id BIGINT NULL,
+  candidates_json JSON NOT NULL,
+  decision_json JSON NOT NULL,
+  confidence DOUBLE NOT NULL DEFAULT 0,
+  llm_used TINYINT NOT NULL DEFAULT 0,
+  requires_review TINYINT NOT NULL DEFAULT 1,
+  confirmed_by VARCHAR(128) NOT NULL DEFAULT '',
+  status_reason VARCHAR(512) NOT NULL DEFAULT '',
+  last_error TEXT NULL,
+  classified_at DATETIME NULL,
+  recommended_at DATETIME NULL,
+  confirmed_at DATETIME NULL,
+  queued_at DATETIME NULL,
+  started_at DATETIME NULL,
+  finished_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_task_dispatch_idempotency (idempotency_key),
+  KEY idx_task_dispatch_source (source_type, source_key_hash, created_at),
+  KEY idx_task_dispatch_status (status, created_at),
+  KEY idx_task_dispatch_agent (assigned_agent_id, status),
+  KEY idx_task_dispatch_parent (parent_dispatch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

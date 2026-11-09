@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
+  abortTaskPlan,
   cancelTaskQueueItem,
   clearTaskQueueDone,
   continueTaskQueue,
   fetchTaskQueue,
+  resumeTaskPlan,
   updateTaskQueueItem,
   type TaskQueueItem,
   type TaskQueueView,
@@ -14,6 +16,7 @@ type Props = {
   open: boolean
   instanceId: string
   agentId: string
+  focusTaskId?: string
   onClose: () => void
   onError?: (msg: string) => void
 }
@@ -24,12 +27,15 @@ function isEditable(status: string) {
 }
 
 /** 半屏任务队列列表：取消 / 编辑 / 继续 / 清已完成。 */
-export function TaskQueueListSheet({ open, instanceId, agentId, onClose, onError }: Props) {
+export function TaskQueueListSheet({ open, instanceId, agentId, focusTaskId = '', onClose, onError }: Props) {
   const { t } = useLocale()
   const [view, setView] = useState<TaskQueueView>({ items: [], hold: false, active: 0 })
   const [busy, setBusy] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const [expandPlanId, setExpandPlanId] = useState<number | null>(null)
+  const focusedItemRef = useRef<HTMLLIElement | null>(null)
+  const scrolledFocusRef = useRef('')
 
   async function load() {
     try {
@@ -49,10 +55,25 @@ export function TaskQueueListSheet({ open, instanceId, agentId, onClose, onError
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, instanceId, agentId])
 
+  useEffect(() => {
+    if (!open) {
+      scrolledFocusRef.current = ''
+      return
+    }
+    if (!focusTaskId || scrolledFocusRef.current === focusTaskId || !focusedItemRef.current) return
+    focusedItemRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    scrolledFocusRef.current = focusTaskId
+  }, [open, focusTaskId, view.items])
+
   if (!open) return null
 
   const live = view.items.filter((x) => ['queued', 'paused', 'running'].includes(x.status))
-  const done = view.items.filter((x) => ['done', 'failed', 'cancelled'].includes(x.status)).slice(0, 8)
+  const allDone = view.items.filter((x) => ['done', 'failed', 'cancelled'].includes(x.status))
+  const done = allDone.slice(0, 8)
+  const focusedDone = focusTaskId
+    ? allDone.find((item) => String(item.id) === focusTaskId)
+    : undefined
+  if (focusedDone && !done.some((item) => item.id === focusedDone.id)) done.push(focusedDone)
 
   async function onContinue() {
     setBusy(true)
@@ -137,11 +158,23 @@ export function TaskQueueListSheet({ open, instanceId, agentId, onClose, onError
           {live.length === 0 && done.length === 0 ? <li className="tq-list-empty">{t('tq.empty')}</li> : null}
           {[...live, ...done].map((item) => {
             const editing = editId === item.id
+            const focused = focusTaskId !== '' && String(item.id) === focusTaskId
+            const isPlan = item.kind === 'task_plan' || !!item.locked
+            const planOpen = expandPlanId === item.id
+            const planSteps = item.plan?.step_items ?? []
             return (
-              <li key={item.id} className={`tq-list-item st-${item.status}`}>
+              <li
+                key={item.id}
+                ref={focused ? focusedItemRef : undefined}
+                className={`tq-list-item st-${item.status}${focused ? ' is-deep-link-target' : ''}${isPlan ? ' is-plan' : ''}`}
+                aria-current={focused ? 'true' : undefined}
+              >
                 <i className={`tq-list-dot st-${item.status}`} aria-hidden />
                 <div className="tq-list-main">
-                  <span className="tq-list-status">{t(`tq.status.${item.status}`)}</span>
+                  <span className="tq-list-status">
+                    {isPlan ? '计划' : t(`tq.status.${item.status}`)}
+                    {isPlan && item.plan?.progress != null ? ` · ${item.plan.progress}%` : ''}
+                  </span>
                   {editing ? (
                     <textarea
                       className="tq-list-edit"
@@ -153,9 +186,73 @@ export function TaskQueueListSheet({ open, instanceId, agentId, onClose, onError
                   ) : (
                     <p>{item.question || '—'}</p>
                   )}
+                  {isPlan && planOpen && planSteps.length > 0 ? (
+                    <ol className="tq-plan-steps">
+                      {planSteps.map((st, idx) => (
+                        <li key={st.id || idx}>
+                          <strong>{st.title}</strong>
+                          {st.detail ? <span className="muted"> — {st.detail}</span> : null}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
                 </div>
                 <div className="tq-list-actions">
-                  {isEditable(item.status) ? (
+                  {isPlan ? (
+                    <>
+                      <button
+                        type="button"
+                        className="tq-list-cancel"
+                        onClick={() => setExpandPlanId(planOpen ? null : item.id)}
+                      >
+                        {planOpen ? '收起' : '展开步骤'}
+                      </button>
+                      {item.status === 'paused' && item.plan_id ? (
+                        <button
+                          type="button"
+                          className="tq-list-cancel"
+                          disabled={busy}
+                          onClick={() => {
+                            void (async () => {
+                              setBusy(true)
+                              try {
+                                await resumeTaskPlan(instanceId, agentId, item.plan_id!)
+                                await load()
+                              } catch (err) {
+                                onError?.(err instanceof Error ? err.message : '继续失败')
+                              } finally {
+                                setBusy(false)
+                              }
+                            })()
+                          }}
+                        >
+                          继续
+                        </button>
+                      ) : null}
+                      {item.plan_id && ['running', 'paused', 'queued'].includes(item.status) ? (
+                        <button
+                          type="button"
+                          className="tq-list-cancel"
+                          disabled={busy}
+                          onClick={() => {
+                            void (async () => {
+                              setBusy(true)
+                              try {
+                                await abortTaskPlan(instanceId, agentId, item.plan_id!)
+                                await load()
+                              } catch (err) {
+                                onError?.(err instanceof Error ? err.message : '终止失败')
+                              } finally {
+                                setBusy(false)
+                              }
+                            })()
+                          }}
+                        >
+                          终止
+                        </button>
+                      ) : null}
+                    </>
+                  ) : isEditable(item.status) ? (
                     editing ? (
                       <>
                         <button

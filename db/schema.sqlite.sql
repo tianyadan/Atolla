@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   avatar_url      VARCHAR(512)   NULL,
   jelly_color     VARCHAR(16)    NOT NULL DEFAULT '', -- orange|yellow|blue|green|purple|red|cyan|teal|pink|lime|coral|sky
   folder_id       INTEGER         NULL,
+  job_role        VARCHAR(64)    NOT NULL DEFAULT '', -- 调度岗位（单选）
   engine          VARCHAR(32)    NOT NULL,           -- claude | codex | agent
   context_window_tokens INTEGER NOT NULL DEFAULT 1000000, -- display denominator only
   bin_path        VARCHAR(512)   NOT NULL DEFAULT '',
@@ -412,3 +413,53 @@ CREATE TABLE IF NOT EXISTS agent_legacy_memory_mounts (
   mounted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(legacy_memory_id)
 );
+
+-- 规则调度建议：每个来源修订一条记录，精确重复由 idempotency_key 拦截。
+CREATE TABLE IF NOT EXISTS task_dispatches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_type VARCHAR(32) NOT NULL,
+  source_key VARCHAR(512) NOT NULL,
+  source_key_hash CHAR(64) NOT NULL,
+  source_revision VARCHAR(128) NOT NULL,
+  event_action VARCHAR(32) NOT NULL,
+  delivery_id VARCHAR(128) NOT NULL DEFAULT '',
+  idempotency_key CHAR(64) NOT NULL UNIQUE,
+  parent_dispatch_id INTEGER NULL,
+  superseded_by_id INTEGER NULL,
+  source_url VARCHAR(1024) NOT NULL DEFAULT '',
+  task_title VARCHAR(512) NOT NULL DEFAULT '',
+  task_body TEXT NULL,
+  task_type VARCHAR(64) NOT NULL DEFAULT '',
+  required_role VARCHAR(64) NOT NULL DEFAULT '',
+  required_capabilities_json TEXT NOT NULL,
+  optional_tags_json TEXT NOT NULL,
+  required_permissions_json TEXT NOT NULL,
+  priority VARCHAR(16) NOT NULL DEFAULT 'normal',
+  deadline_at DATETIME NULL,
+  status VARCHAR(32) NOT NULL,
+  state_version INTEGER NOT NULL DEFAULT 1,
+  recommended_agent_id INTEGER NULL,
+  assigned_agent_id INTEGER NULL,
+  queue_task_id INTEGER NULL,
+  candidates_json TEXT NOT NULL,
+  decision_json TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0,
+  llm_used INTEGER NOT NULL DEFAULT 0,
+  requires_review INTEGER NOT NULL DEFAULT 1,
+  confirmed_by VARCHAR(128) NOT NULL DEFAULT '',
+  status_reason VARCHAR(512) NOT NULL DEFAULT '',
+  last_error TEXT NULL,
+  classified_at DATETIME NULL,
+  recommended_at DATETIME NULL,
+  confirmed_at DATETIME NULL,
+  queued_at DATETIME NULL,
+  started_at DATETIME NULL,
+  finished_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_dispatch_source ON task_dispatches (source_type, source_key_hash, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_dispatch_status ON task_dispatches (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_dispatch_agent ON task_dispatches (assigned_agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_dispatch_parent ON task_dispatches (parent_dispatch_id);

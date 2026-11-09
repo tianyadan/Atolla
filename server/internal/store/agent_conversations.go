@@ -116,19 +116,22 @@ func (s *Store) CreateAndActivateAgentConversation(ctx context.Context, agentID 
 // ActivateAgentConversation 仅允许数字人激活自己的线程。
 func (s *Store) ActivateAgentConversation(ctx context.Context, agentID, conversationID int64) error {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE managed_agents a
-		INNER JOIN conversations c ON c.id=? AND c.agent_id=a.id
-		SET a.conversation_id=?
-		WHERE a.id=?`, conversationID, conversationID, agentID)
+		UPDATE managed_agents
+		SET conversation_id=?
+		WHERE id=?
+		  AND EXISTS (
+			SELECT 1 FROM conversations c
+			WHERE c.id=? AND c.agent_id=managed_agents.id
+		  )`, conversationID, agentID, conversationID)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		// MySQL 在目标值未变化时可能返回 0；用归属查询区分“已激活”和“不属于该员工”。
 		var current int64
 		err = s.db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM managed_agents a
-			INNER JOIN conversations c ON c.id=? AND c.agent_id=a.id
-			WHERE a.id=?`, conversationID, agentID).Scan(&current)
+			SELECT COUNT(*) FROM conversations
+			WHERE id=? AND agent_id=?`, conversationID, agentID).Scan(&current)
 		if err != nil {
 			return err
 		}

@@ -30,12 +30,21 @@ type AgentRuntime interface {
 	CancelAgentTaskQueue(ctx context.Context, agentID int64, taskID int64) error
 	UpdateAgentTaskQueue(ctx context.Context, agentID int64, taskID int64, question string) error
 	ClearAgentTaskQueueDone(ctx context.Context, agentID int64) error
+	// AskSiriReceptionist synchronously asks the configured Receptionist for App Intents.
+	AskSiriReceptionist(ctx context.Context, question string) (any, error)
 	// SetAutoReview persists AI auto-review and updates the live Hub for the agent conversation.
 	SetAutoReview(ctx context.Context, agentID int64, enabled bool) error
 	// SetAutoApproveAll persists「命令全部审批通过」.
 	SetAutoApproveAll(ctx context.Context, agentID int64, enabled bool) error
 	// DecidePermission resolves a pending Hub request (allow|deny|allow_session).
 	DecidePermission(requestID, behavior string) error
+
+	// Task Plan v2：查询 / 确认 / 拒绝 / 终止 / 继续。
+	GetActiveTaskPlan(ctx context.Context, agentID int64) (any, error)
+	ConfirmTaskPlan(ctx context.Context, agentID int64, planID string, steps any) (any, error)
+	RejectTaskPlan(ctx context.Context, agentID int64, planID string) error
+	AbortTaskPlan(ctx context.Context, agentID int64, planID string) error
+	ResumeTaskPlan(ctx context.Context, agentID int64, planID string) error
 
 	// Mobile settings: skills + legacy mounts (service-layer for browser-use / flag sync).
 	ListAgentSkills(ctx context.Context, agentID int64) ([]store.AgentSkillView, error)

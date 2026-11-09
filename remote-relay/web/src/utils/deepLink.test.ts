@@ -30,6 +30,29 @@ describe('Atolla deep links', () => {
     })
   })
 
+  it('parses task detail and queue links, including Bark short-form fallback', () => {
+    expect(
+      parseAtollaDeepLink(
+        'atolla://task/detail?id=123&instance_id=mac%20office&agent_id=a%2Fb',
+      ),
+    ).toEqual({
+      kind: 'taskDetail', instanceId: 'mac office', agentId: 'a/b', taskId: '123',
+    })
+    expect(
+      parseAtollaDeepLink('atolla://task/detail?id=123', {
+        instanceId: 'recent-mac', agentId: '9',
+      }),
+    ).toEqual({
+      kind: 'taskDetail', instanceId: 'recent-mac', agentId: '9', taskId: '123',
+    })
+    expect(
+      parseAtollaDeepLink('atolla://task/queue?instance_id=mac&agent_id=7'),
+    ).toEqual({ kind: 'taskQueue', instanceId: 'mac', agentId: '7' })
+    expect(parseAtollaDeepLink('atolla://agent/mac/7/queue')).toEqual({
+      kind: 'taskQueue', instanceId: 'mac', agentId: '7',
+    })
+  })
+
   it('rejects unknown schemes, paths, and missing segments', () => {
     expect(parseAtollaDeepLink('https://agent/mac/a/chat')).toBeNull()
     expect(parseAtollaDeepLink('atolla://agent/mac/a')).toBeNull()
@@ -44,6 +67,12 @@ describe('Atolla deep links', () => {
     expect(deepLinkTargetPath({ kind: 'approval', instanceId: 'mac 1', agentId: 'a/b', requestId: 'r/1' })).toBe(
       '/instances/mac%201/agents/a%2Fb/chat?approval_request_id=r%2F1',
     )
+    expect(deepLinkTargetPath({ kind: 'taskQueue', instanceId: 'mac 1', agentId: 'a/b' })).toBe(
+      '/instances/mac%201/agents/a%2Fb/chat?task_queue=1',
+    )
+    expect(deepLinkTargetPath({
+      kind: 'taskDetail', instanceId: 'mac 1', agentId: 'a/b', taskId: '123/4',
+    })).toBe('/instances/mac%201/agents/a%2Fb/chat?task_queue=1&task_id=123%2F4')
   })
 
   it('round-trips and clears pending targets', () => {
@@ -55,10 +84,29 @@ describe('Atolla deep links', () => {
     expect(loadPendingDeepLink(storage)).toBeNull()
   })
 
+  it('round-trips a pending task target across login or instance unlock', () => {
+    const storage = memoryStorage()
+    const target = {
+      kind: 'taskDetail' as const,
+      instanceId: 'mac',
+      agentId: '7',
+      taskId: '123',
+    }
+    savePendingDeepLink(target, storage)
+    expect(loadPendingDeepLink(storage)).toEqual(target)
+  })
+
   it('drops invalid stored data without throwing', () => {
     const storage = memoryStorage()
     storage.setItem('atolla.pendingDeepLink', '{bad json')
     expect(loadPendingDeepLink(storage)).toBeNull()
+  })
+
+  it('parses agents list deep link', () => {
+    expect(parseAtollaDeepLink('atolla://agents/mac%20office')).toEqual({
+      kind: 'agents',
+      instanceId: 'mac office',
+    })
   })
 
   it('builds agents list path and detects active chat route', () => {

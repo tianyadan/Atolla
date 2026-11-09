@@ -100,7 +100,7 @@ func (h *Handler) AdminAgentTaskQueueEnqueue(c *gin.Context) {
 	})
 }
 
-// AdminAgentTaskQueueInterrupt 打断优先：paused 当前 + 登记紧急 running。
+// AdminAgentTaskQueueInterrupt 打断优先：取消当前执行，调用方随后直发 Ask（不入队）。
 func (h *Handler) AdminAgentTaskQueueInterrupt(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body taskQueueBody
@@ -108,12 +108,11 @@ func (h *Handler) AdminAgentTaskQueueInterrupt(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
-	item, err := h.svc.InterruptPreferAgentTask(c.Request.Context(), id, body.Question, parseTaskQueueAtts(body.Attachments))
-	if err != nil {
+	if _, err := h.svc.InterruptPreferAgentTask(c.Request.Context(), id, body.Question, parseTaskQueueAtts(body.Attachments)); err != nil {
 		taskQueueHTTPError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, item)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "direct": true})
 }
 
 // AdminAgentTaskQueueContinue 继续队列（清 hold 并 claim 下一条）。

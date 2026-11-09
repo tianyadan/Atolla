@@ -50,3 +50,30 @@ func TestBuildAgentMirrorPayloadBlankSnapshot(t *testing.T) {
 		t.Fatalf("blank snapshot invented details: %#v", payload)
 	}
 }
+
+func TestBuildAgentMirrorPayloadExLiveAndTaskPlan(t *testing.T) {
+	payload := buildAgentMirrorPayloadEx(
+		store.ManagedAgent{TaskPlanEnabled: true, JellyColor: "purple"},
+		"产品部",
+		agentMirrorUsage{},
+		AgentLiveStatus{Phase: "working", Tool: "Bash", Summary: "正在执行测试", UpdatedAt: 1_700_000_100},
+		map[string]any{
+			"schema":       "atolla.task_plan.v1",
+			"phase":        "running",
+			"progress":     40,
+			"message":      "实现进度条",
+			"current_step": 1,
+			"total_count":  4,
+		},
+	)
+	if payload["task_plan_enabled"] != true {
+		t.Fatalf("task_plan_enabled = %#v", payload["task_plan_enabled"])
+	}
+	if payload["agent_phase"] != "working" || payload["activity_tool"] != "Bash" || payload["activity_summary"] != "正在执行测试" {
+		t.Fatalf("live fields = %#v", payload)
+	}
+	plan, ok := payload["task_plan"].(map[string]any)
+	if !ok || plan["progress"] != 40 || plan["phase"] != "running" || plan["message"] != "实现进度条" {
+		t.Fatalf("task_plan = %#v", payload["task_plan"])
+	}
+}

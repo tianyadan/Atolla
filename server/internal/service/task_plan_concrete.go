@@ -14,26 +14,81 @@ import (
 
 var vagueStepRe = regexp.MustCompile(`(?i)(正在规划|正在执行|正在输出|规划中|\b执行中\b|输出结果|处理中|开始任务|整理并回复|理解需求与目标|执行任务)`)
 
-// PlanConcreteSteps 产出 4～8 条具体可执行步骤,禁止空话。
-func (s *Service) PlanConcreteSteps(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []string {
+// PlanConcreteStepDetails 产出 3～8 条具体步骤（title≤6 rune + detail），供确认弹窗。
+func (s *Service) PlanConcreteStepDetails(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []TaskPlanStep {
 	q := strings.TrimSpace(question)
 	if q == "" {
 		q = "完成用户下达的任务"
 	}
-	var raw []string
+	var raw []TaskPlanStep
 	if a != nil {
 		pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-		raw = s.planStepsViaEngine(pctx, a, q, callees, onEvent)
+		raw = s.planStepsDetailedViaEngine(pctx, a, q, callees, onEvent)
 		cancel()
 	}
-	out := filterConcreteSteps(raw)
-	if len(out) >= 4 {
-		if len(out) > 8 {
-			out = out[:8]
+	out := filterConcreteStepDetails(raw)
+	if len(out) >= TaskPlanMinSteps {
+		if len(out) > TaskPlanMaxSteps {
+			out = out[:TaskPlanMaxSteps]
 		}
 		return out
 	}
-	return HeuristicPlanSteps(q, callees)
+	return heuristicPlanStepDetails(q, callees)
+}
+
+// PlanConcreteSteps 兼容旧调用：只返回标题列表。
+func (s *Service) PlanConcreteSteps(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []string {
+	steps := s.PlanConcreteStepDetails(ctx, a, question, callees, onEvent)
+	out := make([]string, 0, len(steps))
+	for _, st := range steps {
+		out = append(out, st.Title)
+	}
+	return out
+}
+
+func filterConcreteStepDetails(steps []TaskPlanStep) []TaskPlanStep {
+	var out []TaskPlanStep
+	seen := map[string]bool{}
+	for i, st := range steps {
+		title := clampPlanTitle(strings.TrimSpace(st.Title))
+		title = strings.TrimLeft(title, "0123456789.、)） ")
+		if title == "" || vagueStepRe.MatchString(title) {
+			continue
+		}
+		if utf8.RuneCountInString(title) < 2 {
+			continue
+		}
+		key := strings.ToLower(title)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		id := strings.TrimSpace(st.ID)
+		if id == "" {
+			id = fmt.Sprintf("s%d", i)
+		}
+		out = append(out, TaskPlanStep{
+			ID:     id,
+			Title:  title,
+			Detail: strings.TrimSpace(st.Detail),
+			Status: TaskStepPending,
+		})
+	}
+	return out
+}
+
+func heuristicPlanStepDetails(question string, callees []AgentRef) []TaskPlanStep {
+	titles := HeuristicPlanSteps(question, callees)
+	out := make([]TaskPlanStep, 0, len(titles))
+	for i, t := range titles {
+		out = append(out, TaskPlanStep{
+			ID:     fmt.Sprintf("s%d", i),
+			Title:  clampPlanTitle(t),
+			Detail: t,
+			Status: TaskStepPending,
+		})
+	}
+	return filterConcreteStepDetails(out)
 }
 
 func filterConcreteSteps(steps []string) []string {
@@ -88,7 +143,6 @@ func HeuristicPlanSteps(question string, callees []AgentRef) []string {
 	}
 	out := filterConcreteSteps(steps)
 	if len(out) < 4 {
-		// 极端兜底,仍避免「正在…」空话
 		out = append(out,
 			"列出需要触达的文件或接口清单",
 			"逐项完成清单中的关键动作",
@@ -157,11 +211,56 @@ func parseStepsJSON(raw string) []string {
 	return arr
 }
 
-func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []string {
+func parseStepDetailsJSON(raw string) []TaskPlanStep {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	i := strings.Index(raw, "[")
+	j := strings.LastIndex(raw, "]")
+	if i >= 0 && j > i {
+		raw = raw[i : j+1]
+	}
+	var objs []map[string]any
+	if err := json.Unmarshal([]byte(raw), &objs); err == nil {
+		var out []TaskPlanStep
+		for idx, o := range objs {
+			title, _ := o["title"].(string)
+			if title == "" {
+				title, _ = o["step"].(string)
+			}
+			detail, _ := o["detail"].(string)
+			if detail == "" {
+				detail, _ = o["desc"].(string)
+			}
+			id, _ := o["id"].(string)
+			if id == "" {
+				id = fmt.Sprintf("s%d", idx)
+			}
+			if strings.TrimSpace(title) == "" {
+				continue
+			}
+			out = append(out, TaskPlanStep{ID: id, Title: title, Detail: detail, Status: TaskStepPending})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	// 兼容纯字符串数组
+	titles := parseStepsJSON(raw)
+	out := make([]TaskPlanStep, 0, len(titles))
+	for idx, t := range titles {
+		out = append(out, TaskPlanStep{ID: fmt.Sprintf("s%d", idx), Title: t, Detail: t, Status: TaskStepPending})
+	}
+	return out
+}
+
+func (s *Service) planStepsDetailedViaEngine(ctx context.Context, a *store.ManagedAgent, question string, callees []AgentRef, onEvent AskEventSink) []TaskPlanStep {
 	var b strings.Builder
-	b.WriteString("把下面任务拆成 4～8 个具体可执行步骤。\n")
-	b.WriteString("要求：每步写清动作与对象；禁止「正在规划/正在执行/正在输出结果/理解需求/整理回复」等空话。\n")
-	b.WriteString("只输出 JSON 字符串数组，例如 [\"查阅 xx 配置\",\"修改 yy 函数\",...]。\n")
+	b.WriteString("把下面任务拆成 3～6 个里程碑步骤（不要拆成细碎操作）。\n")
+	b.WriteString("每步包含：title（不超过6个字，短标签）、detail（一两句说明要做什么）。\n")
+	b.WriteString("禁止「正在规划/正在执行/理解需求」等空话。\n")
+	b.WriteString("只输出 JSON 数组，例如 [{\"title\":\"查现状\",\"detail\":\"阅读相关模块确认入口\"},...]。\n")
 	if len(callees) > 0 {
 		b.WriteString("其中会协作其他同事：")
 		for i, c := range callees {
@@ -170,7 +269,7 @@ func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent,
 			}
 			b.WriteString(c.Name)
 		}
-		b.WriteString("。步骤里可包含「等待/整合某位同事结果」。\n")
+		b.WriteString("。\n")
 	}
 	b.WriteString("任务：\n")
 	b.WriteString(question)
@@ -180,5 +279,5 @@ func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent,
 	if err != nil {
 		return nil
 	}
-	return parseStepsJSON(out)
+	return parseStepDetailsJSON(out)
 }

@@ -57,3 +57,43 @@ func TestParseTaskPlanSnapshotCompat(t *testing.T) {
 		t.Fatalf("%+v", snap.Steps)
 	}
 }
+
+func TestTaskPlanDraftConfirmReject(t *testing.T) {
+	tp := &TaskProgress{taskID: "t3", name: "demo", phase: TaskPhasePlanning}
+	tp.SetPlanDraft(context.Background(), []TaskPlanStep{
+		{Title: "查现状", Detail: "读代码"},
+		{Title: "定协议", Detail: "写字段"},
+		{Title: "写接口", Detail: "实现 API"},
+	})
+	if tp.phase != TaskPhaseAwaitingConfirm || tp.frozen {
+		t.Fatalf("draft phase=%s frozen=%v", tp.phase, tp.frozen)
+	}
+	if err := tp.Confirm(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if tp.phase != TaskPhaseRunning || !tp.frozen || tp.steps[0].Status != TaskStepActive {
+		t.Fatalf("confirm phase=%s frozen=%v s0=%s", tp.phase, tp.frozen, tp.steps[0].Status)
+	}
+
+	tp2 := &TaskProgress{taskID: "t4", name: "demo", phase: TaskPhasePlanning}
+	tp2.SetPlanDraft(context.Background(), []TaskPlanStep{
+		{Title: "一步", Detail: "a"},
+		{Title: "二步", Detail: "b"},
+		{Title: "三步", Detail: "c"},
+	})
+	if err := tp2.Reject(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tp2.phase != TaskPhaseRejected {
+		t.Fatalf("want rejected got %s", tp2.phase)
+	}
+}
+
+func TestClampPlanTitleRunes(t *testing.T) {
+	if got := clampPlanTitle("查一下现状问题"); got != "查一下现状问" {
+		t.Fatalf("got %q", got)
+	}
+	if got := clampPlanTitle("FixBug"); got != "FixBug" {
+		t.Fatalf("got %q", got)
+	}
+}

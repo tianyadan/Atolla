@@ -37,6 +37,26 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		q = "请查看图片"
 	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
+	// 活跃 Task Plan：待确认须先处理；执行/暂停中插话入队。
+	if phase, hasPlan := s.HasBlockingTaskPlan(ctx, agentID); hasPlan {
+		if phase == TaskPhaseAwaitingConfirm || phase == TaskPhasePlanning {
+			return fmt.Errorf("请先确认或拒绝当前任务计划")
+		}
+		tqAtts := make([]TaskQueueAttachment, 0, len(chatAtts))
+		for _, x := range chatAtts {
+			tqAtts = append(tqAtts, TaskQueueAttachment{ID: x.ID, URL: x.URL, Mime: x.Mime, Name: x.Name})
+		}
+		if mode == "interrupt" {
+			return fmt.Errorf("任务计划执行中不可打断，消息请入队或终止计划")
+		}
+		out, err := s.EnqueueAgentTaskEx(ctx, agentID, q, tqAtts)
+		if err != nil {
+			return err
+		}
+		log.Printf("remotebridge agent.ask agent=%d: plan %s -> enqueued", agentID, phase)
+		_ = out
+		return nil
+	}
 	s.runMu.Lock()
 	_, liveAsk := s.runs[agentID]
 	s.runMu.Unlock()
@@ -48,17 +68,13 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 		}
 		switch mode {
 		case "interrupt":
-			item, ierr := s.InterruptPreferAgentTask(ctx, agentID, q, tqAtts)
-			if ierr != nil {
+			if _, ierr := s.InterruptPreferAgentTask(ctx, agentID, q, tqAtts); ierr != nil {
 				return ierr
-			}
-			taskID := int64(0)
-			if item != nil {
-				taskID = item.ID
 			}
 			go func() {
 				bg := context.Background()
-				_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{TaskID: taskID})
+				// 打断后直发，不挂 task_id，避免插话写入队列轨。
+				_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{})
 				if askErr != nil {
 					log.Printf("remotebridge agent.ask interrupt agent=%d: %v", agentID, askErr)
 				}
@@ -66,7 +82,7 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 					s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
 				}
 			}()
-			log.Printf("remotebridge agent.ask agent=%d: busy -> interrupt task=%d", agentID, taskID)
+			log.Printf("remotebridge agent.ask agent=%d: busy -> interrupt direct", agentID)
 			return nil
 		case "direct":
 			return fmt.Errorf("agent busy")
@@ -463,6 +479,15 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	}
 	mentions = filtered
 
+	// Task Plan 与 @同事互斥：开了规划时禁止委托。
+	if shouldEmitTaskPlanAsk(a, opts.skipTaskPlan) && len(mentions) > 0 {
+		err := fmt.Errorf("任务规划模式下不能同时 @同事，请先关闭任务规划或去掉 @")
+		if !opts.holdStatus {
+			_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "idle", "", 0, statusConvID(opts.bindMainConv, convID))
+		}
+		return nil, err
+	}
+
 	calleeRefs := make([]AgentRef, 0, len(mentions))
 	for _, m := range mentions {
 		calleeRefs = append(calleeRefs, AgentRef{ID: m.ID, Name: m.Name})
@@ -503,11 +528,18 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	var steps []string
 	var tp *TaskProgress
 	if shouldEmitTaskPlanAsk(a, opts.skipTaskPlan) {
-		// 真实阶段：planning → 拆分 → 激活第 0 步；禁止再跳到中间步
+		if phase, ok := s.HasBlockingTaskPlan(runCtx, agentID); ok {
+			return nil, fmt.Errorf("已有未完成的任务计划（%s），请先确认、拒绝或终止", phase)
+		}
+		// 第 1 拍：当前引擎出草稿 → awaiting_confirm，等用户确认后再执行
 		tp = s.beginTaskProgress(runCtx, agentID, truncateRunTitle(taskBody), onEvent)
-		steps = s.PlanConcreteSteps(runCtx, a, taskBody, calleeRefs, onEvent)
-		tp.SetPlan(runCtx, steps)
+		draft := s.PlanConcreteStepDetails(runCtx, a, taskBody, calleeRefs, onEvent)
+		tp.SetPlanDraft(runCtx, draft)
 		steps = tp.Snapshot("").StepTitles
+		msg, err := s.finishTaskPlanAwaitingConfirm(runCtx, a, convID, opts, tp, onEvent)
+		s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, err)
+		s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, err)
+		return msg, err
 	}
 
 	if len(mentions) > 0 {
@@ -521,10 +553,6 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	sys = s.consumeSystemReinject(runCtx, convID, sys)
 	userTurns, _ := s.Store.CountUserMessages(runCtx, convID)
 	q := MaybeReinforcePolicy(a, userTurns, engineQuestion)
-	// 单引擎长跑：整段执行期间保持第 0 步 active（不伪造中段进度）
-	if tp != nil {
-		tp.Activate(runCtx, 0, "")
-	}
 
 	// 默认靠引擎 resume；session 丢失或需 reinject（换工作区/压缩）时拼平台历史
 	history := ""
@@ -538,6 +566,65 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, runErr)
 	return msg, err
+}
+
+// finishTaskPlanAwaitingConfirm 规划第 1 拍结束：不执行业务，agent 回 idle，弹窗等确认。
+func (s *Service) finishTaskPlanAwaitingConfirm(
+	ctx context.Context,
+	a *store.ManagedAgent,
+	convID int64,
+	opts askCoreOpts,
+	tp *TaskProgress,
+	onEvent AskEventSink,
+) (*store.Message, error) {
+	agentID := int64(0)
+	if a != nil {
+		agentID = a.ID
+		remotebridge.ClearAgentLive(agentID)
+	}
+	s.abandonLiveAssistant(convID)
+	snap := TaskPlanSnapshot{}
+	if tp != nil {
+		snap = tp.Snapshot("待确认")
+	}
+	out := "已拟定任务计划，请在弹窗中确认或拒绝后再执行。"
+	msg := &store.Message{
+		ConversationID: convID, Role: "assistant", Content: out, Status: "ok",
+	}
+	if !opts.silent {
+		if id, err := s.Store.InsertMessage(context.WithoutCancel(ctx), msg); err != nil {
+			log.Printf("finishTaskPlanAwaitingConfirm: insert failed: %v", err)
+		} else {
+			msg.ID = id
+		}
+	}
+	payload := map[string]any{
+		"schema":       snap.Schema,
+		"phase":        snap.Phase,
+		"frozen":       snap.Frozen,
+		"task_id":      snap.TaskID,
+		"task_name":    snap.TaskName,
+		"step_items":   snap.Steps,
+		"steps":        snap.StepTitles,
+		"total_count":  snap.TotalCount,
+		"progress":     snap.Progress,
+		"message":      snap.Message,
+		"current_step": snap.CurrentStep,
+	}
+	emitAsk(onEvent, map[string]any{
+		"type":    "task_plan_awaiting_confirm",
+		"task_id": snap.TaskID,
+		"phase":   snap.Phase,
+		"payload": payload,
+	})
+	if agentID > 0 {
+		s.PushTaskPlanAwaitingBark(agentID, snap.TaskID, snap.TaskName)
+	}
+	if !opts.holdStatus && agentID > 0 {
+		_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), agentID, "idle", "", 0, statusConvID(opts.bindMainConv, convID))
+		s.PushAgentsMirrorNow()
+	}
+	return msg, nil
 }
 
 // ensureLiveAgentConversation 返回仍存在的主会话。指针指向已删除会话时新建并重新绑定。
@@ -657,6 +744,10 @@ func (s *Service) finishManagedAsk(ctx context.Context, a *store.ManagedAgent, c
 		agentID = a.ID
 		engine = a.Engine
 		workspace = a.WorkspacePath
+	}
+	// 回合结束：清掉手机灵动岛即时态，避免残留「正在…」
+	if agentID > 0 {
+		remotebridge.ClearAgentLive(agentID)
 	}
 	out, runErr = applyCancelledAskOutput(ctx.Err(), out, runErr)
 	if ctx.Err() != nil && ms == 0 {

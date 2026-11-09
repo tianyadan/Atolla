@@ -36,15 +36,6 @@ func (h *Handler) clientIP(c *gin.Context) string {
 func (h *Handler) Register(r *gin.Engine) {
 	api := r.Group("/api")
 	{
-		// Chrome MV3 浏览器控制：默认仅本机访问，REST 与 WebSocket 分别校验同一 Token。
-		browser := api.Group("/browser")
-		browser.Use(h.requireBrowserLocal())
-		browser.GET("/ws", h.BrowserControlWebSocket)
-		browserAuth := browser.Group("")
-		browserAuth.Use(h.requireBrowserToken())
-		browserAuth.GET("/status", h.BrowserControlStatus)
-		browserAuth.POST("/tasks", h.BrowserControlTask)
-
 		// 认证
 		api.POST("/auth/login", h.Login)
 		api.POST("/auth/register", h.RegisterAdmin)
@@ -140,6 +131,11 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agents/:id/clear", h.AdminAgentsClear)
 			adm.POST("/admin/agents/:id/compress", h.AdminAgentsCompress)
 			adm.POST("/admin/agents/:id/task-plan", h.AdminAgentsTaskPlan)
+			adm.GET("/admin/agents/:id/task-plan/active", h.AdminAgentTaskPlanActive)
+			adm.POST("/admin/agents/:id/task-plan/:planId/confirm", h.AdminAgentTaskPlanConfirm)
+			adm.POST("/admin/agents/:id/task-plan/:planId/reject", h.AdminAgentTaskPlanReject)
+			adm.POST("/admin/agents/:id/task-plan/:planId/abort", h.AdminAgentTaskPlanAbort)
+			adm.POST("/admin/agents/:id/task-plan/:planId/resume", h.AdminAgentTaskPlanResume)
 			adm.POST("/admin/agents/:id/auto-approve-all", h.AdminAgentsAutoApproveAll)
 			adm.GET("/admin/agents/:id/tasks", h.AdminAgentsTasks)
 			adm.GET("/admin/agents/:id/command-audits", h.AdminAgentsCommandAudits)
@@ -167,6 +163,11 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)
 			adm.POST("/admin/notify-prefs/verify/send", h.AdminNotifyBarkVerifySend)
 			adm.POST("/admin/notify-prefs/verify/confirm", h.AdminNotifyBarkVerifyConfirm)
+
+			adm.GET("/admin/plugins/github-idea", h.AdminGitHubIdeaGet)
+			adm.PUT("/admin/plugins/github-idea", h.AdminGitHubIdeaPut)
+			adm.GET("/admin/plugins/github-idea/dispatches", h.AdminGitHubIdeaDispatches)
+			adm.POST("/admin/plugins/github-idea/dispatches/:id/reassign", h.AdminGitHubIdeaDispatchReassign)
 
 			adm.GET("/admin/watchdog/local", h.AdminWatchdogLocalGet)
 			adm.PUT("/admin/watchdog/local", h.AdminWatchdogLocalPut)
@@ -201,6 +202,11 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/remote-relay/deploy", h.AdminRemoteRelayDeploy)
 			adm.POST("/admin/remote-relay/upgrade", h.AdminRemoteRelayUpgrade)
 			adm.GET("/admin/remote-relay/deploy-job/:id/stream", h.AdminRemoteRelayDeployJobStream)
+
+			adm.GET("/admin/ios-app/info", h.AdminIOSAppInfo)
+			adm.GET("/admin/ios-app/builds", h.AdminIOSAppBuildHistory)
+			adm.POST("/admin/ios-app/build-and-run", h.AdminIOSAppBuildAndRun)
+			adm.GET("/admin/ios-app/build-job/:id/stream", h.AdminIOSAppBuildJobStream)
 			adm.GET("/admin/db-clients", h.AdminDBClients)
 			adm.GET("/admin/agents/:id/db-sources", h.AdminAgentDBSourcesList)
 			adm.POST("/admin/agents/:id/db-sources", h.AdminAgentDBSourcesCreate)

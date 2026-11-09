@@ -4267,6 +4267,10 @@ html.force-light .instances-dark {
   gap: 10px;
   padding: 10px 14px;
 }
+.tq-list-item.is-deep-link-target {
+  background: rgba(124, 58, 237, 0.18);
+  box-shadow: inset 3px 0 0 #8b5cf6;
+}
 .tq-list-dot {
   width: 8px;
   height: 8px;
@@ -4334,3 +4338,62 @@ html.force-light .instances-dark {
   font-size: 11px;
   cursor: pointer;
 }
+
+/* Task Plan 底部弹窗 */
+.task-plan-sheet { max-height: min(82vh, 640px); }
+.task-plan-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 14px 12px;
+  overflow: auto;
+  flex: 1;
+}
+.task-plan-step {
+  border-bottom: 1px solid #1f1f1f;
+  padding: 10px 0;
+}
+.task-plan-step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.task-plan-idx {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #1f1f1f;
+  color: #bbb;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.task-plan-title { flex: 1; font-size: 14px; color: #eee; }
+.task-plan-title-input,
+.task-plan-detail-input {
+  flex: 1;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #0f0f0f;
+  color: #eee;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.task-plan-detail { margin: 8px 0 0 30px; font-size: 12px; }
+.task-plan-detail-input { width: 100%; margin-top: 8px; box-sizing: border-box; }
+.task-plan-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 14px 16px;
+  border-top: 1px solid #1f1f1f;
+}
+.tq-plan-steps {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #ccc;
+}
+.tq-list-item.is-plan .tq-list-status { color: #c4b5fd; }

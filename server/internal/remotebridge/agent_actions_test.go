@@ -27,7 +27,9 @@ func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, que
 	return nil
 }
 
-func (s *stubRuntime) ListAgentTaskQueue(context.Context, int64) (any, error) { return map[string]any{}, nil }
+func (s *stubRuntime) ListAgentTaskQueue(context.Context, int64) (any, error) {
+	return map[string]any{}, nil
+}
 func (s *stubRuntime) EnqueueAgentTaskQueue(context.Context, int64, string, []ChatAtt) (any, error) {
 	return map[string]any{}, nil
 }
@@ -42,6 +44,10 @@ func (s *stubRuntime) UpdateAgentTaskQueue(context.Context, int64, int64, string
 	return nil
 }
 func (s *stubRuntime) ClearAgentTaskQueueDone(context.Context, int64) error { return nil }
+func (s *stubRuntime) AskSiriReceptionist(_ context.Context, question string) (any, error) {
+	s.q = question
+	return map[string]any{"answer": "reply", "conversation_id": int64(9), "reply_ms": 12}, nil
+}
 
 func (s *stubRuntime) SaveChatImageFromBytes(context.Context, []byte, string) (*ChatAtt, error) {
 	return &ChatAtt{ID: "x", URL: "https://example.com/x.jpg", Mime: "image/jpeg", Name: "x.jpg"}, nil
@@ -101,8 +107,16 @@ func (s *stubRuntime) SaveNotifyPrefs(context.Context, store.NotifyPrefs) error 
 func (s *stubRuntime) GetNotifyPrefs(context.Context) (store.NotifyPrefs, error) {
 	return store.NotifyPrefs{}, nil
 }
-func (s *stubRuntime) SendNotifyBarkOTP(context.Context) (int, error) { return 600, nil }
+func (s *stubRuntime) SendNotifyBarkOTP(context.Context) (int, error)     { return 600, nil }
 func (s *stubRuntime) ConfirmNotifyBarkOTP(context.Context, string) error { return nil }
+
+func (s *stubRuntime) GetActiveTaskPlan(context.Context, int64) (any, error) { return nil, nil }
+func (s *stubRuntime) ConfirmTaskPlan(context.Context, int64, string, any) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+func (s *stubRuntime) RejectTaskPlan(context.Context, int64, string) error { return nil }
+func (s *stubRuntime) AbortTaskPlan(context.Context, int64, string) error  { return nil }
+func (s *stubRuntime) ResumeTaskPlan(context.Context, int64, string) error { return nil }
 
 func TestHandleAgentAskAccepts(t *testing.T) {
 	rt := &stubRuntime{}
@@ -127,6 +141,33 @@ func TestHandleAgentAskRequiresRuntime(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error without runtime")
+	}
+}
+
+func TestHandleReceptionistAsk(t *testing.T) {
+	rt := &stubRuntime{}
+	body, err := handleReceptionistAsk(&ExecContext{
+		Context: context.Background(),
+		Payload: map[string]interface{}{"question": "  今天有什么安排？  "},
+		Runtime: rt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := body.(map[string]any)
+	if rt.q != "今天有什么安排？" || result["answer"] != "reply" {
+		t.Fatalf("unexpected body=%v question=%q", body, rt.q)
+	}
+}
+
+func TestHandleReceptionistAskRequiresQuestion(t *testing.T) {
+	_, err := handleReceptionistAsk(&ExecContext{
+		Context: context.Background(),
+		Payload: map[string]interface{}{"question": "  "},
+		Runtime: &stubRuntime{},
+	})
+	if err == nil {
+		t.Fatal("expected question validation error")
 	}
 }
 

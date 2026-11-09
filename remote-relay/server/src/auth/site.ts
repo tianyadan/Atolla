@@ -11,8 +11,8 @@ export const MAX_CONSECUTIVE_FAILURES = 5
 /** Lockout duration after too many consecutive failures (ms) */
 export const LOCKOUT_MS = 15 * 60 * 1000
 
-/** Default JWT lifetime (hours) */
-const DEFAULT_JWT_TTL_HOURS = 24
+/** Default JWT lifetime: 30 days (hours) */
+const DEFAULT_JWT_TTL_HOURS = 720
 
 export type SiteAuthRow = {
   password_hash: string

@@ -11,7 +11,9 @@
 		0FC7C1817A4F4539C1AAD895 /* AtollaIslandPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9CA96795FA375736EB084C9 /* AtollaIslandPlugin.swift */; };
 		1135C7D9FFAD4E57B25480F4 /* jelly-red-32.png in Resources */ = {isa = PBXBuildFile; fileRef = B0261F4D33E62F4C22C4D222 /* jelly-red-32.png */; };
 		127E595C3FE3D4C4FBE687FC /* jelly-green-32.png in Resources */ = {isa = PBXBuildFile; fileRef = E639BC2829DD439D8BD5365D /* jelly-green-32.png */; };
+		167C409B3EF24428B19D124A /* AtollaCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914DF0D34C2C4F5B98218F9A /* AtollaCredentialStore.swift */; };
 		1FDCA047951669010181E6AA /* AtollaIslandWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F932D512F887AB38D978DD1A /* AtollaIslandWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		21E8BB4620D24B91AAED72CF /* AtollaCredentialPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0EE02CA67DB4B39AC70F023 /* AtollaCredentialPlugin.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		403FFA89B3D7BD27CE175C1C /* AtollaBusyLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EAD73602CF752597A4BE98F /* AtollaBusyLiveActivity.swift */; };
 		46E76DE911D9C3FEB9562740 /* jelly-blue-32.png in Resources */ = {isa = PBXBuildFile; fileRef = DE0BFF7957DBAFF0CDCE6B1F /* jelly-blue-32.png */; };
@@ -21,11 +23,26 @@
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
+		6875F78E2C8D4D359C49C9D1 /* AtollaRelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9502EC8B07274EE58D7F46DE /* AtollaRelayClient.swift */; };
 		6ED55C4879F12D1CC7E3C658 /* jelly-purple-32.png in Resources */ = {isa = PBXBuildFile; fileRef = BFF379521F6EE1EAE5DD731E /* jelly-purple-32.png */; };
+		7B15CEEB18CF4FA8A6FCB39D /* AtollaConnectionIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8EC70CC2F4D4F04BB455247 /* AtollaConnectionIntent.swift */; };
+		812EA6B4546C49D0A937723D /* AtollaAgentEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29D1C3C146948DD80393143 /* AtollaAgentEntity.swift */; };
 		871FA20EB9C19DD7F4908440 /* jelly-yellow-32.png in Resources */ = {isa = PBXBuildFile; fileRef = F4C67F1A5A9095B1DEBDEB51 /* jelly-yellow-32.png */; };
 		8C645957C51DA96FA5B1A43B /* AtollaBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA123B72AAA62BDEBA316DB /* AtollaBridgeViewController.swift */; };
+		9E34BCB175F84466A5368769 /* QueryAgentProgressIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E86153B7D9EF46489D221DD5 /* QueryAgentProgressIntent.swift */; };
 		A084ECDBA7D38E1E42DFC39D /* Pods_App.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */; };
+		A11B0001AAAA000100010001 /* AtollaAppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0001AAAA000100010001 /* AtollaAppGroup.swift */; };
+		A11B0002AAAA000100010002 /* AtollaUsageSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0002AAAA000100010002 /* AtollaUsageSnapshot.swift */; };
+		A11B0003AAAA000100010003 /* AtollaUsagePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0003AAAA000100010003 /* AtollaUsagePlugin.swift */; };
+		A11B0004AAAA000100010004 /* AtollaAppGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0001AAAA000100010001 /* AtollaAppGroup.swift */; };
+		A11B0005AAAA000100010005 /* AtollaUsageSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0002AAAA000100010002 /* AtollaUsageSnapshot.swift */; };
+		A11B0006AAAA000100010006 /* AtollaUsageWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0004AAAA000100010004 /* AtollaUsageWidget.swift */; };
+		A11B0007AAAA000100010007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11F0007AAAA000100010007 /* Assets.xcassets */; };
+		A11B0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift */; };
+		A1F82453E29847B9A723B3A1 /* SendAgentTaskIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECF13028904648AA88BE6095 /* SendAgentTaskIntent.swift */; };
+		B34F7A1C9D2E4F6081A3C5E7 /* AskReceptionistIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45A8B2D0E3F416295A7B9D1 /* AskReceptionistIntent.swift */; };
 		C61DFE0A5A6F9F5B764E78C1 /* AtollaBusyAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19AB6C417E20A552AAC1272 /* AtollaBusyAttributes.swift */; };
+		D56B9C3E1F405172A6B8C0D2 /* ListAgentsIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E67C0D4F20516283B7C9D1E3 /* ListAgentsIntent.swift */; };
 		ECDBB81F32744437759C4F14 /* jelly-orange-32.png in Resources */ = {isa = PBXBuildFile; fileRef = B6BC8C78DE2D3642349F68C8 /* jelly-orange-32.png */; };
 		EF761E653E72D6623FA640F0 /* JellyAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1839CD8B7CD32A0D4E559A81 /* JellyAvatarView.swift */; };
 		F1B4A57DA018749B05A8ED49 /* AtollaBusyAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19AB6C417E20A552AAC1272 /* AtollaBusyAttributes.swift */; };
@@ -74,7 +91,17 @@
 		7017BA67E8C588E14D13BC70 /* jelly-blue@32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-blue@32.png"; sourceTree = "<group>"; };
 		7235D51B7885FAD819327591 /* AtollaIslandWidgetBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaIslandWidgetBundle.swift; sourceTree = "<group>"; };
 		7BE64BF1C7AB6281BDF5A33E /* jelly-red@32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-red@32.png"; sourceTree = "<group>"; };
+		914DF0D34C2C4F5B98218F9A /* AtollaCredentialStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaCredentialStore.swift; sourceTree = "<group>"; };
+		9502EC8B07274EE58D7F46DE /* AtollaRelayClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaRelayClient.swift; sourceTree = "<group>"; };
 		9EAD73602CF752597A4BE98F /* AtollaBusyLiveActivity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaBusyLiveActivity.swift; sourceTree = "<group>"; };
+		A11F0001AAAA000100010001 /* AtollaAppGroup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaAppGroup.swift; sourceTree = "<group>"; };
+		A11F0002AAAA000100010002 /* AtollaUsageSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsageSnapshot.swift; sourceTree = "<group>"; };
+		A11F0003AAAA000100010003 /* AtollaUsagePlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsagePlugin.swift; sourceTree = "<group>"; };
+		A11F0004AAAA000100010004 /* AtollaUsageWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsageWidget.swift; sourceTree = "<group>"; };
+		A11F0007AAAA000100010007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A11F0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsageWidgetIntent.swift; sourceTree = "<group>"; };
+		A11F0005AAAA000100010005 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		A11F0006AAAA000100010006 /* AtollaIslandWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AtollaIslandWidget.entitlements; sourceTree = "<group>"; };
 		A9CA96795FA375736EB084C9 /* AtollaIslandPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaIslandPlugin.swift; sourceTree = "<group>"; };
 		AF277DCFFFF123FFC6DF26C7 /* Pods_App.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_App.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.release.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.release.xcconfig"; sourceTree = "<group>"; };
@@ -82,10 +109,17 @@
 		B6BC8C78DE2D3642349F68C8 /* jelly-orange-32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-orange-32.png"; sourceTree = "<group>"; };
 		B8C4FD28F7A1F10D5BB6DBC4 /* jelly-purple@32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-purple@32.png"; sourceTree = "<group>"; };
 		BFF379521F6EE1EAE5DD731E /* jelly-purple-32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-purple-32.png"; sourceTree = "<group>"; };
+		C0EE02CA67DB4B39AC70F023 /* AtollaCredentialPlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaCredentialPlugin.swift; sourceTree = "<group>"; };
 		C19AB6C417E20A552AAC1272 /* AtollaBusyAttributes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaBusyAttributes.swift; sourceTree = "<group>"; };
+		C45A8B2D0E3F416295A7B9D1 /* AskReceptionistIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AskReceptionistIntent.swift; sourceTree = "<group>"; };
+		D8EC70CC2F4D4F04BB455247 /* AtollaConnectionIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaConnectionIntent.swift; sourceTree = "<group>"; };
 		DE0BFF7957DBAFF0CDCE6B1F /* jelly-blue-32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-blue-32.png"; sourceTree = "<group>"; };
+		E29D1C3C146948DD80393143 /* AtollaAgentEntity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaAgentEntity.swift; sourceTree = "<group>"; };
 		E639BC2829DD439D8BD5365D /* jelly-green-32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-green-32.png"; sourceTree = "<group>"; };
+		E67C0D4F20516283B7C9D1E3 /* ListAgentsIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ListAgentsIntent.swift; sourceTree = "<group>"; };
+		E86153B7D9EF46489D221DD5 /* QueryAgentProgressIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QueryAgentProgressIntent.swift; sourceTree = "<group>"; };
 		E97744C515F3C553E049DF6D /* jelly-yellow@32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-yellow@32.png"; sourceTree = "<group>"; };
+		ECF13028904648AA88BE6095 /* SendAgentTaskIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SendAgentTaskIntent.swift; sourceTree = "<group>"; };
 		ED1C121C66D1FC5A711267E8 /* jelly-green@32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-green@32.png"; sourceTree = "<group>"; };
 		F4C67F1A5A9095B1DEBDEB51 /* jelly-yellow-32.png */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = image.png; path = "jelly-yellow-32.png"; sourceTree = "<group>"; };
 		F932D512F887AB38D978DD1A /* AtollaIslandWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AtollaIslandWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -152,6 +186,10 @@
 		504EC3061FED79650016851F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				A11F0005AAAA000100010005 /* App.entitlements */,
+				A11F0001AAAA000100010001 /* AtollaAppGroup.swift */,
+				A11F0002AAAA000100010002 /* AtollaUsageSnapshot.swift */,
+				A11F0003AAAA000100010003 /* AtollaUsagePlugin.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -161,6 +199,15 @@
 				2FAD9762203C412B000D30F8 /* config.xml */,
 				50B271D01FEDC1A000F3C39B /* public */,
 				C19AB6C417E20A552AAC1272 /* AtollaBusyAttributes.swift */,
+				914DF0D34C2C4F5B98218F9A /* AtollaCredentialStore.swift */,
+				C0EE02CA67DB4B39AC70F023 /* AtollaCredentialPlugin.swift */,
+				9502EC8B07274EE58D7F46DE /* AtollaRelayClient.swift */,
+				D8EC70CC2F4D4F04BB455247 /* AtollaConnectionIntent.swift */,
+				E29D1C3C146948DD80393143 /* AtollaAgentEntity.swift */,
+				E86153B7D9EF46489D221DD5 /* QueryAgentProgressIntent.swift */,
+				ECF13028904648AA88BE6095 /* SendAgentTaskIntent.swift */,
+				C45A8B2D0E3F416295A7B9D1 /* AskReceptionistIntent.swift */,
+				E67C0D4F20516283B7C9D1E3 /* ListAgentsIntent.swift */,
 				A9CA96795FA375736EB084C9 /* AtollaIslandPlugin.swift */,
 				6AA123B72AAA62BDEBA316DB /* AtollaBridgeViewController.swift */,
 			);
@@ -198,8 +245,12 @@
 		B7AC54BA8D61B0FB9AC142D5 /* AtollaIslandWidget */ = {
 			isa = PBXGroup;
 			children = (
+				A11F0006AAAA000100010006 /* AtollaIslandWidget.entitlements */,
+				A11F0007AAAA000100010007 /* Assets.xcassets */,
 				7235D51B7885FAD819327591 /* AtollaIslandWidgetBundle.swift */,
 				9EAD73602CF752597A4BE98F /* AtollaBusyLiveActivity.swift */,
+				A11F0004AAAA000100010004 /* AtollaUsageWidget.swift */,
+				A11F0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift */,
 				58EC96E3E9E5EF4E4F6E09D0 /* Info.plist */,
 				1839CD8B7CD32A0D4E559A81 /* JellyAvatarView.swift */,
 				5FE8A212F3FDCADA64B77113 /* jelly-sprites */,
@@ -305,6 +356,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A11B0007AAAA000100010007 /* Assets.xcassets in Resources */,
 				46E76DE911D9C3FEB9562740 /* jelly-blue-32.png in Resources */,
 				127E595C3FE3D4C4FBE687FC /* jelly-green-32.png in Resources */,
 				ECDBB81F32744437759C4F14 /* jelly-orange-32.png in Resources */,
@@ -360,7 +412,19 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				F1B4A57DA018749B05A8ED49 /* AtollaBusyAttributes.swift in Sources */,
 				0FC7C1817A4F4539C1AAD895 /* AtollaIslandPlugin.swift in Sources */,
+				167C409B3EF24428B19D124A /* AtollaCredentialStore.swift in Sources */,
+				21E8BB4620D24B91AAED72CF /* AtollaCredentialPlugin.swift in Sources */,
+				6875F78E2C8D4D359C49C9D1 /* AtollaRelayClient.swift in Sources */,
+				7B15CEEB18CF4FA8A6FCB39D /* AtollaConnectionIntent.swift in Sources */,
+				812EA6B4546C49D0A937723D /* AtollaAgentEntity.swift in Sources */,
+				9E34BCB175F84466A5368769 /* QueryAgentProgressIntent.swift in Sources */,
+				A1F82453E29847B9A723B3A1 /* SendAgentTaskIntent.swift in Sources */,
+				B34F7A1C9D2E4F6081A3C5E7 /* AskReceptionistIntent.swift in Sources */,
+				D56B9C3E1F405172A6B8C0D2 /* ListAgentsIntent.swift in Sources */,
 				8C645957C51DA96FA5B1A43B /* AtollaBridgeViewController.swift in Sources */,
+				A11B0001AAAA000100010001 /* AtollaAppGroup.swift in Sources */,
+				A11B0002AAAA000100010002 /* AtollaUsageSnapshot.swift in Sources */,
+				A11B0003AAAA000100010003 /* AtollaUsagePlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -372,6 +436,10 @@
 				403FFA89B3D7BD27CE175C1C /* AtollaBusyLiveActivity.swift in Sources */,
 				C61DFE0A5A6F9F5B764E78C1 /* AtollaBusyAttributes.swift in Sources */,
 				EF761E653E72D6623FA640F0 /* JellyAvatarView.swift in Sources */,
+				A11B0004AAAA000100010004 /* AtollaAppGroup.swift in Sources */,
+				A11B0005AAAA000100010005 /* AtollaUsageSnapshot.swift in Sources */,
+				A11B0006AAAA000100010006 /* AtollaUsageWidget.swift in Sources */,
+				A11B0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -410,6 +478,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = AtollaIslandWidget/AtollaIslandWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 2BKW4AX95S;
@@ -418,7 +487,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
 				MARKETING_VERSION = 1.0.4;
-				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.relay.AtollaIslandWidget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.mobile.AtollaIslandWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -432,6 +501,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = AtollaIslandWidget/AtollaIslandWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 2BKW4AX95S;
@@ -440,7 +510,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
 				MARKETING_VERSION = 1.0.4;
-				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.relay.AtollaIslandWidget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.mobile.AtollaIslandWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -561,6 +631,7 @@
 			baseConfigurationReference = FC68EB0AF532CFC21C3344DD /* Pods-App.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 2BKW4AX95S;
@@ -569,7 +640,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 1.0.4;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
-				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.relay;
+				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
@@ -582,6 +653,7 @@
 			baseConfigurationReference = AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 2BKW4AX95S;
@@ -589,7 +661,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 1.0.4;
-				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.relay;
+				PRODUCT_BUNDLE_IDENTIFIER = com.atolla.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;

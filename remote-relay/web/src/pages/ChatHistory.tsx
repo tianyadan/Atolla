@@ -11,11 +11,13 @@ import {
   fetchJevosSettings,
   fetchMessages,
   fetchPendingPermissions,
+  fetchActiveTaskPlan,
   fetchTaskQueue,
   fetchTasks,
   setAgentAutoApproveAll,
   setAgentAutoReview,
   setAgentTaskPlan,
+  type ActiveTaskPlanDTO,
   markAgentTaskRead,
   setViewerPresence,
   stopAgent,
@@ -30,6 +32,7 @@ import {
 } from '../api'
 import { TaskQueueChoiceSheet } from '../components/TaskQueueChoiceSheet'
 import { TaskQueueListSheet } from '../components/TaskQueueListSheet'
+import { TaskPlanSheet } from '../components/TaskPlanSheet'
 import { useLocale } from '../i18n/useLocale'
 import { AgentSettingsSheet } from '../components/AgentSettingsSheet'
 import { CmdBlock } from '../components/CmdBlock'
@@ -132,8 +135,10 @@ function mergeServerMessages(prev: LocalBubble[], page: PublicMirrorMessage[]): 
 /** Chat with sticky agent header, bottom-anchored thread, older-on-scroll-up */
 export function ChatHistoryPage() {
   const { instanceId = '', agentId = '' } = useParams()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const approvalRequestId = searchParams.get('approval_request_id') || ''
+  const requestedTaskQueue = searchParams.get('task_queue') === '1'
+  const requestedTaskId = searchParams.get('task_id') || ''
   useUnlockHeartbeat(instanceId || undefined)
   const navigate = useNavigate()
   const { t } = useLocale()
@@ -155,6 +160,8 @@ export function ChatHistoryPage() {
   const [question, setQuestion] = useState(() => loadChatDraft(instanceId, agentId))
   const [sending, setSending] = useState(false)
   const [planBusy, setPlanBusy] = useState(false)
+  const [activePlan, setActivePlan] = useState<ActiveTaskPlanDTO | null>(null)
+  const [taskPlanSheetOpen, setTaskPlanSheetOpen] = useState(false)
   const [progressOpen, setProgressOpen] = useState(false)
   const [approveSettingsOpen, setApproveSettingsOpen] = useState(false)
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
@@ -171,6 +178,7 @@ export function ChatHistoryPage() {
   const [kbdInset, setKbdInset] = useState(0)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+
   const [lightboxSrc, setLightboxSrc] = useState('')
   /** Album / screenshot picker (no capture) */
   const albumInputRef = useRef<HTMLInputElement | null>(null)
@@ -191,6 +199,19 @@ export function ChatHistoryPage() {
   /** 当前路由数字人；异步 sync/refresh 返回后必须仍匹配，否则会把 A 的消息灌进 B */
   const routeAgentRef = useRef(agentId)
   routeAgentRef.current = agentId
+
+  useEffect(() => {
+    if (requestedTaskQueue) setTqListOpen(true)
+  }, [requestedTaskQueue, requestedTaskId])
+
+  function closeTaskQueueDeepLink() {
+    setTqListOpen(false)
+    if (!requestedTaskQueue && !requestedTaskId) return
+    const next = new URLSearchParams(searchParams)
+    next.delete('task_queue')
+    next.delete('task_id')
+    setSearchParams(next, { replace: true })
+  }
 
   /** Reload draft when route agent changes; clear pending images */
   useEffect(() => {
@@ -557,6 +578,36 @@ export function ChatHistoryPage() {
     return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId, agentId, busy])
+
+  /** 活跃 Task Plan：待确认自动弹窗；执行中可查看 */
+  useEffect(() => {
+    if (!instanceId || !agentId || !taskPlanOn) {
+      setActivePlan(null)
+      return undefined
+    }
+    let cancelled = false
+    async function pullPlan() {
+      try {
+        const plan = await fetchActiveTaskPlan(instanceId, agentId)
+        if (cancelled) return
+        setActivePlan(plan)
+        if (plan?.phase === 'awaiting_confirm') {
+          setTaskPlanSheetOpen(true)
+        } else {
+          // PC 或其他移动端已处理后，按共享状态自动收起过期弹窗。
+          setTaskPlanSheetOpen(false)
+        }
+      } catch {
+        /* 离线忽略 */
+      }
+    }
+    void pullPlan()
+    const timer = window.setInterval(() => void pullPlan(), 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [instanceId, agentId, taskPlanOn, awaitingReply])
 
   const activeTask = useMemo(() => {
     const running = tasks.find((t) => {
@@ -1440,12 +1491,26 @@ export function ChatHistoryPage() {
         </div>
       ) : null}
 
+      <TaskPlanSheet
+        open={taskPlanSheetOpen}
+        instanceId={instanceId}
+        agentId={agentId}
+        plan={activePlan}
+        onClose={() => setTaskPlanSheetOpen(false)}
+        onChanged={() => {
+          void fetchActiveTaskPlan(instanceId, agentId).then(setActivePlan)
+          invalidateIslandSync()
+        }}
+        onError={(msg) => setError(msg)}
+      />
+
       <TaskQueueListSheet
         open={tqListOpen}
         instanceId={instanceId}
         agentId={agentId}
+        focusTaskId={requestedTaskId}
         onClose={() => {
-          setTqListOpen(false)
+          closeTaskQueueDeepLink()
           void refreshTaskQueueBadge()
         }}
         onError={(msg) => setError(msg)}
