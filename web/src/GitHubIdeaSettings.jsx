@@ -338,7 +338,11 @@ export default function GitHubIdeaSettings({ authHeaders, onUnauthorized, active
                       onChange={(event) => setReassignChoices((prev) => ({ ...prev, [item.id]: event.target.value }))}
                     >
                       <option value="">{t('settings.githubIdea.reassignAgent')}</option>
-                      {dispatchAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+                      {dispatchAgents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name} · {agent.job_role || t('settings.githubIdea.roleMissing')}
+                        </option>
+                      ))}
                     </select>
                     <button
                       type="button"
@@ -388,13 +392,15 @@ export default function GitHubIdeaSettings({ authHeaders, onUnauthorized, active
               <div className="github-idea-agent-list">
                 {agents.map((agent) => (
                   <label key={agent.id} className="github-idea-agent">
+                    <span className="github-idea-agent-copy">
+                      <strong>{agent.name}</strong>
+                      <small>{agent.folder_name || agent.engine || t('settings.githubIdea.ungrouped')}</small>
+                    </span>
                     <input
                       type="checkbox"
                       checked={selected.has(Number(agent.id))}
                       onChange={(e) => toggleAgent(Number(agent.id), e.target.checked)}
                     />
-                    <span>{agent.name}</span>
-                    <small>{agent.folder_name || agent.engine || ''}</small>
                   </label>
                 ))}
                 {!agents.length ? <span className="engine-note">{t('settings.githubIdea.noAgents')}</span> : null}

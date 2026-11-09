@@ -28,6 +28,8 @@ cat >"$PLIST" <<EOF
   <integer>60</integer>
   <key>RunAtLoad</key>
   <true/>
+  <key>AbandonProcessGroup</key>
+  <true/>
   <key>StandardOutPath</key>
   <string>${HOME}/.atolla/watchdog-local/launchd.out.log</string>
   <key>StandardErrorPath</key>

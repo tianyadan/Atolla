@@ -64,6 +64,9 @@ type Service struct {
 	deployJobOnce sync.Once
 	deployJobs    *deployJobHub
 
+	iosBuildJobOnce sync.Once
+	iosBuildJobs    *iosBuildJobHub
+
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
 

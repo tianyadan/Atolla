@@ -1,5 +1,5 @@
 import { App } from '@capacitor/app'
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { fetchAgents, fetchPendingInstancePermissions, getUnlockToken } from '../api'
@@ -7,11 +7,22 @@ import { buildIslandEvents, selectIslandPresentation } from '../islandEvents'
 import { resetIslandSyncKey, syncIslandPresentation } from '../islandLiveActivity'
 import { subscribeIslandSyncInvalidation } from '../islandSyncInvalidation'
 
-const POLL_MS = 3_000
+const POLL_MS_FG = 3_000
+const POLL_MS_BG = 5_000
+
+/** 原生 5s 唤醒 JS 拉数（展开岛 / 锁屏期间） */
+type IslandRefreshPlugin = {
+  addListener(
+    eventName: 'refreshNeeded',
+    listener: (data: { ts?: number }) => void,
+  ): Promise<{ remove: () => Promise<void> }>
+}
+
+const AtollaIslandRefresh = registerPlugin<IslandRefreshPlugin>('AtollaIsland')
 
 /**
  * 全局轮询忙碌数字人并上岛。
- * 前台轮询；进后台只推最后一次态后停轮询（原生保留 Live Activity，不主动 end）。
+ * 前台 3s；后台/锁屏 5s 继续拉数（配合原生 background task + refreshNeeded）。
  */
 export function IslandBusySyncHost() {
   const location = useLocation()
@@ -57,14 +68,13 @@ export function IslandBusySyncHost() {
       }
     }
 
-    /** 仅前台开启轮询 */
-    function startPolling() {
+    /** 启停轮询；后台用 5s，前台 3s */
+    function startPolling(ms: number) {
       stopPolling()
-      if (cancelled || !appActiveRef.current) return
+      if (cancelled) return
       intervalRef.current = window.setInterval(() => {
-        if (!appActiveRef.current) return
         void tick()
-      }, POLL_MS)
+      }, ms)
     }
 
     function stopPolling() {
@@ -75,10 +85,10 @@ export function IslandBusySyncHost() {
     }
 
     void tick()
-    startPolling()
+    startPolling(POLL_MS_FG)
 
     const invalidate = () => {
-      if (!appActiveRef.current) return
+      resetIslandSyncKey()
       void tick()
     }
     const unsubscribeInvalidation = subscribeIslandSyncInvalidation(invalidate)
@@ -88,29 +98,37 @@ export function IslandBusySyncHost() {
       appActiveRef.current = isActive
       resetIslandSyncKey()
       if (isActive) {
-        // 回前台立刻校准并恢复轮询
         void tick()
-        startPolling()
+        startPolling(POLL_MS_FG)
       } else {
-        // 挂起前再推一次最新态，随后停轮询；由原生标「同步暂停」保留岛
-        stopPolling()
+        // 进后台：5s 继续刷新步骤/进度，供展开岛与锁屏更新
         void tick()
+        startPolling(POLL_MS_BG)
       }
     }).then((h) => {
       appHandle = h
     })
 
+    // 原生 5s 心跳：WebView 定时器被节流时仍能唤醒拉数
+    let refreshHandle: { remove: () => Promise<void> } | undefined
+    void AtollaIslandRefresh.addListener('refreshNeeded', () => {
+      resetIslandSyncKey()
+      void tick()
+    }).then((h) => {
+      refreshHandle = h
+    })
+
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
         appActiveRef.current = false
-        stopPolling()
         resetIslandSyncKey()
         void tick()
+        startPolling(POLL_MS_BG)
       } else if (document.visibilityState === 'visible') {
         appActiveRef.current = true
         resetIslandSyncKey()
         void tick()
-        startPolling()
+        startPolling(POLL_MS_FG)
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
@@ -120,6 +138,7 @@ export function IslandBusySyncHost() {
       stopPolling()
       unsubscribeInvalidation()
       void appHandle?.remove()
+      void refreshHandle?.remove()
       document.removeEventListener('visibilitychange', onVisibility)
       void syncIslandPresentation({ activeKind: null, count: 0, items: [], presentation: 'list' })
     }

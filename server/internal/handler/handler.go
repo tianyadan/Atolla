@@ -202,6 +202,11 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/remote-relay/deploy", h.AdminRemoteRelayDeploy)
 			adm.POST("/admin/remote-relay/upgrade", h.AdminRemoteRelayUpgrade)
 			adm.GET("/admin/remote-relay/deploy-job/:id/stream", h.AdminRemoteRelayDeployJobStream)
+
+			adm.GET("/admin/ios-app/info", h.AdminIOSAppInfo)
+			adm.GET("/admin/ios-app/builds", h.AdminIOSAppBuildHistory)
+			adm.POST("/admin/ios-app/build-and-run", h.AdminIOSAppBuildAndRun)
+			adm.GET("/admin/ios-app/build-job/:id/stream", h.AdminIOSAppBuildJobStream)
 			adm.GET("/admin/db-clients", h.AdminDBClients)
 			adm.GET("/admin/agents/:id/db-sources", h.AdminAgentDBSourcesList)
 			adm.POST("/admin/agents/:id/db-sources", h.AdminAgentDBSourcesCreate)

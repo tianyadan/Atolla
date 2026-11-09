@@ -39,6 +39,7 @@ import { runningElapsedSec } from './taskTiming.js'
 import { useLocale } from './i18n/useLocale.js'
 import TaskQueueRail from './TaskQueueRail.jsx'
 import TaskQueueChoiceSheet from './TaskQueueChoiceSheet.jsx'
+import TaskPlanConfirmSheet from './TaskPlanConfirmSheet.jsx'
 import AgentRuntimeDetail from './AgentRuntimeDetail.jsx'
 import {
   beginAgentRuntime,
@@ -58,6 +59,7 @@ const ENGINES = [
   { id: 'codex', label: 'Codex', color: '#10a37f' },
   { id: 'agent', label: 'Cursor', color: '#6366f1' },
 ]
+const JOB_ROLES = ['前端', '后端', '移动端', '测试', '运维', '设计', '文档']
 
 /** 引擎错误展示压成约 1～2 行，完整内容放 title。 */
 function shortErrorText(raw, max = 140) {
@@ -224,6 +226,7 @@ export default function ManagedAgentsPanel({
   const [legacyMounts, setLegacyMounts] = useState([])
   const [newName, setNewName] = useState('新同事')
   const [newEngine, setNewEngine] = useState('claude')
+  const [newJobRole, setNewJobRole] = useState('')
   const [newContextWindow, setNewContextWindow] = useState(1000000)
   const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
   const [newRules, setNewRules] = useState('')
@@ -247,6 +250,7 @@ export default function ManagedAgentsPanel({
   const composerFileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
+  const [jobRoleDraft, setJobRoleDraft] = useState('')
   const [rulesDraft, setRulesDraft] = useState('')
   const [permBusy, setPermBusy] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -255,6 +259,7 @@ export default function ManagedAgentsPanel({
   const [jevReady, setJevReady] = useState(false)
   const [jevHint, setJevHint] = useState('')
   const [taskPlanSaving, setTaskPlanSaving] = useState(false)
+  const [taskPlanDecisionBusy, setTaskPlanDecisionBusy] = useState(false)
   const [, setTick] = useState(0)
   const [sessVer, setSessVer] = useState(0)
   const boxRef = useRef(null)
@@ -271,6 +276,7 @@ export default function ManagedAgentsPanel({
   // sessVer：外部 session patch 必须驱动重渲染，否则 permQueue 更新不刷新审批卡
   void sessVer
   const sess = getAgentSession(selectedId)
+  const activeTaskPlan = sess.activeTaskPlan
   const loading = !!sess.loading
   const compressing = !!sess.compressing
   const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog, sessVer])
@@ -394,6 +400,43 @@ export default function ManagedAgentsPanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, selectedId, active, selected?.conversation_id, selected?.status, focusApprovalRequestId])
+
+  // Task Plan 由 PC 与移动端共用后端状态；轮询负责跨端确认后及时收起弹层。
+  useEffect(() => {
+    if (!selectedId || !active) return undefined
+    const agentId = selectedId
+    let stopped = false
+
+    const pull = async () => {
+      try {
+        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+          headers: authHeaders(),
+        })
+        if (res.status === 401) {
+          onUnauthorized?.()
+          return
+        }
+        if (!res.ok) return
+
+        const data = await res.json().catch(() => ({}))
+        if (stopped || viewRef.current.selectedId !== agentId) return
+        const plan = data?.plan
+        const awaiting = plan?.phase === 'awaiting_confirm' && !plan?.frozen
+        patchAgentSession(agentId, { activeTaskPlan: awaiting ? plan : null })
+        if (awaiting) setTqChoice(null)
+      } catch {
+        // 临时离线时保留当前编辑内容，恢复连接后再同步服务端状态。
+      }
+    }
+
+    void pull()
+    const timer = window.setInterval(() => void pull(), 2000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, active])
 
   // 窗口重新可见时补拉审批（岛点进来若未整页刷新，也能恢复弹窗）
   useEffect(() => {
@@ -858,6 +901,7 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: newName.trim() || '未命名员工',
+          job_role: newJobRole,
           engine: newEngine,
           context_window_tokens: newContextWindow,
           rules_prompt: newRules,
@@ -888,6 +932,7 @@ export default function ManagedAgentsPanel({
         setSelectedId(created.id)
       }
       setCreateOpen(false)
+      setNewJobRole('')
       setNewPolicy(emptyPolicy())
       setNewJellyColor(assignJellyColor(String(Date.now())))
       await loadAgents(d?.id, { forceSelect: true })
@@ -944,6 +989,7 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: renameDraft.trim() || selected.name,
+          job_role: jobRoleDraft,
           context_window_tokens: contextWindowDraft,
           rules_prompt: rulesDraft,
           allow_write: !!policyDraft.allow_write,
@@ -963,7 +1009,7 @@ export default function ManagedAgentsPanel({
         return
       }
       setAgents((prev) => prev.map((a) => (
-        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft } : a
+        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft, job_role: jobRoleDraft } : a
       )))
       setSettingsOpen(false)
       await loadAgents(selected.id)
@@ -995,6 +1041,7 @@ export default function ManagedAgentsPanel({
   function openSelectedSettings(tab = 'basic') {
     if (!selected) return
     setRenameDraft(selected.name || '')
+    setJobRoleDraft(selected.job_role || '')
     setRulesDraft(selected.rules_prompt || '')
     setPolicyDraft(policyFromAgent(selected))
     setContextWindowDraft(selected.context_window_tokens || 1000000)
@@ -1155,6 +1202,55 @@ export default function ManagedAgentsPanel({
     }
   }
 
+  /** 确认或拒绝当前计划；任一端处理成功后共享状态会让另一端自动收起。 */
+  async function decideTaskPlan(action, steps = []) {
+    const agentId = selectedId
+    const planId = String(getAgentSession(agentId).activeTaskPlan?.plan_id || '')
+    if (!agentId || !planId || taskPlanDecisionBusy) return
+
+    setTaskPlanDecisionBusy(true)
+    try {
+      const res = await fetch(
+        `${API}/admin/agents/${agentId}/task-plan/${encodeURIComponent(planId)}/${action}`,
+        {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: action === 'confirm' ? JSON.stringify({ steps }) : '{}',
+        },
+      )
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || `任务计划${action === 'confirm' ? '确认' : '拒绝'}失败`)
+      }
+
+      patchAgentSession(agentId, { activeTaskPlan: null, error: '' })
+      await loadAgents(agentId)
+    } catch (error) {
+      patchAgentSession(agentId, { error: String(error?.message || error) })
+
+      // 另一端抢先处理时补拉真实状态，避免 PC 保留已过期的计划弹层。
+      try {
+        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+          headers: authHeaders(),
+        })
+        const data = await res.json().catch(() => ({}))
+        const plan = data?.plan
+        if (res.ok && (plan?.phase !== 'awaiting_confirm' || plan?.frozen)) {
+          patchAgentSession(agentId, { activeTaskPlan: null })
+        }
+      } catch {
+        // 离线时保留错误与计划，便于用户恢复连接后重试。
+      }
+    } finally {
+      setTaskPlanDecisionBusy(false)
+    }
+  }
+
   async function decide(requestId, behavior) {
     if (permBusy) return
     setPermBusy(true)
@@ -1209,6 +1305,22 @@ export default function ManagedAgentsPanel({
         })
       } else if (ev.type === 'agent_phase') {
         patchAgentSession(agentId, { agentPhase: ev.phase || '' })
+      } else if (ev.type === 'task_plan_awaiting_confirm') {
+        const payload = ev.payload || {}
+        patchAgentSession(agentId, {
+          activeTaskPlan: {
+            plan_id: ev.task_id || payload.task_id || '',
+            phase: 'awaiting_confirm',
+            frozen: !!payload.frozen,
+            task_name: payload.task_name || '',
+            progress: Number(payload.progress) || 0,
+            message: payload.message || '',
+            current_step: Number(payload.current_step) || 0,
+            total_count: Number(payload.total_count) || 0,
+            step_items: Array.isArray(payload.step_items) ? payload.step_items : [],
+          },
+        })
+        setTqChoice(null)
       } else if (ev.type === 'chunk') {
         const piece = (ev.content || '').replace(/\\n/g, '\n')
         if (!piece) continue
@@ -2272,6 +2384,14 @@ export default function ManagedAgentsPanel({
                     </button> : null}
                   </div>
                   <div className="ma-composer-wrap">
+                    <TaskPlanConfirmSheet
+                      open={activeTaskPlan?.phase === 'awaiting_confirm' && !activeTaskPlan?.frozen}
+                      plan={activeTaskPlan}
+                      busy={taskPlanDecisionBusy}
+                      onConfirm={(steps) => void decideTaskPlan('confirm', steps)}
+                      onReject={() => void decideTaskPlan('reject')}
+                      onError={(message) => patchAgentSession(selectedId, { error: message })}
+                    />
                     <GroupChatOfferSheet
                       open={!!groupOffer}
                       agents={agents}
@@ -2441,6 +2561,13 @@ export default function ManagedAgentsPanel({
             <JellyColorPicker value={newJellyColor} onChange={setNewJellyColor} disabled={busy} />
             <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
+              调度岗位
+              <select value={newJobRole} onChange={(e) => setNewJobRole(e.target.value)} disabled={busy}>
+                <option value="">未配置（不参与岗位匹配）</option>
+                {JOB_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+            </label>
+            <label>
               引擎
               <select value={newEngine} onChange={(e) => setNewEngine(e.target.value)} disabled={busy}>
                 {ENGINES.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
@@ -2545,6 +2672,13 @@ export default function ManagedAgentsPanel({
                     <label>
                       名称
                       <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
+                    </label>
+                    <label>
+                      调度岗位
+                      <select value={jobRoleDraft} onChange={(e) => setJobRoleDraft(e.target.value)} disabled={busy}>
+                        <option value="">未配置（不参与岗位匹配）</option>
+                        {JOB_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                      </select>
                     </label>
                     <label>
                       上下文窗口

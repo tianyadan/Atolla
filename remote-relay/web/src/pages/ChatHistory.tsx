@@ -593,6 +593,9 @@ export function ChatHistoryPage() {
         setActivePlan(plan)
         if (plan?.phase === 'awaiting_confirm') {
           setTaskPlanSheetOpen(true)
+        } else {
+          // PC 或其他移动端已处理后，按共享状态自动收起过期弹窗。
+          setTaskPlanSheetOpen(false)
         }
       } catch {
         /* 离线忽略 */

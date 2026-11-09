@@ -3,6 +3,8 @@ import SwiftUI
 import WidgetKit
 
 private let islandPurple = Color(red: 0.72, green: 0.42, blue: 0.98)
+/// 展开态状态标签用浅紫，突出「运行中」等重点信息
+private let islandPurpleSoft = Color(red: 0.86, green: 0.72, blue: 1.0)
 private let islandGreen = Color(red: 0.34, green: 0.86, blue: 0.52)
 private let islandYellow = Color(red: 1.0, green: 0.82, blue: 0.38)
 private let islandRed = Color(red: 1.0, green: 0.43, blue: 0.46)
@@ -37,15 +39,9 @@ struct AtollaBusyLiveActivity: Widget {
           EmptyView()
         }
         DynamicIslandExpandedRegion(.bottom) {
-          if state.syncPaused {
-            Text(syncPausedCaption(updatedAt: state.updatedAt))
-              .font(.system(size: 11, weight: .medium))
-              .foregroundStyle(.white.opacity(0.55))
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(.top, 2)
-          }
+          // syncPaused 只停假跳动，主文案仍展示任务进度/状态
           if isPlan, let item = first {
-            IslandTaskPlanFocus(item: item, syncPaused: state.syncPaused)
+            IslandTaskPlanFocus(item: item)
               .padding(.top, 2)
           } else {
             IslandExpandedList(state: state)
@@ -63,13 +59,7 @@ struct AtollaBusyLiveActivity: Widget {
           IslandStatusIcon(kind: state.activeKind, item: first, size: 15, animPhase: 0)
         }
       } compactTrailing: {
-        if state.syncPaused {
-          Text("已暂停")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.75))
-            .minimumScaleFactor(0.65)
-            .lineLimit(1)
-        } else if isDefaultRunning(state.activeKind) {
+        if isDefaultRunning(state.activeKind) {
           Text(count > 99 ? "99+ 项运行中" : "\(count) 项运行中")
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.white)
@@ -229,14 +219,9 @@ private struct IslandLockScreenBody: View {
           .font(.system(size: 18, weight: .bold, design: .rounded).monospacedDigit())
           .foregroundStyle(statusColor(state.activeKind))
       }
-      if state.syncPaused {
-        Text(syncPausedCaption(updatedAt: state.updatedAt))
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(.white.opacity(0.5))
-      }
       if state.presentation == "task_plan" || state.activeKind == "task_plan",
          let item = state.items.first {
-        IslandTaskPlanFocus(item: item, syncPaused: state.syncPaused)
+        IslandTaskPlanFocus(item: item)
       } else {
         IslandExpandedList(state: state)
       }
@@ -244,20 +229,9 @@ private struct IslandLockScreenBody: View {
   }
 }
 
-/// 后台同步暂停提示
-private func syncPausedCaption(updatedAt: Double) -> String {
-  guard updatedAt > 0 else { return "后台同步暂停" }
-  let date = Date(timeIntervalSince1970: updatedAt)
-  let formatter = DateFormatter()
-  formatter.locale = Locale(identifier: "zh_CN")
-  formatter.dateFormat = "HH:mm"
-  return "后台同步暂停 · 最后更新于 \(formatter.string(from: date))"
-}
-
 /// 任务规划重点模式：单 agent 进度条 + 当前步骤。
 private struct IslandTaskPlanFocus: View {
   let item: AtollaBusyAttributes.IslandItemSlice
-  var syncPaused: Bool = false
 
   var body: some View {
     let pct = max(0, min(100, item.progress))
@@ -295,7 +269,7 @@ private struct IslandTaskPlanFocus: View {
         Spacer(minLength: 4)
         Text("\(pct)%")
           .font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
-          .foregroundStyle(islandPurple.opacity(syncPaused ? 0.7 : 1))
+          .foregroundStyle(islandPurple)
       }
       GeometryReader { geo in
         ZStack(alignment: .leading) {
@@ -326,9 +300,6 @@ private struct IslandTaskPlanFocus: View {
   private var subtitle: String {
     let dept = item.department.isEmpty ? "未分组" : item.department
     let work = item.workStatus.isEmpty ? statusTitle(item.kind) : item.workStatus
-    if syncPaused {
-      return "\(dept) · 同步暂停"
-    }
     return "\(dept) · \(work)"
   }
 }
@@ -340,7 +311,7 @@ private struct IslandExpandedList: View {
     let rows = Array(state.items.prefix(3))
     VStack(alignment: .leading, spacing: 0) {
       ForEach(rows, id: \.id) { item in
-        IslandEventRow(item: item, syncPaused: state.syncPaused, updatedAt: state.updatedAt)
+        IslandEventRow(item: item)
       }
       if state.count > rows.count {
         moreRow
@@ -373,8 +344,6 @@ private struct IslandExpandedList: View {
 
 private struct IslandEventRow: View {
   let item: AtollaBusyAttributes.IslandItemSlice
-  var syncPaused: Bool = false
-  var updatedAt: Double = 0
 
   @ViewBuilder
   var body: some View {
@@ -386,28 +355,29 @@ private struct IslandEventRow: View {
   }
 
   private var rowContent: some View {
-    HStack(spacing: 8) {
+    HStack(alignment: .top, spacing: 8) {
       IslandStatusIcon(kind: item.kind, item: item, size: 22, animPhase: 0)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(item.agentName)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.white)
-          .lineLimit(1)
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+          Text(item.agentName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+          Spacer(minLength: 4)
+          // 耗时与「运行中」同排靠右并齐，状态用浅紫强调
+          IslandEventMeta(item: item)
+          Text(statusTitle(item.kind))
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(statusAccentColor(item.kind))
+        }
         Text(subtitle)
           .font(.system(size: 11))
           .foregroundStyle(.white.opacity(0.55))
           .lineLimit(1)
       }
-      Spacer(minLength: 4)
-      VStack(alignment: .trailing, spacing: 2) {
-        IslandEventMeta(item: item, syncPaused: syncPaused, updatedAt: updatedAt)
-        Text(syncPaused ? "同步暂停" : statusTitle(item.kind))
-          .font(.system(size: 9, weight: .medium))
-          .foregroundStyle(.white.opacity(0.35))
-      }
     }
     .padding(.horizontal, 4)
-    .frame(minHeight: 40)
+    .frame(minHeight: 40, alignment: .leading)
   }
 
   private var subtitle: String {
@@ -421,33 +391,48 @@ private struct IslandEventRow: View {
 
 private struct IslandEventMeta: View {
   let item: AtollaBusyAttributes.IslandItemSlice
-  var syncPaused: Bool = false
-  var updatedAt: Double = 0
 
   var body: some View {
-    // 后台暂停：冻结计时，展示最后同步时刻，避免继续「假增长」
-    if syncPaused, updatedAt > 0 {
-      Text(Date(timeIntervalSince1970: updatedAt), style: .time)
-        .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.75))
-    } else if !syncPaused, item.kind == "running" || item.kind == "task_plan", item.occurredAt > 0 {
-      let start = Date(timeIntervalSince1970: item.occurredAt)
-      Text(timerInterval: start...Date.distantFuture, countsDown: false, showsHours: true)
-        .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-        .foregroundStyle(.white)
-    } else if item.durationMs >= 0 {
-      Text(durationText(item.durationMs))
-        .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-        .foregroundStyle(statusColor(item.kind))
-    } else if item.occurredAt > 0 {
-      Text(Date(timeIntervalSince1970: item.occurredAt), style: .time)
-        .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-        .foregroundStyle(statusColor(item.kind))
-    } else {
-      Text("—")
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.35))
+    // 耗时靠右；timerInterval 由系统驱动刷新
+    Group {
+      if (item.kind == "running" || item.kind == "task_plan"), item.occurredAt > 0 {
+        let start = Date(timeIntervalSince1970: item.occurredAt)
+        Text(timerInterval: start...Date.distantFuture, countsDown: false, showsHours: true)
+          .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+          .foregroundStyle(.white)
+          .fixedSize(horizontal: true, vertical: false)
+      } else if item.durationMs >= 0 {
+        Text(durationText(item.durationMs))
+          .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+          .foregroundStyle(statusColor(item.kind))
+          .fixedSize(horizontal: true, vertical: false)
+      } else if item.occurredAt > 0 {
+        Text(Date(timeIntervalSince1970: item.occurredAt), style: .time)
+          .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+          .foregroundStyle(statusColor(item.kind))
+          .fixedSize(horizontal: true, vertical: false)
+      } else {
+        Text("—")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.35))
+      }
     }
+  }
+}
+
+/// 「运行中 / 任务规划」等状态用浅紫强调；其它状态沿用原色
+private func statusAccentColor(_ kind: String) -> Color {
+  switch kind {
+  case "running", "task_plan", "":
+    return islandPurpleSoft
+  case "error":
+    return islandRed
+  case "approval":
+    return islandYellow
+  case "completed":
+    return islandGreen
+  default:
+    return islandPurpleSoft
   }
 }
 

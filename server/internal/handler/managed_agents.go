@@ -58,6 +58,7 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	var body struct {
 		Name                string  `json:"name"`
+		JobRole             string  `json:"job_role"`
 		Engine              string  `json:"engine"`
 		ContextWindowTokens *int64  `json:"context_window_tokens"`
 		BinPath             string  `json:"bin_path"`
@@ -101,8 +102,9 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	se := body.ScheduleEnabled
 	cron := strings.TrimSpace(body.ScheduleCron)
 	label := strings.TrimSpace(body.ScheduleLabel)
+	jobRole := strings.TrimSpace(body.JobRole)
 	in := store.ManagedAgentInput{
-		Name: name, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
+		Name: name, JobRole: &jobRole, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
 		AllowWrite: body.AllowWrite, AllowNetwork: body.AllowNetwork, AllowRm: body.AllowRm, AllowBrowser: body.AllowBrowser,
 		WorkspacePath: &ws, ScheduleEnabled: &se, ScheduleCron: &cron, ScheduleLabel: &label,
 		JellyColor: body.JellyColor,
@@ -256,6 +258,8 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	in.AllowNetwork = parseBoolPtr("allow_network")
 	in.AllowRm = parseBoolPtr("allow_rm")
 	in.AllowBrowser = parseBoolPtr("allow_browser")
+	// 岗位是智能调度的硬约束；显式传空字符串表示清除岗位。
+	in.JobRole = parseStrPtr("job_role")
 	in.WorkspacePath = parseStrPtr("workspace_path")
 	in.ScheduleEnabled = parseBoolPtr("schedule_enabled")
 	in.ScheduleCron = parseStrPtr("schedule_cron")

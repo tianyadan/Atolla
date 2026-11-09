@@ -1,0 +1,17 @@
+{
+  "mode": "device",
+  "excludeSimulators": true,
+  "sdk": "iphoneos",
+  "workspace": "ios/App/App.xcworkspace",
+  "scheme": "App",
+  "configuration": "Debug",
+  "device": {
+    "name": "iPhone 16p",
+    "model": "iPhone 16 Pro Max",
+    "os": "26.2",
+    "udid": "00008140-001438982E79801C",
+    "coreDeviceId": "8D19FA3A-171A-579F-ADFA-C4DB195712FE"
+  },
+  "xcodebuildDestination": "platform=iOS,id=00008140-001438982E79801C",
+  "notes": "方案 A 真机锁定：禁止 iphonesimulator / generic/platform=iOS Simulator；仅用已连接物理机。"
+}

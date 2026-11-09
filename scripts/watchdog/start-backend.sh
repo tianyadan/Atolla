@@ -68,13 +68,20 @@ fi
 LOG_DIR="${HOME}/.atolla/watchdog-local"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/backend.log"
+BIN="$ROOT/server/bin/atolla"
 
-# 后台常驻：与 start.sh 的前台 go run 不同，需脱离当前 shell
-nohup go run . >>"$LOG_FILE" 2>&1 &
-echo "==> 后端已后台启动，日志: $LOG_FILE"
+# 编译常驻二进制，避免 go run 子进程随父 shell/launchd 退出被收割
+echo "==> 构建后端二进制 $BIN"
+go build -o "$BIN" .
+chmod +x "$BIN"
 
-# 短暂等待健康
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+# nohup + 重定向脱离终端；LaunchAgent 需配合 AbandonProcessGroup，避免检查脚本退出时杀后端
+nohup "$BIN" >>"$LOG_FILE" 2>&1 < /dev/null &
+echo $! >"$LOG_DIR/backend.pid"
+echo "==> 后端已后台启动 pid=$(cat "$LOG_DIR/backend.pid") 日志: $LOG_FILE"
+
+# 短暂等待健康（编译已完成，就绪应更快）
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
   if curl -sf --max-time 2 "$HEALTH" >/dev/null 2>&1; then
     echo "==> 健康检查通过"
     exit 0

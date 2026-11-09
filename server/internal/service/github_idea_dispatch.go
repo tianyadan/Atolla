@@ -67,6 +67,8 @@ func (s *Service) ListGitHubIdeaDispatches(ctx context.Context, limit int) ([]Gi
 		var decision DispatchRecommendation
 		if json.Unmarshal([]byte(row.DecisionJSON), &decision) == nil {
 			view.MatchReasons = append(view.MatchReasons, decision.Classification.Reasons...)
+			// 无候选时直接展示逐人拒绝原因，避免前端只看到笼统的“安全校验未通过”。
+			view.MatchReasons = append(view.MatchReasons, dispatchRejectionReasonLines(decision.Rejected)...)
 			if decision.Recommended != nil {
 				view.MatchReasons = append(view.MatchReasons, decision.Recommended.Reasons...)
 			}
@@ -152,6 +154,10 @@ func (s *Service) ReassignGitHubIdeaDispatch(ctx context.Context, dispatchID, ag
 		return nil, err
 	}
 	if recommendation.Recommended == nil {
+		detail := strings.Join(dispatchRejectionReasonLines(recommendation.Rejected), "；")
+		if detail != "" {
+			return nil, fmt.Errorf("所选数字员工未通过安全校验: %s（%s）", recommendation.Reason, detail)
+		}
 		return nil, fmt.Errorf("所选数字员工未通过安全校验: %s", recommendation.Reason)
 	}
 	decisionJSON, _ := json.Marshal(recommendation)
@@ -183,6 +189,21 @@ func (s *Service) ReassignGitHubIdeaDispatch(ctx context.Context, dispatchID, ag
 		}
 	}
 	return nil, fmt.Errorf("重新分派记录读取失败")
+}
+
+func dispatchRejectionReasonLines(rejected []DispatchRejection) []string {
+	lines := make([]string, 0, len(rejected))
+	for _, item := range rejected {
+		if len(item.Reasons) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(item.AgentName)
+		if name == "" {
+			name = fmt.Sprintf("数字员工 #%d", item.AgentID)
+		}
+		lines = append(lines, name+"："+strings.Join(item.Reasons, "、"))
+	}
+	return lines
 }
 
 func buildGitHubDispatchRetryTask(dispatch *store.TaskDispatch) string {

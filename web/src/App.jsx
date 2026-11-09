@@ -23,6 +23,7 @@ import WatchdogSettings from './WatchdogSettings.jsx'
 import IslandSettings from './IslandSettings.jsx'
 import JevSettings from './JevSettings.jsx'
 import GitHubIdeaSettings from './GitHubIdeaSettings.jsx'
+import AppPanel from './AppPanel.jsx'
 import ModernWorkspace from './ModernWorkspace.jsx'
 import { initLocale } from './i18n/locale.js'
 import { useLocale } from './i18n/useLocale.js'
@@ -50,6 +51,7 @@ function buildAdminLabels(t) {
     'remote-relay': t('nav.remoteRelay'),
     'network-allowlist': t('nav.networkAllowlist'),
     settings: t('nav.settings'),
+    app: t('nav.app'),
     manual: t('nav.manual'),
     changelog: t('nav.changelog'),
   }
@@ -449,6 +451,14 @@ export default function App() {
                 active={adminMenu === 'network-allowlist'}
               />
             )}
+            {/* App 构建页：任务可能持续数分钟，隐藏而不卸载以保留日志 */}
+            <div style={{ display: adminMenu === 'app' ? undefined : 'none' }}>
+              <AppPanel
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'app'}
+              />
+            </div>
             <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
               <WorkflowPanel
                 authHeaders={authHeaders}
@@ -485,7 +495,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'group-chats', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'group-chats', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'app', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>
