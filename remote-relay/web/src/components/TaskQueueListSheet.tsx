@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   abortTaskPlan,
   cancelTaskQueueItem,
@@ -34,6 +34,10 @@ export function TaskQueueListSheet({ open, instanceId, agentId, focusTaskId = ''
   const [editId, setEditId] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [expandPlanId, setExpandPlanId] = useState<number | null>(null)
+  const [sheetHeight, setSheetHeight] = useState<number | null>(null)
+  const [resizing, setResizing] = useState(false)
+  const sheetRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null)
   const focusedItemRef = useRef<HTMLLIElement | null>(null)
   const scrolledFocusRef = useRef('')
 
@@ -49,6 +53,7 @@ export function TaskQueueListSheet({ open, instanceId, agentId, focusTaskId = ''
   useEffect(() => {
     if (!open || !agentId) return undefined
     setEditId(null)
+    setSheetHeight(null)
     void load()
     const timer = window.setInterval(() => void load(), 4000)
     return () => window.clearInterval(timer)
@@ -134,9 +139,78 @@ export function TaskQueueListSheet({ open, instanceId, agentId, focusTaskId = ''
     }
   }
 
+  /** 将拖动高度限制在适合手机视口的范围内。 */
+  function clampSheetHeight(height: number): number {
+    const viewport = window.visualViewport?.height || window.innerHeight
+    const max = Math.max(280, Math.min(viewport * 0.92, 720))
+    const min = Math.min(max, Math.max(280, viewport * 0.42))
+    return Math.round(Math.min(max, Math.max(min, height)))
+  }
+
+  function onResizeStart(event: ReactPointerEvent<HTMLButtonElement>) {
+    const currentHeight = sheetRef.current?.getBoundingClientRect().height
+    if (!currentHeight) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: currentHeight,
+    }
+    setResizing(true)
+  }
+
+  function onResizeMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setSheetHeight(clampSheetHeight(drag.startHeight + drag.startY - event.clientY))
+  }
+
+  function onResizeEnd(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    dragRef.current = null
+    setResizing(false)
+  }
+
+  function onResizeKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    event.preventDefault()
+    const currentHeight = sheetHeight ?? sheetRef.current?.getBoundingClientRect().height ?? 0
+    setSheetHeight(clampSheetHeight(currentHeight + (event.key === 'ArrowUp' ? 64 : -64)))
+  }
+
+  function expandSheet() {
+    const viewport = window.visualViewport?.height || window.innerHeight
+    setSheetHeight(clampSheetHeight(viewport * 0.92))
+  }
+
   return (
     <div className="tq-list-mask" role="presentation" onClick={onClose}>
-      <div className="tq-list-sheet" role="dialog" aria-label={t('tq.title')} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={sheetRef}
+        className={`tq-list-sheet tq-list-sheet-resizable${sheetHeight != null ? ' is-resized' : ''}${resizing ? ' is-resizing' : ''}`}
+        role="dialog"
+        aria-label={t('tq.title')}
+        style={sheetHeight == null ? undefined : { height: sheetHeight }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="tq-list-drag-handle"
+          aria-label="拖动调整队列弹窗高度，双击展开"
+          title="向上拖动查看更多"
+          onPointerDown={onResizeStart}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeEnd}
+          onPointerCancel={onResizeEnd}
+          onKeyDown={onResizeKeyDown}
+          onDoubleClick={expandSheet}
+        >
+          <span aria-hidden />
+        </button>
         <header className="tq-list-head">
           <strong>{t('tq.title')}</strong>
           <div className="tq-list-head-actions">

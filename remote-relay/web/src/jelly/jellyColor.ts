@@ -76,17 +76,53 @@ export function resolveMirrorJellyColor(
   })
 }
 
-/** 运行态映射用（列表/对话）；完整精灵动作见 jellySprite.JellyActionState */
-export type JellyAvatarState = 'idle' | 'working' | 'typing' | 'waiting' | 'error'
+/** 头像运行态：与 jellySprite 的完整精灵动作（10 个）一一对应。 */
+export type JellyAvatarState = 'idle' | 'working' | 'typing' | 'waiting' | 'error' | 'ponder' | 'coding' | 'sleep' | 'eat' | 'celebrate'
+
+/** 把统一 agent_phase 映射为 JellyAvatar state；未知阶段保留调用方回退状态。 */
+export function jellyStateFromPhase(
+  phase: unknown,
+  fallback: JellyAvatarState = 'working',
+): JellyAvatarState {
+  switch (String(phase || '').toLowerCase()) {
+    case 'thinking':
+      return 'ponder'
+    // Agent 调用工具、生成回复及一般工作阶段统一展示敲电脑动画。
+    case 'tool_call':
+    case 'responding':
+    case 'working':
+      return 'coding'
+    case 'interaction_query':
+    case 'waiting':
+      return 'waiting'
+    case 'error':
+      return 'error'
+    case 'idle':
+      return 'idle'
+    default:
+      return fallback
+  }
+}
 
 /** 把 agent 状态映射为 JellyAvatar state */
 export function jellyStateFromAgent(
-  agent: { status?: string | null } | null | undefined,
+  agent:
+    | {
+        status?: string | null
+        agent_phase?: unknown
+        payload?: Record<string, unknown> | null
+      }
+    | null
+    | undefined,
   opts: { loading?: boolean; streaming?: boolean } = {},
 ): JellyAvatarState {
   const st = String(agent?.status || 'idle').toLowerCase()
   if (st === 'error') return 'error'
   if (st === 'waiting') return 'waiting'
+  const phase = agent?.payload?.agent_phase ?? agent?.agent_phase
+  if (phase && String(phase).toLowerCase() !== 'idle') {
+    return jellyStateFromPhase(phase, 'working')
+  }
   if (opts.streaming) return 'typing'
   if (
     opts.loading ||
@@ -98,5 +134,6 @@ export function jellyStateFromAgent(
   ) {
     return 'working'
   }
+  if (phase) return jellyStateFromPhase(phase, 'idle')
   return 'idle'
 }

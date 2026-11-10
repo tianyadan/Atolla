@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   assignJellyColor,
   jellyStateFromAgent,
+  jellyStateFromPhase,
   resolveJellyColor,
   resolveMirrorJellyColor,
 } from './jellyColor'
@@ -41,5 +42,22 @@ describe('jellyColor', () => {
     expect(jellyStateFromAgent({ status: 'running' })).toBe('working')
     expect(jellyStateFromAgent({ status: 'idle' }, { streaming: true })).toBe('typing')
     expect(jellyStateFromAgent({ status: 'error' })).toBe('error')
+  })
+
+  it('jellyStateFromPhase 映射思考和编码动作', () => {
+    expect(jellyStateFromPhase('thinking')).toBe('ponder')
+    expect(jellyStateFromPhase('tool_call')).toBe('coding')
+    expect(jellyStateFromPhase('responding')).toBe('coding')
+    expect(jellyStateFromPhase('waiting')).toBe('waiting')
+    expect(jellyStateFromPhase('unknown', 'working')).toBe('working')
+  })
+
+  it('jellyStateFromAgent 优先消费镜像中的实时阶段', () => {
+    expect(
+      jellyStateFromAgent({ status: 'running', payload: { agent_phase: 'thinking' } }),
+    ).toBe('ponder')
+    expect(
+      jellyStateFromAgent({ status: 'running', payload: { agent_phase: 'working' } }),
+    ).toBe('coding')
   })
 })

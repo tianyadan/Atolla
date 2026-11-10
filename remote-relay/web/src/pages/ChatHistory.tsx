@@ -1185,7 +1185,16 @@ export function ChatHistoryPage() {
               aria-label={t('tq.badge')}
               onClick={() => setTqListOpen(true)}
             >
-              Q
+              <svg
+                className="tq-composer-icon"
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <circle cx="3.25" cy="5" r="1" />
+                <circle cx="3.25" cy="10" r="1" />
+                <circle cx="3.25" cy="15" r="1" />
+                <path d="M6 5h10.5M6 10h10.5M6 15h7.25" />
+              </svg>
               {tqActive > 0 ? (
                 <em className="tq-composer-count">{tqActive > 9 ? '9+' : tqActive}</em>
               ) : null}

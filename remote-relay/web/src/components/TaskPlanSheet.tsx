@@ -7,6 +7,7 @@ import {
   type ActiveTaskPlanDTO,
   type TaskPlanStepDTO,
 } from '../api'
+import { tapHaptic } from '../haptics'
 
 type Props = {
   open: boolean
@@ -19,6 +20,25 @@ type Props = {
 }
 
 const TITLE_MAX = 6
+
+/** 轻量内联图标，避免为两个操作引入额外图标依赖。 */
+function DetailIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M5 3.75h7.5L15 6.3v9.95H5z" />
+      <path d="M12.4 3.9v2.55h2.45M7.5 9h5M7.5 11.8h5" />
+      <path className="task-plan-icon-indicator" d={expanded ? 'm8 15 2-2 2 2' : 'm8 14 2 2 2-2'} />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M6.25 6.5v9h7.5v-9M4.75 6.5h10.5M8 6.4V4.5h4v1.9M8.4 9v4.2M11.6 9v4.2" />
+    </svg>
+  )
+}
 
 /** 底部任务计划弹窗：确认前可编辑；确认后只读 + 终止/继续 */
 export function TaskPlanSheet({
@@ -91,6 +111,7 @@ export function TaskPlanSheet({
       onError?.('至少保留 3 个步骤')
       return
     }
+    tapHaptic()
     setBusy(true)
     try {
       await confirmTaskPlan(instanceId, agentId, plan.plan_id, cleaned)
@@ -158,14 +179,21 @@ export function TaskPlanSheet({
             <strong>任务计划</strong>
             <span className="muted"> · {phaseLabel}</span>
           </div>
-          <button type="button" className="btn ghost" onClick={onClose}>
+          <button type="button" className="btn ghost task-plan-close" onClick={onClose}>
             关闭
           </button>
         </header>
 
         <p className="modal-hint">{plan.task_name || plan.plan_id}</p>
         {(plan.phase === 'running' || plan.phase === 'paused') && (
-          <div className="agent-progress-bar" style={{ marginBottom: 12 }}>
+          <div
+            className="agent-progress-bar task-plan-progress"
+            role="progressbar"
+            aria-label="任务执行进度"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.max(0, Math.min(100, progress))}
+          >
             <div style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
           </div>
         )}
@@ -191,14 +219,24 @@ export function TaskPlanSheet({
                   )}
                   <button
                     type="button"
-                    className="btn ghost"
+                    className={`task-plan-icon-btn${openDetail ? ' is-active' : ''}`}
+                    aria-label={openDetail ? `收起${step.title || `第 ${i + 1} 步`}详情` : `查看${step.title || `第 ${i + 1} 步`}详情`}
+                    aria-expanded={openDetail}
+                    title={openDetail ? '收起详情' : '查看详情'}
                     onClick={() => setExpanded((m) => ({ ...m, [i]: !openDetail }))}
                   >
-                    {openDetail ? '收起' : '详情'}
+                    <DetailIcon expanded={openDetail} />
                   </button>
                   {editable && (
-                    <button type="button" className="btn ghost" disabled={steps.length <= 3} onClick={() => removeStep(i)}>
-                      删
+                    <button
+                      type="button"
+                      className="task-plan-icon-btn is-danger"
+                      disabled={steps.length <= 3}
+                      aria-label={`删除${step.title || `第 ${i + 1} 步`}`}
+                      title={steps.length <= 3 ? '至少保留 3 个步骤' : '删除步骤'}
+                      onClick={() => removeStep(i)}
+                    >
+                      <TrashIcon />
                     </button>
                   )}
                 </div>
@@ -221,7 +259,7 @@ export function TaskPlanSheet({
         </ol>
 
         {editable && (
-          <button type="button" className="btn" disabled={steps.length >= 8 || busy} onClick={addStep}>
+          <button type="button" className="btn task-plan-add" disabled={steps.length >= 8 || busy} onClick={addStep}>
             增加步骤
           </button>
         )}
@@ -229,10 +267,10 @@ export function TaskPlanSheet({
         <footer className="tq-list-foot task-plan-foot">
           {editable ? (
             <>
-              <button type="button" className="btn" disabled={busy} onClick={() => void onReject()}>
+              <button type="button" className="btn task-plan-reject" disabled={busy} onClick={() => void onReject()}>
                 拒绝
               </button>
-              <button type="button" className="btn primary" disabled={busy} onClick={() => void onConfirm()}>
+              <button type="button" className="btn primary task-plan-confirm" disabled={busy} onClick={() => void onConfirm()}>
                 确认执行
               </button>
             </>
