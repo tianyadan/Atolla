@@ -61,6 +61,7 @@ import {
   ImageIcon,
   SendIcon,
   StopIcon,
+  TaskPlanIcon,
 } from '../components/ComposerIcons'
 import { rememberChatSelection } from '../utils/chatResume'
 import { syncIslandOptimisticAgent } from '../islandLiveActivity'
@@ -75,6 +76,7 @@ import {
   agentRunStartedAt,
   agentTaskPlanEnabled,
 } from '../utils/agentStatus'
+import { resolveProgressTaskTitle } from '../utils/taskTitle'
 
 
 /** Seconds left until permission deadline */
@@ -619,7 +621,22 @@ export function ChatHistoryPage() {
 
   const activeProgress = Math.min(
     100,
-    Math.max(0, Number(activeTask?.payload?.progress ?? 0) || 0),
+    Math.max(
+      0,
+      Math.round(
+        Number(
+          activePlan?.progress ??
+            activeTask?.payload?.progress ??
+            0,
+        ) || 0,
+      ),
+    ),
+  )
+
+  /** Short AI-style title for the top progress strip (≤8 chars, no user raw text) */
+  const progressTitle = useMemo(
+    () => resolveProgressTaskTitle(activePlan, !!activeTask),
+    [activePlan, activeTask],
   )
 
   const activeSteps: string[] = useMemo(() => {
@@ -880,7 +897,7 @@ export function ChatHistoryPage() {
       const st = await fetchJevosSettings(instanceId, { force: true })
       const ok = !!st.enabled && !!st.healthy
       setJevReady(ok)
-      setJevHint(ok ? '' : st.detail || '请先在「功能 → 设置 → JEV」开启')
+      setJevHint(ok ? '' : st.detail || '请先在「设置 → 通知与 JEV → JEV」开启')
       return ok
     } catch {
       setJevReady(false)
@@ -900,7 +917,7 @@ export function ChatHistoryPage() {
     if (next) {
       const ok = jevReady || (await loadJevReady())
       if (!ok) {
-        setError(jevHint || '请先在「功能 → 设置 → JEV」开启')
+        setError(jevHint || '请先在「设置 → 通知与 JEV → JEV」开启')
         return
       }
     }
@@ -990,17 +1007,17 @@ export function ChatHistoryPage() {
             {taskPlanOn ? (
               <button
                 type="button"
-                className="progress-strip"
+                key="progress-strip"
+                className="progress-strip progress-strip-slide"
                 onClick={() => setProgressOpen(true)}
+                aria-label={`任务进度 ${progressTitle} ${activeProgress}%`}
               >
-                <div className="progress-strip-label">
-                  {activeTask
-                    ? String(activeTask.payload?.task_name || activeTask.task_id)
-                    : '暂无进行中的任务'}
-                  {activeTask ? ` · ${activeProgress}%` : ''}
-                </div>
-                <div className="agent-progress-bar">
-                  <div style={{ width: `${activeTask ? activeProgress : 0}%` }} />
+                <div className="progress-strip-title">{progressTitle}</div>
+                <div className="progress-strip-track-row">
+                  <div className="agent-progress-bar is-ink is-pulse" aria-hidden>
+                    <div style={{ width: `${activeProgress}%` }} />
+                  </div>
+                  <span className="progress-strip-pct">{activeProgress}%</span>
                 </div>
               </button>
             ) : null}
@@ -1159,15 +1176,17 @@ export function ChatHistoryPage() {
 
         <div className="chat-composer" ref={composerRef}>
           <div className="chat-composer-toggles">
-            <label className="capsule-toggle">
-              <input
-                type="checkbox"
-                checked={taskPlanOn}
-                disabled={planBusy || !agent}
-                onChange={(e) => void onTogglePlan(e.target.checked)}
-              />
-              <span>任务规划</span>
-            </label>
+            <button
+              type="button"
+              className={`composer-plan-btn${taskPlanOn ? ' is-on' : ''}`}
+              aria-pressed={taskPlanOn}
+              aria-label="任务规划"
+              title="任务规划"
+              disabled={planBusy || !agent}
+              onClick={() => void onTogglePlan(!taskPlanOn)}
+            >
+              <TaskPlanIcon size={20} />
+            </button>
             <button
               type="button"
               className={`btn outline small approve-settings-btn${approveAllOn || autoReviewOn ? ' is-on' : ''}`}
@@ -1298,8 +1317,8 @@ export function ChatHistoryPage() {
                   <button
                     type="button"
                     className="composer-icon-btn is-stop"
-                    aria-label="终止"
-                    title="终止"
+                    aria-label={t('composer.stop')}
+                    title={t('composer.stop')}
                     onClick={() => void onStop()}
                   >
                     <StopIcon />
@@ -1359,7 +1378,7 @@ export function ChatHistoryPage() {
             <p className="muted policy-hint">
               {jevReady
                 ? '开启后由本地 JEV 审核非常规命令（仍可能弹窗）'
-                : `需先开启 JEV：${jevHint || '请到「功能 → 设置」安装并打开胶囊'}`}
+                : `需先开启 JEV：${jevHint || '请到「设置 → 通知与 JEV」安装并打开胶囊'}`}
             </p>
           </div>
           <input
@@ -1445,13 +1464,14 @@ export function ChatHistoryPage() {
           </button>
         }
       >
-        {activeTask ? (
+        {activeTask || activePlan ? (
           <>
-            <p className="modal-hint">
-              {String(activeTask.payload?.task_name || activeTask.task_id)} · {activeProgress}%
-            </p>
-            <div className="agent-progress-bar">
-              <div style={{ width: `${activeProgress}%` }} />
+            <p className="modal-hint">{progressTitle}</p>
+            <div className="progress-strip-track-row">
+              <div className="agent-progress-bar is-ink is-pulse" aria-hidden>
+                <div style={{ width: `${activeProgress}%` }} />
+              </div>
+              <span className="progress-strip-pct">{activeProgress}%</span>
             </div>
             {activeSteps.length > 0 ? (
               <ol className="progress-steps">
@@ -1460,7 +1480,9 @@ export function ChatHistoryPage() {
                 ))}
               </ol>
             ) : (
-              <p className="muted">{String(activeTask.payload?.message || '暂无步骤详情')}</p>
+              <p className="muted">
+                {String(activePlan?.message || activeTask?.payload?.message || '暂无步骤详情')}
+              </p>
             )}
           </>
         ) : (

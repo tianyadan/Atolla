@@ -20,8 +20,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         scheduleUsageRefresh()
-        // 切入后台立刻拉一次，让桌面组件尽快拿到新数
-        Task { _ = await AtollaUsageRemoteRefresh.refresh(forceFresh: true) }
+        // 切入后台立刻拉一次，让桌面组件尽快拿到新数；并校准灵动岛
+        Task {
+            _ = await AtollaUsageRemoteRefresh.refresh(forceFresh: true)
+            if #available(iOS 16.2, *) {
+                _ = await AtollaIslandRemoteRefresh.reconcile()
+            }
+        }
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
@@ -31,7 +36,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         Task {
             let snap = await AtollaUsageRemoteRefresh.refresh(forceFresh: true)
-            completionHandler(snap == nil ? .noData : .newData)
+            var islandChanged = false
+            if #available(iOS 16.2, *) {
+                islandChanged = await AtollaIslandRemoteRefresh.reconcile()
+            }
+            completionHandler(snap == nil && !islandChanged ? .noData : .newData)
         }
     }
 
@@ -50,13 +59,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         try? BGTaskScheduler.shared.submit(request)
     }
 
-    /// 处理后台刷新：拉用量并预约下一次。
+    /// 处理后台刷新：拉用量 + 校准灵动岛，并预约下一次。
     private func handleUsageRefresh(task: BGAppRefreshTask?) {
         scheduleUsageRefresh()
         guard let task else { return }
         let work = Task {
             let snap = await AtollaUsageRemoteRefresh.refresh(forceFresh: true)
-            task.setTaskCompleted(success: snap != nil)
+            var islandChanged = false
+            if #available(iOS 16.2, *) {
+                islandChanged = await AtollaIslandRemoteRefresh.reconcile()
+            }
+            task.setTaskCompleted(success: snap != nil || islandChanged)
         }
         task.expirationHandler = { work.cancel() }
     }

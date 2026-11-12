@@ -12,6 +12,11 @@ import { InstanceSettingsPage } from './pages/InstanceSettings'
 import { InstancesPage } from './pages/Instances'
 import { LoginPage } from './pages/Login'
 import { SettingsPage } from './pages/Settings'
+import { SettingsAboutPage } from './pages/settings/SettingsAboutPage'
+import { SettingsLanguagePage } from './pages/settings/SettingsLanguagePage'
+import { SettingsOtpPage } from './pages/settings/SettingsOtpPage'
+import { SettingsPreferencesPage } from './pages/settings/SettingsPreferencesPage'
+import { SettingsRelayPage } from './pages/settings/SettingsRelayPage'
 
 /** App routes for mobile relay UI */
 export default function App() {
@@ -26,6 +31,11 @@ export default function App() {
           <Route path="/" element={<HomeRestorePage />} />
           <Route path="/instances" element={<InstancesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings/otp" element={<SettingsOtpPage />} />
+          <Route path="/settings/relay" element={<SettingsRelayPage />} />
+          <Route path="/settings/language" element={<SettingsLanguagePage />} />
+          <Route path="/settings/preferences" element={<SettingsPreferencesPage />} />
+          <Route path="/settings/about" element={<SettingsAboutPage />} />
           <Route path="/settings/changelog" element={<ChangelogPage />} />
           <Route path="/instances/:instanceId" element={<InstanceHubPage />} />
           <Route path="/instances/:instanceId/start" element={<HomeRestorePage />} />

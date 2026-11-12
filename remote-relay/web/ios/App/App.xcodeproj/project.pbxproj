@@ -39,6 +39,7 @@
 		A11B0006AAAA000100010006 /* AtollaUsageWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0004AAAA000100010004 /* AtollaUsageWidget.swift */; };
 		A11B0007AAAA000100010007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11F0007AAAA000100010007 /* Assets.xcassets */; };
 		A11B0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift */; };
+		A11B0009AAAA000100010009 /* AtollaIslandRemoteRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0009AAAA000100010009 /* AtollaIslandRemoteRefresh.swift */; };
 		A1F82453E29847B9A723B3A1 /* SendAgentTaskIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECF13028904648AA88BE6095 /* SendAgentTaskIntent.swift */; };
 		B34F7A1C9D2E4F6081A3C5E7 /* AskReceptionistIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C45A8B2D0E3F416295A7B9D1 /* AskReceptionistIntent.swift */; };
 		C61DFE0A5A6F9F5B764E78C1 /* AtollaBusyAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C19AB6C417E20A552AAC1272 /* AtollaBusyAttributes.swift */; };
@@ -97,6 +98,7 @@
 		A11F0001AAAA000100010001 /* AtollaAppGroup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaAppGroup.swift; sourceTree = "<group>"; };
 		A11F0002AAAA000100010002 /* AtollaUsageSnapshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsageSnapshot.swift; sourceTree = "<group>"; };
 		A11F0003AAAA000100010003 /* AtollaUsagePlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsagePlugin.swift; sourceTree = "<group>"; };
+		A11F0009AAAA000100010009 /* AtollaIslandRemoteRefresh.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaIslandRemoteRefresh.swift; sourceTree = "<group>"; };
 		A11F0004AAAA000100010004 /* AtollaUsageWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsageWidget.swift; sourceTree = "<group>"; };
 		A11F0007AAAA000100010007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A11F0008AAAA000100010008 /* AtollaUsageWidgetIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AtollaUsageWidgetIntent.swift; sourceTree = "<group>"; };
@@ -190,6 +192,7 @@
 				A11F0001AAAA000100010001 /* AtollaAppGroup.swift */,
 				A11F0002AAAA000100010002 /* AtollaUsageSnapshot.swift */,
 				A11F0003AAAA000100010003 /* AtollaUsagePlugin.swift */,
+				A11F0009AAAA000100010009 /* AtollaIslandRemoteRefresh.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -425,6 +428,7 @@
 				A11B0001AAAA000100010001 /* AtollaAppGroup.swift in Sources */,
 				A11B0002AAAA000100010002 /* AtollaUsageSnapshot.swift in Sources */,
 				A11B0003AAAA000100010003 /* AtollaUsagePlugin.swift in Sources */,
+				A11B0009AAAA000100010009 /* AtollaIslandRemoteRefresh.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

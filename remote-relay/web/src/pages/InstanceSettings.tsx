@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   clearToken,
   confirmNotifyBarkVerify,
@@ -20,9 +20,11 @@ import { useLocale } from '../i18n/useLocale'
 /** 实例内设置：通知 + JEV（数字人对话相关，与全局「中继/版本」分离） */
 export function InstanceSettingsPage() {
   const { instanceId = '' } = useParams()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const { t } = useLocale()
   useUnlockHeartbeat(instanceId || undefined)
+  const fromSettings = searchParams.get('from') === 'settings'
 
   const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
@@ -227,10 +229,12 @@ export function InstanceSettingsPage() {
   }
 
   const canCapsule = !!(jev?.installed || jev?.healthy)
-  const hub = `/instances/${encodeURIComponent(instanceId)}`
+  /** Prefer agents list over removed「功能」hub */
+  const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
+  const backTo = fromSettings ? '/settings/preferences' : agentsPath
 
   return (
-    <PageShell title={t('instance.settings')} backTo={hub}>
+    <PageShell title={t('instance.settings')} backTo={backTo}>
       {err ? <p className="error-banner">{err}</p> : null}
       {okMsg ? <p className="ok-banner">{okMsg}</p> : null}
 	  {jevSlow ? (

@@ -91,7 +91,7 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
         return
       }
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d.error || `用量加载失败(${res.status})`)
+      if (!res.ok) throw new Error(d.error || t('settings.engine.usageLoadFail', { status: res.status }))
       setUsageById(rememberUsage(d))
       setUsageCached(false)
     } catch (e) {
@@ -145,8 +145,8 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
               <EngineLogo id={e.id} />
               <strong>{e.name}</strong>
               <i className={`engine-dot ${e.installed ? 'ok' : 'off'}`} aria-hidden="true" />
-              <span>{e.installed ? '已安装' : '未安装'}</span>
-              {e.version ? <span className="engine-lock-ver">锁定 {e.version}</span> : null}
+              <span>{e.installed ? t('settings.engine.installed') : t('settings.engine.notInstalled')}</span>
+              {e.version ? <span className="engine-lock-ver">{t('settings.engine.lockedVer', { version: e.version })}</span> : null}
               <div className="engine-usage-stack">
                 {windows.length > 0 ? (
                   windows.map((w) => {
@@ -165,21 +165,21 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
                   })
                 ) : (
                   <p className="engine-usage-empty">
-                    {u?.error ? '额度未读到' : (busy ? '读取额度…' : '点击查看额度')}
+                    {u?.error ? t('settings.engine.quotaUnread') : (busy ? t('settings.engine.readingQuota') : t('settings.engine.clickQuota'))}
                   </p>
                 )}
               </div>
-              <span className="engine-usage-cta">查看用量详情</span>
+              <span className="engine-usage-cta">{t('settings.engine.viewUsage')}</span>
             </button>
           )
         })}
       </div>
       <div className="engine-recheck-row">
         <button type="button" className="engine-recheck" onClick={() => load({ force: true })} disabled={busy}>
-          {busy ? '正在重新检查…' : '重新检查环境'}
+          {busy ? t('settings.engine.rechecking') : t('settings.engine.recheckEnv')}
         </button>
         {usageCached ? (
-          <em className="engine-usage-tag is-muted">额度来自缓存 · 约 5 分钟刷新</em>
+          <em className="engine-usage-tag is-muted">{t('settings.engine.cachedHint')}</em>
         ) : null}
       </div>
       {err && <p className="engine-hint">{err}</p>}
@@ -193,11 +193,13 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
             aria-modal="true"
             aria-labelledby="engine-usage-title"
           >
-            <h2 id="engine-usage-title">{detailed.name} 用量详情</h2>
+            <h2 id="engine-usage-title">{t('settings.engine.usageTitle', { name: detailed.name })}</h2>
             <p className="engine-usage-sub">
-              {detailed.installed ? `已安装 · ${detailed.path || detailed.bin}` : '本机未检测到 CLI'}
-              {detailed.version ? ` · Atolla 锁定 ${detailed.version}` : ''}
-              {detailUsage?.plan ? ` · 套餐 ${detailUsage.plan}` : ''}
+              {detailed.installed
+                ? t('settings.engine.installedPath', { path: detailed.path || detailed.bin })
+                : t('settings.engine.cliMissing')}
+              {detailed.version ? t('settings.engine.atollaLocked', { version: detailed.version }) : ''}
+              {detailUsage?.plan ? t('settings.engine.plan', { plan: detailUsage.plan }) : ''}
             </p>
 
             {detailUsage?.ok && (detailUsage.windows || []).length > 0 ? (
@@ -208,7 +210,7 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
                     <li key={`${w.kind}-${w.label}`}>
                       <div className="engine-usage-detail-head">
                         <strong>{w.label || w.kind}</strong>
-                        <span>{pct}% 已用</span>
+                        <span>{t('settings.engine.usedPct', { pct })}</span>
                       </div>
                       <div className="engine-usage-bar is-lg">
                         <div className={`engine-usage-fill tone-${barTone(pct)}`} style={{ width: `${pct}%` }} />
@@ -217,7 +219,7 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
                         {w.hint ? <em className="engine-usage-tag is-muted">{w.hint}</em> : null}
                         {w.reset_hint ? <em className="engine-usage-tag is-muted">{w.reset_hint}</em> : null}
                         {!w.reset_hint && w.resets_at ? (
-                          <em className="engine-usage-tag is-muted">重置 {w.resets_at}</em>
+                          <em className="engine-usage-tag is-muted">{t('settings.engine.resetAt', { time: w.resets_at })}</em>
                         ) : null}
                       </div>
                     </li>
@@ -226,18 +228,19 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
               </ul>
             ) : (
               <p className="engine-note">
-                {detailUsage?.error || '暂无订阅额度数据。请确认对应 CLI 已在本机登录。'}
+                {detailUsage?.error || t('settings.engine.noQuota')}
               </p>
             )}
             {detailUsage?.source ? (
-              <p className="engine-usage-source">数据源 · {detailUsage.source}</p>
+              <p className="engine-usage-source">{t('settings.engine.source', { source: detailUsage.source })}</p>
             ) : null}
 
             {showInstall && (
               <>
                 <h3 className="engine-usage-install-title">
-                  安装命令
-                  {detailed.version ? `（锁定 ${detailed.version}）` : ''}
+                  {detailed.version
+                    ? t('settings.engine.installCmdLocked', { version: detailed.version })
+                    : t('settings.engine.installCmd')}
                 </h3>
                 <label className="engine-mirror">
                   <input
@@ -253,17 +256,17 @@ export default function EngineSettings({ authHeaders, onUnauthorized, active }) 
             )}
 
             <div className="modal-actions">
-              <button type="button" onClick={() => setDetailId('')}>关闭</button>
+              <button type="button" onClick={() => setDetailId('')}>{t('settings.common.close')}</button>
               <button
                 type="button"
                 className="ghost"
                 onClick={() => setShowInstall((v) => !v)}
               >
-                {showInstall ? '收起安装命令' : '安装命令'}
+                {showInstall ? t('settings.engine.collapseInstall') : t('settings.engine.installCmd')}
               </button>
               {showInstall && (
                 <button type="button" className="engine-copy" onClick={copyCmd}>
-                  {copied ? '已复制' : '复制命令'}
+                  {copied ? t('settings.common.copied') : t('settings.engine.copyCmd')}
                 </button>
               )}
             </div>

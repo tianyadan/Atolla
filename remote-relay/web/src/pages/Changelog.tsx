@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { clearToken, fetchChangelogPage, type ChangelogEntry } from '../api'
 import { PageShell } from '../components/PageShell'
+import { useLocale } from '../i18n/useLocale'
 
 /** Infinite-scroll changelog (newest first) */
 export function ChangelogPage() {
   const navigate = useNavigate()
+  const { t } = useLocale()
   const [items, setItems] = useState<ChangelogEntry[]>([])
   const [cursor, setCursor] = useState<string | null | undefined>(undefined)
   const [hasMore, setHasMore] = useState(true)
@@ -57,7 +59,7 @@ export function ChangelogPage() {
   }, [loadMore])
 
   return (
-    <PageShell title="更新记录" backTo="/settings">
+    <PageShell title={t('settings.changelog')} backTo="/settings">
       {error ? <p className="error-banner">{error}</p> : null}
       <div className="changelog-list">
         {items.map((e) => (

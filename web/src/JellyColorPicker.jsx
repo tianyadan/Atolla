@@ -1,8 +1,15 @@
 import { useState } from 'react'
 import JellyAvatar from './JellyAvatar.jsx'
 import { JELLY_COLORS } from './jellyColor.js'
+import { useLocale } from './i18n/useLocale.js'
 
-/** 十二色中文标签（aria / title） */
+/** Color id list for aria / title i18n keys (`agentSettings.jelly.*`) */
+export const JELLY_COLOR_IDS = [
+  'orange', 'yellow', 'blue', 'green', 'purple', 'red',
+  'cyan', 'teal', 'pink', 'lime', 'coral', 'sky',
+]
+
+/** @deprecated Prefer t(`agentSettings.jelly.${id}`) — kept for non-React callers */
 export const JELLY_COLOR_LABEL = {
   orange: '橙',
   yellow: '黄',
@@ -51,11 +58,13 @@ export default function JellyColorPicker({
   value,
   onChange,
   disabled = false,
-  label = '头像颜色',
+  label,
   showPreview = true,
   previewSize = 64,
   showActions = true,
 }) {
+  const { t } = useLocale()
+  const colorLabel = label || t('agentSettings.jellyColor')
   const [previewAction, setPreviewAction] = useState('idle')
 
   return (
@@ -65,11 +74,11 @@ export default function JellyColorPicker({
           <JellyAvatar color={value} size={previewSize} state={previewAction} />
           {showActions ? (
             <label className="jelly-color-picker-action">
-              <span>动作预览</span>
+              <span>{t('agentSettings.actionPreview')}</span>
               <select
                 value={previewAction}
                 disabled={disabled}
-                aria-label="动作预览"
+                aria-label={t('agentSettings.actionPreview')}
                 onChange={(e) => setPreviewAction(e.target.value)}
               >
                 {JELLY_PREVIEW_ACTIONS.map((a) => (
@@ -82,11 +91,11 @@ export default function JellyColorPicker({
           ) : null}
         </div>
       ) : null}
-      <span className="jelly-color-picker-label">{label}</span>
-      <div className="jelly-color-picker-row" role="radiogroup" aria-label={label}>
+      <span className="jelly-color-picker-label">{colorLabel}</span>
+      <div className="jelly-color-picker-row" role="radiogroup" aria-label={colorLabel}>
         {JELLY_COLORS.map((c) => {
           const selected = value === c
-          const name = JELLY_COLOR_LABEL[c] || c
+          const name = t(`agentSettings.jelly.${c}`)
           return (
             <button
               key={c}

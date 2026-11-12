@@ -6,14 +6,18 @@ import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
-const OPTIONS = [
-  { id: 'sqlite', name: 'SQLite', blurb: '本地文件库，免 Docker' },
-  { id: 'mysql', name: 'MySQL', blurb: '本机 Docker · 端口 3307' },
+const DRIVER_IDS = [
+  { id: 'sqlite', name: 'SQLite' },
+  { id: 'mysql', name: 'MySQL' },
 ]
 
 /** 设置页「数据库」：紧凑列表 + 迁移切换，视觉对齐其它设置分组。 */
 export default function DbSettings({ authHeaders, onUnauthorized, active }) {
   const { t } = useLocale()
+  const OPTIONS = DRIVER_IDS.map((d) => ({
+    ...d,
+    blurb: d.id === 'mysql' ? t('settings.db.mysqlBlurb') : t('settings.db.sqliteBlurb'),
+  }))
   const [open, setOpen] = useState(true)
   const [detailOpen, setDetailOpen] = useState(false)
   const [st, setSt] = useState(null)
@@ -39,7 +43,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         if (res.status === 404) {
-          throw new Error('数据库接口未就绪，请重启后端（./scripts/restart.sh）后刷新')
+          throw new Error(t('settings.db.apiMissing'))
         }
         throw new Error(data.error || res.statusText || `HTTP ${res.status}`)
       }
@@ -81,12 +85,12 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
   async function doSwitch(migrate) {
     if (!modal || modal.kind !== 'switch') return
     if (migrate && !ack) {
-      setErr('请先勾选确认风险')
+      setErr(t('settings.db.needAck'))
       return
     }
     setBusy(true)
     setErr('')
-    setHint(migrate ? '正在迁移数据…' : '正在切换…')
+    setHint(migrate ? t('settings.db.migrating') : t('settings.db.switching'))
     setProgress(migrate ? { phase: 'preparing', percent: 0 } : null)
     let poll
     if (migrate) {
@@ -113,18 +117,18 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
       if (!res.ok) throw new Error(data.error || res.statusText)
       setModal(null)
       if (data.restart === 'pending') {
-        setHint('配置已保存，正在重启服务…')
+        setHint(t('settings.db.savedRestarting'))
         const ok = await waitHealth(60000)
         if (ok) {
-          setHint('重启完成，请刷新页面')
+          setHint(t('settings.db.restartDone'))
           await load()
         } else {
-          setHint(`重启较慢，可手动执行：${data.command || './scripts/restart.sh'}`)
+          setHint(t('settings.db.restartSlow', { cmd: data.command || './scripts/restart.sh' }))
         }
       } else if (data.restart === 'manual') {
-        setHint(`请手动执行：${data.command || './scripts/restart.sh'}`)
+        setHint(t('settings.db.manualRestart', { cmd: data.command || './scripts/restart.sh' }))
       } else {
-        setHint(data.message || '已保存')
+        setHint(data.message || t('settings.db.saved'))
         await load()
       }
     } catch (e) {
@@ -173,7 +177,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                   <div className="db-option-text">
                     <span className="ma-capsule-label">
                       {isCurrent ? (
-                        <span className="engine-dot ok db-option-dot" title="当前使用" />
+                        <span className="engine-dot ok db-option-dot" title={t('settings.db.inUse')} />
                       ) : null}
                       {d.name}
                     </span>
@@ -182,7 +186,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                 </div>
                 <div className="db-option-actions">
                   {isCurrent ? (
-                    <span className="db-status-tag">当前使用</span>
+                    <span className="db-status-tag">{t('settings.db.inUse')}</span>
                   ) : isMysql && !mysqlReady ? (
                     <button
                       type="button"
@@ -190,7 +194,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                       disabled={busy}
                       onClick={() => openMysqlConfig()}
                     >
-                      配置连接
+                      {t('settings.db.configure')}
                     </button>
                   ) : (
                     <button
@@ -199,7 +203,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                       disabled={busy}
                       onClick={() => requestSwitch(d.id)}
                     >
-                      切换
+                      {t('settings.db.switch')}
                     </button>
                   )}
                 </div>
@@ -214,7 +218,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
           aria-expanded={detailOpen}
           onClick={() => setDetailOpen((v) => !v)}
         >
-          <span>连接详情</span>
+          <span>{t('settings.db.details')}</span>
           <svg className="db-detail-chevron" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
@@ -227,33 +231,33 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                 <span className="db-detail-label">DSN</span>
                 <code className="db-detail-value">{dsn}</code>
                 <button type="button" className="ghost" onClick={() => void copyField('dsn', dsn)}>
-                  {copiedKey === 'dsn' ? '已复制' : '复制'}
+                  {copiedKey === 'dsn' ? t('settings.common.copied') : t('settings.common.copy')}
                 </button>
               </div>
             ) : null}
             {sqlitePath ? (
               <div className="db-detail-row">
-                <span className="db-detail-label">SQLite 路径</span>
+                <span className="db-detail-label">{t('settings.db.sqlitePath')}</span>
                 <code className="db-detail-value">{sqlitePath}</code>
                 <button type="button" className="ghost" onClick={() => void copyField('path', sqlitePath)}>
-                  {copiedKey === 'path' ? '已复制' : '复制'}
+                  {copiedKey === 'path' ? t('settings.common.copied') : t('settings.common.copy')}
                 </button>
               </div>
             ) : null}
             <div className="db-detail-row">
               <span className="db-detail-label">Docker</span>
-              <span className="db-detail-value muted">{st?.docker_available ? '已检测到' : '未检测到'}</span>
+              <span className="db-detail-value muted">{st?.docker_available ? t('settings.db.dockerDetected') : t('settings.db.dockerMissing')}</span>
             </div>
             <div className="db-detail-row">
               <span className="db-detail-label">MySQL :3307</span>
-              <span className="db-detail-value muted">{st?.mysql_reachable ? '可连接' : '不可达'}</span>
+              <span className="db-detail-value muted">{st?.mysql_reachable ? t('settings.db.mysqlOk') : t('settings.db.mysqlDown')}</span>
             </div>
           </div>
         ) : null}
 
         {progress ? (
           <p className="engine-hint" role="status">
-            {progress.phase === 'copying' ? `拷贝 ${progress.table || ''}…` : progress.phase}
+            {progress.phase === 'copying' ? t('settings.db.copying', { table: progress.table || '' }) : progress.phase}
             {' · '}
             {Math.round(progress.percent || 0)}%
           </p>
@@ -271,34 +275,33 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
             aria-labelledby="db-mysql-config-title"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 id="db-mysql-config-title">配置 MySQL 连接</h2>
+            <h2 id="db-mysql-config-title">{t('settings.db.mysqlConfigTitle')}</h2>
             <p className="db-modal-risk">
-              Atolla 使用本机 Docker 中的 MySQL（映射端口 <strong>3307</strong>，账号 root/root，库名 colleague_avatar）。
-              切换时若容器未启动，后端会尝试 <code>docker compose up -d mysql</code>。
+              {t('settings.db.mysqlConfigBody')}
             </p>
             <ul className="db-config-status">
               <li>
-                Docker：{st?.docker_available ? '已就绪' : '未检测到，请先安装并启动 Docker'}
+                {st?.docker_available ? t('settings.db.dockerReady') : t('settings.db.dockerNeed')}
               </li>
               <li>
-                MySQL 3307：{st?.mysql_reachable ? '可连接' : '当前不可达'}
+                {st?.mysql_reachable ? t('settings.db.mysqlReady') : t('settings.db.mysqlUnreachable')}
               </li>
             </ul>
             <div className="db-modal-actions">
               <button type="button" className="ghost" disabled={busy} onClick={() => void load()}>
-                重新检测
+                {t('settings.common.recheck')}
               </button>
               <button
                 type="button"
                 className="gc-meet-btn"
                 disabled={busy || !st?.docker_available}
                 onClick={() => proceedMysqlSwitchFromConfig()}
-                title={!st?.docker_available ? '需要本机可用的 Docker' : '进入切换确认'}
+                title={!st?.docker_available ? t('settings.db.needDocker') : t('settings.db.enterConfirm')}
               >
-                继续切换
+                {t('settings.db.continueSwitch')}
               </button>
               <button type="button" disabled={busy} onClick={() => setModal(null)}>
-                取消
+                {t('settings.common.cancel')}
               </button>
             </div>
             {err ? <p className="engine-hint" role="alert">{err}</p> : null}
@@ -315,26 +318,26 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
             aria-labelledby="db-modal-title"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 id="db-modal-title">切换到 {modal.driver === 'mysql' ? 'MySQL' : 'SQLite'}</h2>
+            <h2 id="db-modal-title">{t('settings.db.switchTo', { name: modal.driver === 'mysql' ? 'MySQL' : 'SQLite' })}</h2>
             <p className="db-modal-risk">
-              「迁移并切换」会<strong>清空目标库</strong>中的全部 Atolla 数据，再从当前库覆盖导入，此操作不可撤销。
+              {t('settings.db.migrateRisk')}
             </p>
             <label className="db-modal-ack">
               <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} disabled={busy} />
-              我了解风险，确认清空目标库后迁移
+              {t('settings.db.ack')}
             </label>
             <div className="db-modal-actions">
               <button type="button" className="engine-copy" disabled={busy || !ack} onClick={() => doSwitch(true)}>
-                迁移并切换
+                {t('settings.db.migrateSwitch')}
               </button>
               <button type="button" className="engine-recheck" disabled={busy} onClick={() => doSwitch(false)}>
-                仅切换空库
+                {t('settings.db.switchEmpty')}
               </button>
               <button type="button" disabled={busy} onClick={() => setModal(null)}>
-                取消
+                {t('settings.common.cancel')}
               </button>
             </div>
-            {hint?.includes('手动') ? (
+            {hint?.includes('手动') || hint?.includes('manually') || hint?.includes('Run manually') ? (
               <button
                 type="button"
                 className="engine-copy"
@@ -343,7 +346,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                   setCopiedKey('restart')
                 }}
               >
-                {copiedKey === 'restart' ? '已复制命令' : '复制重启命令'}
+                {copiedKey === 'restart' ? t('settings.db.copiedRestart') : t('settings.db.copyRestart')}
               </button>
             ) : null}
             {err ? <p className="engine-hint" role="alert">{err}</p> : null}

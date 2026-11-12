@@ -61,7 +61,16 @@ const ENGINES = [
   { id: 'codex', label: 'Codex', color: '#10a37f' },
   { id: 'agent', label: 'Cursor', color: '#6366f1' },
 ]
-const JOB_ROLES = ['前端', '后端', '移动端', '测试', '运维', '设计', '文档']
+/** Stored values stay Chinese for API compatibility; labels come from i18n. */
+const JOB_ROLES = [
+  { value: '前端', key: 'frontend' },
+  { value: '后端', key: 'backend' },
+  { value: '移动端', key: 'mobile' },
+  { value: '测试', key: 'qa' },
+  { value: '运维', key: 'ops' },
+  { value: '设计', key: 'design' },
+  { value: '文档', key: 'docs' },
+]
 
 /** 本地消息稳定 key：无 DB id 的流式/乐观消息在数组重排后也不能重新挂载。 */
 let localMsgSeq = 0
@@ -158,13 +167,13 @@ const THINKING_PHRASES = {
 }
 
 const SCHEDULE_PRESETS = [
-  { id: '', label: '自定义 cron', cron: '' },
-  { id: 'daily9', label: '每天 09:00', cron: '0 9 * * *' },
-  { id: 'daily18', label: '每天 18:00', cron: '0 18 * * *' },
-  { id: 'weekday9', label: '工作日 09:00', cron: '0 9 * * 1-5' },
-  { id: 'weekly1', label: '每周一 09:00', cron: '0 9 * * 1' },
-  { id: 'monthly1', label: '每月 1 日 09:00', cron: '0 9 1 * *' },
-  { id: 'hourly', label: '每小时整点', cron: '0 * * * *' },
+  { id: '', labelKey: 'custom', cron: '' },
+  { id: 'daily9', labelKey: 'daily9', cron: '0 9 * * *' },
+  { id: 'daily18', labelKey: 'daily18', cron: '0 18 * * *' },
+  { id: 'weekday9', labelKey: 'weekday9', cron: '0 9 * * 1-5' },
+  { id: 'weekly1', labelKey: 'weekly1', cron: '0 9 * * 1' },
+  { id: 'monthly1', labelKey: 'monthly1', cron: '0 9 1 * *' },
+  { id: 'hourly', labelKey: 'hourly', cron: '0 * * * *' },
 ]
 
 function engineMeta(id) {
@@ -176,8 +185,15 @@ function SkillCountBadge({ count }) {
   const n = Number(count) || 0
   if (n <= 0) return null
   return (
-    <span className="skill-count-badge" title={`已安装 ${n} 个技能`}>
-      {n}
+    <SkillCountBadgeInner count={n} />
+  )
+}
+
+function SkillCountBadgeInner({ count }) {
+  const { t } = useLocale()
+  return (
+    <span className="skill-count-badge" title={t('agentSettings.skillsInstalled', { n: count })}>
+      {count}
     </span>
   )
 }
@@ -2241,8 +2257,8 @@ export default function ManagedAgentsPanel({
                     type="button"
                     className={`ma-detail-icon-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
                     onClick={() => openSelectedSettings('basic')}
-                    title="员工设置"
-                    aria-label="员工设置"
+                    title={t('agentSettings.title')}
+                    aria-label={t('agentSettings.title')}
                   >
                     <ModernIcon name="settings" />
                     {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
@@ -2621,9 +2637,15 @@ export default function ManagedAgentsPanel({
                           >
                             {attachBusy ? t('composer.uploading') : (interrupting ? t('composer.interrupting') : t('composer.interrupt'))}
                           </button>
-                          <button type="button" className="stop ma-composer-stop" onClick={stopRun} title={t('composer.stop')}>
+                          <button
+                            type="button"
+                            className="stop ma-composer-stop"
+                            onClick={stopRun}
+                            title={t('composer.stop')}
+                            aria-label={t('composer.stop')}
+                          >
                             <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
-                            <span>终止</span>
+                            <span>{t('composer.stop')}</span>
                           </button>
                         </>
                       )}
@@ -2675,37 +2697,37 @@ export default function ManagedAgentsPanel({
       {createOpen && (
         <div className="modal-mask" onClick={() => !busy && setCreateOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={createAgent}>
-            <h2>自定义招聘</h2>
+            <h2>{t('agentSettings.createTitle')}</h2>
             <JellyColorPicker
               value={newJellyColor}
               onChange={setNewJellyColor}
               disabled={busy}
-              label="水母颜色"
+              label={t('agentSettings.jellyColor')}
               previewSize={64}
             />
-            <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
+            <label>{t('agentSettings.createName')}<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
-              调度岗位
+              {t('agentSettings.jobRole')}
               <select value={newJobRole} onChange={(e) => setNewJobRole(e.target.value)} disabled={busy}>
-                <option value="">未配置（不参与岗位匹配）</option>
-                {JOB_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                <option value="">{t('agentSettings.jobRoleNone')}</option>
+                {JOB_ROLES.map((role) => <option key={role.value} value={role.value}>{t(`agentSettings.role.${role.key}`)}</option>)}
               </select>
             </label>
             <label>
-              引擎
+              {t('agentSettings.createEngine')}
               <select value={newEngine} onChange={(e) => setNewEngine(e.target.value)} disabled={busy}>
                 {ENGINES.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
               </select>
             </label>
             <label>
-              上下文窗口
+              {t('agentSettings.contextWindow')}
               <select value={newContextWindow} onChange={(e) => setNewContextWindow(Number(e.target.value))} disabled={busy}>
                 <option value={262144}>256K</option>
                 <option value={524288}>512K</option>
                 <option value={1000000}>1M</option>
               </select>
             </label>
-            <label>规则描述<textarea rows={4} value={newRules} onChange={(e) => setNewRules(e.target.value)} disabled={busy} /></label>
+            <label>{t('agentSettings.createRules')}<textarea rows={4} value={newRules} onChange={(e) => setNewRules(e.target.value)} disabled={busy} /></label>
             <AgentPolicyFields
               value={newPolicy}
               onChange={setNewPolicy}
@@ -2717,8 +2739,8 @@ export default function ManagedAgentsPanel({
             />
             {createErr ? <pre className="error">{createErr}</pre> : null}
             <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setCreateOpen(false)}>取消</button>
-              <button type="submit" disabled={busy}>{busy ? '招聘中…' : '确认招聘'}</button>
+              <button type="button" disabled={busy} onClick={() => setCreateOpen(false)}>{t('agentSettings.createCancel')}</button>
+              <button type="submit" disabled={busy}>{busy ? t('agentSettings.createBusy') : t('agentSettings.createSubmit')}</button>
             </div>
           </form>
         </div>
@@ -2727,23 +2749,23 @@ export default function ManagedAgentsPanel({
       {copyOpen && selected && (
         <div className="modal-mask" onClick={() => !busy && setCopyOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={copyAgent}>
-            <h2>复制数字员工</h2>
-            <p className="muted" style={{ margin: '0 0 8px' }}>默认同源色，可改；不选则后端按新 id 分配。</p>
+            <h2>{t('agentSettings.copyTitle')}</h2>
+            <p className="muted" style={{ margin: '0 0 8px' }}>{t('agentSettings.copyHintColor')}</p>
             <JellyColorPicker
               value={copyJellyColor}
               onChange={setCopyJellyColor}
               disabled={busy}
-              label="水母颜色"
+              label={t('agentSettings.jellyColor')}
               previewSize={56}
             />
             <label>
-              新名称
+              {t('agentSettings.copyName')}
               <input value={copyName} onChange={(e) => setCopyName(e.target.value)} disabled={busy} autoFocus />
             </label>
-            <p className="muted">将复制系统提示词、模型、权限与设置。新同事使用独立会话，并异步继承原员工的工作记忆。</p>
+            <p className="muted">{t('agentSettings.copyHint')}</p>
             <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setCopyOpen(false)}>取消</button>
-              <button type="submit" disabled={busy || !copyName.trim()}>{busy ? '复制中…' : '确认复制'}</button>
+              <button type="button" disabled={busy} onClick={() => setCopyOpen(false)}>{t('agentSettings.cancel')}</button>
+              <button type="submit" disabled={busy || !copyName.trim()}>{busy ? t('agentSettings.copyBusy') : t('agentSettings.copySubmit')}</button>
             </div>
           </form>
         </div>
@@ -2761,29 +2783,29 @@ export default function ManagedAgentsPanel({
           >
             <header className="ma-settings-head">
               <div>
-                <h2>员工设置</h2>
-                <p className="ma-settings-sub">{selected.name} · 管理数字员工的基础信息、技能与记忆</p>
+                <h2>{t('agentSettings.title')}</h2>
+                <p className="ma-settings-sub">{t('agentSettings.subtitle', { name: selected.name })}</p>
               </div>
               <button
                 type="button"
                 className="ma-settings-close"
                 disabled={busy}
-                aria-label="关闭"
+                aria-label={t('agentSettings.close')}
                 onClick={() => { setSettingsOpen(false); loadAgents(selected.id) }}
               >
                 ×
               </button>
             </header>
             <div className="ma-settings-tabs" role="tablist">
-              <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>基本</button>
-              <button type="button" className={settingsTab === 'approval' ? 'active' : ''} onClick={() => setSettingsTab('approval')}>命令审批</button>
-              <button type="button" className={settingsTab === 'skills' ? 'active' : ''} onClick={() => setSettingsTab('skills')}>技能</button>
+              <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>{t('agentSettings.tab.basic')}</button>
+              <button type="button" className={settingsTab === 'approval' ? 'active' : ''} onClick={() => setSettingsTab('approval')}>{t('agentSettings.tab.approval')}</button>
+              <button type="button" className={settingsTab === 'skills' ? 'active' : ''} onClick={() => setSettingsTab('skills')}>{t('agentSettings.tab.skills')}</button>
               <button
                 type="button"
                 className={settingsTab === 'legacy' ? 'active' : ''}
                 onClick={() => { setSettingsTab('legacy'); loadLegacyMounts(selected.id) }}
               >
-                继承记忆
+                {t('agentSettings.tab.legacy')}
               </button>
             </div>
             {settingsTab === 'basic' ? (
@@ -2793,23 +2815,23 @@ export default function ManagedAgentsPanel({
                     value={jellyColorDraft}
                     onChange={setJellyColorDraft}
                     disabled={busy}
-                    label="水母颜色"
+                    label={t('agentSettings.jellyColor')}
                     previewSize={64}
                   />
                   <div className="ma-settings-grid">
                     <label>
-                      名称
+                      {t('agentSettings.name')}
                       <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
                     </label>
                     <label>
-                      调度岗位
+                      {t('agentSettings.jobRole')}
                       <select value={jobRoleDraft} onChange={(e) => setJobRoleDraft(e.target.value)} disabled={busy}>
-                        <option value="">未配置（不参与岗位匹配）</option>
-                        {JOB_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+                        <option value="">{t('agentSettings.jobRoleNone')}</option>
+                        {JOB_ROLES.map((role) => <option key={role.value} value={role.value}>{t(`agentSettings.role.${role.key}`)}</option>)}
                       </select>
                     </label>
                     <label>
-                      上下文窗口
+                      {t('agentSettings.contextWindow')}
                       <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
                         <option value={262144}>256K</option>
                         <option value={524288}>512K</option>
@@ -2820,7 +2842,7 @@ export default function ManagedAgentsPanel({
                 </section>
                 <section className="ma-settings-section">
                   <div className="ma-settings-section-label">
-                    <span>系统提示词</span>
+                    <span>{t('agentSettings.systemPrompt')}</span>
                   </div>
                   <div className="ma-settings-prompt">
                     <textarea
@@ -2828,7 +2850,7 @@ export default function ManagedAgentsPanel({
                       value={rulesDraft}
                       onChange={(e) => setRulesDraft(e.target.value)}
                       disabled={busy}
-                      placeholder="角色、边界与协作方式…"
+                      placeholder={t('agentSettings.systemPromptPh')}
                       spellCheck={false}
                     />
                   </div>
@@ -2843,32 +2865,32 @@ export default function ManagedAgentsPanel({
                   onWorkspacesChange={setWorkspaces}
                 />
                 <div className="modal-actions">
-                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>取消</button>
-                  <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>{t('agentSettings.cancel')}</button>
+                  <button type="submit" disabled={busy}>{busy ? t('agentSettings.saving') : t('agentSettings.save')}</button>
                 </div>
               </form>
             ) : settingsTab === 'approval' ? (
               <div className="ma-approval-settings-panel">
                 <CapsuleToggle
-                  label="命令全部审批通过"
-                  hint="自动通过；记录保留 7 天。Hard Deny 仍不可绕过"
+                  label={t('agentSettings.approveAll')}
+                  hint={t('agentSettings.approveAllHint')}
                   checked={approveAllOn}
                   disabled={approveAllSaving || workflowBusy}
                   onChange={toggleApproveAll}
                 />
                 <CapsuleToggle
-                  label="自动审核"
+                  label={t('agentSettings.autoReview')}
                   hint={
                     jevReady
-                      ? '本地 JEV 审核非常规命令'
-                      : `需先开启 JEV：${jevHint || '设置 · JEV'}`
+                      ? t('agentSettings.autoReviewHint')
+                      : t('agentSettings.autoReviewNeedJev', { hint: jevHint || 'Settings · JEV' })
                   }
                   checked={autoOn}
                   disabled={autoSaving || approveAllOn || workflowBusy || !jevReady}
                   onChange={toggleAuto}
                 />
                 <div className="modal-actions">
-                  <button type="button" disabled={autoSaving || approveAllSaving} onClick={() => setSettingsOpen(false)}>关闭</button>
+                  <button type="button" disabled={autoSaving || approveAllSaving} onClick={() => setSettingsOpen(false)}>{t('agentSettings.close')}</button>
                 </div>
               </div>
             ) : settingsTab === 'skills' ? (
@@ -2890,15 +2912,15 @@ export default function ManagedAgentsPanel({
                       loadAgents(selected.id)
                     }}
                   >
-                    关闭
+                    {t('agentSettings.close')}
                   </button>
                 </div>
               </>
             ) : (
               <div className="lm-mounts-panel">
-                <p className="ma-settings-tip">最多 5 本；正文可在「基本」编辑。</p>
+                <p className="ma-settings-tip">{t('agentSettings.legacyTip')}</p>
                 {legacyMounts.length === 0 ? (
-                  <p className="empty">尚未继承。可在「数字员工记忆」书架认领。</p>
+                  <p className="empty">{t('agentSettings.legacyEmpty')}</p>
                 ) : (
                   <ul className="lm-mount-list">
                     {legacyMounts.map((m) => (
@@ -2911,15 +2933,15 @@ export default function ManagedAgentsPanel({
                         />
                         <div>
                           <strong>{m.source_agent_name}</strong>
-                          <span>{m.source_job_title || '数字员工'}</span>
+                          <span>{m.source_job_title || t('agentSettings.digitalEmployee')}</span>
                         </div>
                       </li>
                     ))}
                   </ul>
                 )}
                 <div className="modal-actions">
-                  <button type="button" className="ghost" disabled={busy} onClick={() => loadLegacyMounts(selected.id)}>刷新</button>
-                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>关闭</button>
+                  <button type="button" className="ghost" disabled={busy} onClick={() => loadLegacyMounts(selected.id)}>{t('agentSettings.refresh')}</button>
+                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>{t('agentSettings.close')}</button>
                 </div>
               </div>
             )}
@@ -2962,15 +2984,16 @@ function policyFromAgent(a) {
   }
 }
 
-/** 权限 / 工作区 / 定时表单块 */
+/** Permissions / workspace / schedule form block */
 function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders, onUnauthorized, onWorkspacesChange }) {
+  const { t } = useLocale()
   const v = value || emptyPolicy()
   const [pickingDir, setPickingDir] = useState(false)
   const [pickErr, setPickErr] = useState('')
   function patch(p) {
     onChange({ ...v, ...p })
   }
-  /** 调用本机 macOS 原生「选择文件夹」面板 */
+  /** Open the native macOS folder picker */
   async function pickDirectoryNative() {
     if (disabled || pickingDir || !authHeaders) return
     setPickingDir(true)
@@ -2979,29 +3002,28 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
       const res = await fetch(`${API}/admin/pick-directory`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ prompt: '选择数字员工工作区目录' }),
+        body: JSON.stringify({ prompt: t('agentSettings.pickPrompt') }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setPickErr(d.error || '无法打开系统选目录面板，请改用下方手动输入')
+        setPickErr(d.error || t('agentSettings.pickFail'))
         return
       }
       if (d.cancelled) return
       const path = String(d.path || '').trim()
       if (!path) {
-        setPickErr('未选择目录')
+        setPickErr(t('agentSettings.pickEmpty'))
         return
       }
       patch({ workspace_path: path })
-      // 刷新授权列表，便于下拉里看到刚选的路径（若已登记）
       try {
         const wr = await fetch(`${API}/workspaces`)
         const wd = await wr.json().catch(() => ({}))
         if (Array.isArray(wd.items)) onWorkspacesChange?.(wd.items)
       } catch { /* ignore */ }
     } catch (e) {
-      setPickErr(String(e.message || e) || '选目录失败')
+      setPickErr(String(e.message || e) || t('agentSettings.pickError'))
     } finally {
       setPickingDir(false)
     }
@@ -3009,18 +3031,18 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
   return (
     <div className="ma-policy">
       <section className="ma-settings-section">
-        <h3 className="ma-policy-title">权限</h3>
-        <CapsuleToggle label="允许写入文件" checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
-        <CapsuleToggle label="允许联网搜索" checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
-        <CapsuleToggle label="允许执行 rm" checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
-        <p className="ma-settings-tip">浏览器请到「技能 → 浏览器操作」安装。</p>
+        <h3 className="ma-policy-title">{t('agentSettings.permissions')}</h3>
+        <CapsuleToggle label={t('agentSettings.allowWrite')} checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
+        <CapsuleToggle label={t('agentSettings.allowNetwork')} checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
+        <CapsuleToggle label={t('agentSettings.allowRm')} checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
+        <p className="ma-settings-tip">{t('agentSettings.browserTip')}</p>
       </section>
 
       <section className="ma-settings-section">
-        <h3 className="ma-policy-title">工作区</h3>
+        <h3 className="ma-policy-title">{t('agentSettings.workspace')}</h3>
         <CapsuleToggle
-          label="限制工作区"
-          hint="关闭=默认可全盘读写；开启=仅指定目录。换目录保留对话与引擎会话，并尽量迁移 projects/"
+          label={t('agentSettings.workspaceBound')}
+          hint={t('agentSettings.workspaceBoundHint')}
           checked={!!v.workspace_bound}
           disabled={disabled}
           onChange={(c) => patch({ workspace_bound: c, workspace_path: c ? v.workspace_path : '' })}
@@ -3033,28 +3055,28 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
                 className="ghost"
                 disabled={disabled || pickingDir || !authHeaders}
                 onClick={pickDirectoryNative}
-                title="打开 macOS 系统文件夹选择面板"
+                title={t('agentSettings.browseTitle')}
               >
-                {pickingDir ? '选择中…' : '浏览选择目录…'}
+                {pickingDir ? t('agentSettings.browsing') : t('agentSettings.browseDir')}
               </button>
-              <span className="ma-ws-pick-hint">Mac 系统弹窗</span>
+              <span className="ma-ws-pick-hint">{t('agentSettings.macPicker')}</span>
             </div>
             {pickErr ? <p className="ma-ws-pick-err">{pickErr}</p> : null}
             <label>
-              已授权目录
+              {t('agentSettings.authorizedDirs')}
               <select
                 value={workspaces.some((w) => w.path === v.workspace_path) ? v.workspace_path : ''}
                 disabled={disabled}
                 onChange={(e) => patch({ workspace_path: e.target.value })}
               >
-                <option value="">请选择…</option>
+                <option value="">{t('agentSettings.selectPlease')}</option>
                 {(workspaces || []).map((w) => (
                   <option key={w.id || w.path} value={w.path}>{w.name || w.path}</option>
                 ))}
               </select>
             </label>
             <label>
-              绝对路径
+              {t('agentSettings.absPath')}
               <input
                 value={v.workspace_path || ''}
                 disabled={disabled}
@@ -3068,7 +3090,7 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
 
       <section className="ma-settings-section">
         <CapsuleToggle
-          label="开启定时执行"
+          label={t('agentSettings.schedule')}
           checked={!!v.schedule_enabled}
           disabled={disabled}
           onChange={(c) => patch({ schedule_enabled: c })}
@@ -3076,27 +3098,28 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
         {v.schedule_enabled && (
           <div className="ma-policy-sub ma-schedule">
             <label>
-              常用计划
+              {t('agentSettings.schedulePreset')}
               <select
                 value={v.schedule_preset || ''}
                 disabled={disabled}
                 onChange={(e) => {
                   const id = e.target.value
                   const p = SCHEDULE_PRESETS.find((x) => x.id === id)
+                  const label = p ? t(`agentSettings.preset.${p.labelKey}`) : ''
                   patch({
                     schedule_preset: id,
                     schedule_cron: p?.cron || v.schedule_cron,
-                    schedule_label: p?.label && id ? p.label : v.schedule_label,
+                    schedule_label: id ? label : v.schedule_label,
                   })
                 }}
               >
                 {SCHEDULE_PRESETS.map((p) => (
-                  <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
+                  <option key={p.id || 'custom'} value={p.id}>{t(`agentSettings.preset.${p.labelKey}`)}</option>
                 ))}
               </select>
             </label>
             <label>
-              Cron（分 时 日 月 周）
+              {t('agentSettings.cron')}
               <input
                 value={v.schedule_cron || ''}
                 disabled={disabled}
@@ -3105,11 +3128,11 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
               />
             </label>
             <label>
-              计划名称
+              {t('agentSettings.scheduleName')}
               <input
                 value={v.schedule_label || ''}
                 disabled={disabled}
-                placeholder="例行巡检"
+                placeholder={t('agentSettings.scheduleNamePh')}
                 onChange={(e) => patch({ schedule_label: e.target.value })}
               />
             </label>

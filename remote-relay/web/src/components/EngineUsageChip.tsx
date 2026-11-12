@@ -153,7 +153,7 @@ export function EngineUsageChip({ instanceId, engine }: Props) {
           </>
         )}
         <p className="engine-usage-detail-note muted">
-          Codex 优先看 5 小时窗；Cursor 优先看 Auto；Claude 优先看 5 小时。默认缓存约 5 分钟。
+          Codex 优先看 5h 窗；Cursor 优先看全量月度（非 Auto）；Claude 侧栏视为无限。客户端缓存约 1 分钟。
         </p>
       </Modal>
     </>

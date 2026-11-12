@@ -222,7 +222,6 @@ export default function TalentMarket({
               value={jellyColor}
               onChange={setJellyColor}
               disabled={busy}
-              label="水母颜色"
               previewSize={56}
             />
             <div className="tm-form-row">

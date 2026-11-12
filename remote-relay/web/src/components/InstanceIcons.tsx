@@ -72,6 +72,19 @@ export function IconMonitor(p: IconProps) {
   })
 }
 
+/** Sidebar / left-drawer toggle — monochrome via currentColor */
+export function IconSidebar(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M9 4v16" />
+      </>
+    ),
+  })
+}
+
 export function IconChip(p: IconProps) {
   return base({
     ...p,
@@ -169,14 +182,42 @@ export function IconTrash(p: IconProps) {
   })
 }
 
+/** Horizontal ⋯ menu affordance (prototype) */
 export function IconMore(p: IconProps) {
   return base({
     ...p,
     children: (
       <>
-        <circle cx="12" cy="5" r="1.2" fill="currentColor" stroke="none" />
-        <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
-        <circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none" />
+        <circle cx="5" cy="12" r="1.35" fill="currentColor" stroke="none" />
+        <circle cx="12" cy="12" r="1.35" fill="currentColor" stroke="none" />
+        <circle cx="19" cy="12" r="1.35" fill="currentColor" stroke="none" />
+      </>
+    ),
+  })
+}
+
+/** Single user silhouette (drawer footer avatar) */
+export function IconUser(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="3.5" />
+      </>
+    ),
+  })
+}
+
+/** People / agents management */
+export function IconUsers(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="3" />
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
       </>
     ),
   })
@@ -195,6 +236,93 @@ export function IconEmptyMonitor(p: IconProps) {
         <rect x="3" y="4" width="18" height="12" rx="2" />
         <path d="M8 20h8M12 16v4" />
         <path d="M9 9h2l1 3 1-3h2" />
+      </>
+    ),
+  })
+}
+
+/** Filter / sort sliders (toolbar) — monochrome */
+export function IconSliders(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <path d="M4 6h16M4 12h16M4 18h16" />
+        <circle cx="8" cy="6" r="1.6" fill="currentColor" stroke="none" />
+        <circle cx="14" cy="12" r="1.6" fill="currentColor" stroke="none" />
+        <circle cx="10" cy="18" r="1.6" fill="currentColor" stroke="none" />
+      </>
+    ),
+  })
+}
+
+/** Plus for add-instance top action */
+export function IconPlus(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <path d="M12 5v14M5 12h14" />
+      </>
+    ),
+  })
+}
+
+/** Bell / notifications — monochrome */
+export function IconBell(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9" />
+        <path d="M10 20a2 2 0 0 0 4 0" />
+      </>
+    ),
+  })
+}
+
+/** Filled Windows mark (4 panes) — black/white via currentColor */
+export function IconWindows(p: IconProps) {
+  const { size = 22, className } = p
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden
+    >
+      <path d="M3 4.5h8.2v7.2H3V4.5zm9.8 0H21v7.2h-8.2V4.5zM3 12.8h8.2V20H3v-7.2zm9.8 0H21V20h-8.2v-7.2z" />
+    </svg>
+  )
+}
+
+/** Filled Apple mark — black/white via currentColor */
+export function IconApple(p: IconProps) {
+  const { size = 22, className } = p
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden
+    >
+      <path d="M16.7 12.3c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.7-1.3-.1-2.5.8-3.1.8-.7 0-1.7-.7-2.8-.7-1.4 0-2.8.9-3.5 2.2-1.5 2.6-.4 6.5 1.1 8.6.7 1 1.6 2.2 2.7 2.1 1.1-.1 1.5-.7 2.8-.7s1.7.7 2.8.7c1.2 0 1.9-1 2.6-2 .8-1.2 1.1-2.3 1.1-2.4-.02-.01-2.2-.8-2.2-3.7zM14.8 5.9c.6-.7 1-1.7.9-2.7-.9 0-1.9.6-2.5 1.3-.6.7-1 1.6-.9 2.6 1 0 1.9-.5 2.5-1.2z" />
+    </svg>
+  )
+}
+
+/** Compact laptop glyph for generic / Linux hosts */
+export function IconLaptop(p: IconProps) {
+  return base({
+    ...p,
+    children: (
+      <>
+        <rect x="3" y="5" width="18" height="12" rx="1.5" />
+        <path d="M2 19h20" />
       </>
     ),
   })

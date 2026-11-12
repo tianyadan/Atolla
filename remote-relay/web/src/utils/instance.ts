@@ -43,6 +43,56 @@ export function formatUptime(sec: number | undefined | null): string {
   return `${mins}分`
 }
 
+/** Compact duration for card subtitle (no spaces): "11天5小时" */
+export function formatDurationCompact(sec: number | undefined | null): string {
+  if (sec == null || !Number.isFinite(sec) || sec < 0) return ''
+  const s = Math.floor(sec)
+  if (s < 60) return `${s}秒`
+  const days = Math.floor(s / 86400)
+  const hours = Math.floor((s % 86400) / 3600)
+  const mins = Math.floor((s % 3600) / 60)
+  if (days > 0) return hours > 0 ? `${days}天${hours}小时` : `${days}天`
+  if (hours > 0) return mins > 0 ? `${hours}小时${mins}分` : `${hours}小时`
+  return `${mins}分`
+}
+
+/** Normalize host.os → short display label (macOS / Windows / Linux) */
+export function hostOsLabel(os: string | undefined | null): string {
+  const raw = (os || '').trim()
+  if (!raw) return '未知系统'
+  const lower = raw.toLowerCase()
+  if (lower.includes('darwin') || lower.includes('mac')) return 'macOS'
+  if (lower.includes('win')) return 'Windows'
+  if (lower.includes('linux')) return 'Linux'
+  return raw
+}
+
+/** Detect OS family for icon picker */
+export function hostOsFamily(os: string | undefined | null): 'mac' | 'windows' | 'linux' | 'other' {
+  const lower = (os || '').trim().toLowerCase()
+  if (lower.includes('darwin') || lower.includes('mac')) return 'mac'
+  if (lower.includes('win')) return 'windows'
+  if (lower.includes('linux')) return 'linux'
+  return 'other'
+}
+
+/** Card subtitle: "macOS · 在线 11天5小时" / "Windows · 离线 8小时" */
+export function instanceCardSubtitle(
+  inst: PublicInstance,
+  now = Date.now(),
+): string {
+  const online = isInstanceOnline(inst.last_heartbeat_at, now)
+  const os = hostOsLabel(inst.host?.os)
+  if (online) {
+    const up = formatDurationCompact(inst.host?.uptime_sec)
+    return up ? `${os} · 在线 ${up}` : `${os} · 在线`
+  }
+  const hb = inst.last_heartbeat_at
+  const ago =
+    hb == null ? '' : formatDurationCompact(Math.max(0, Math.floor((now - hb) / 1000)))
+  return ago ? `${os} · 离线 ${ago}` : `${os} · 离线`
+}
+
 /** Clamp percent for progress bars */
 export function formatPct(v: number | undefined | null): number {
   if (v == null || !Number.isFinite(v)) return 0

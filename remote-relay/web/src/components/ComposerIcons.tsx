@@ -77,3 +77,25 @@ export function StopIcon({ size = 14 }: IconProps) {
     </svg>
   )
 }
+
+/** 任务规划：清单 + 路线，表示分步计划 */
+export function TaskPlanIcon({ size = 20 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="M5 6.2 6.2 7.4 8 5.2" />
+      <path d="M5 12.2 6.2 13.4 8 11.2" />
+      <circle cx="5.5" cy="18" r="1.15" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}

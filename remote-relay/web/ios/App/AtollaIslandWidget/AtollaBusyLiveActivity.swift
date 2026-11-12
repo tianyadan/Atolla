@@ -311,7 +311,7 @@ private struct IslandExpandedList: View {
     let rows = Array(state.items.prefix(3))
     VStack(alignment: .leading, spacing: 0) {
       ForEach(rows, id: \.id) { item in
-        IslandEventRow(item: item)
+        IslandEventRow(item: item, syncPaused: state.syncPaused)
       }
       if state.count > rows.count {
         moreRow
@@ -344,6 +344,8 @@ private struct IslandExpandedList: View {
 
 private struct IslandEventRow: View {
   let item: AtollaBusyAttributes.IslandItemSlice
+  /// 后台暂停时用静态耗时，避免本地秒表在任务结束后继续走
+  var syncPaused: Bool = false
 
   @ViewBuilder
   var body: some View {
@@ -363,21 +365,27 @@ private struct IslandEventRow: View {
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(.white)
             .lineLimit(1)
+            .layoutPriority(1)
           Spacer(minLength: 4)
-          // 耗时与「运行中」同排靠右并齐，状态用浅紫强调
-          IslandEventMeta(item: item)
-          Text(statusTitle(item.kind))
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(statusAccentColor(item.kind))
+          // 耗时与「运行中」同排靠右并齐；右侧必须限宽，否则会撑空爆岛
+          HStack(spacing: 4) {
+            IslandEventMeta(item: item, syncPaused: syncPaused)
+            Text(statusTitle(item.kind))
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(statusAccentColor(item.kind))
+              .lineLimit(1)
+          }
+          .frame(maxWidth: 108, alignment: .trailing)
         }
         Text(subtitle)
           .font(.system(size: 11))
           .foregroundStyle(.white.opacity(0.55))
           .lineLimit(1)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(.horizontal, 4)
-    .frame(minHeight: 40, alignment: .leading)
+    .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
   }
 
   private var subtitle: String {
@@ -391,26 +399,31 @@ private struct IslandEventRow: View {
 
 private struct IslandEventMeta: View {
   let item: AtollaBusyAttributes.IslandItemSlice
+  var syncPaused: Bool = false
 
   var body: some View {
-    // 耗时靠右；timerInterval 由系统驱动刷新
+    // 前台用系统秒表；后台/暂停用静态 durationMs，避免任务结束后仍继续计时
     Group {
-      if (item.kind == "running" || item.kind == "task_plan"), item.occurredAt > 0 {
+      if (item.kind == "running" || item.kind == "task_plan"), item.occurredAt > 0, !syncPaused {
         let start = Date(timeIntervalSince1970: item.occurredAt)
-        Text(timerInterval: start...Date.distantFuture, countsDown: false, showsHours: true)
+        Text(start, style: .timer)
           .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
           .foregroundStyle(.white)
-          .fixedSize(horizontal: true, vertical: false)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
+          .multilineTextAlignment(.trailing)
       } else if item.durationMs >= 0 {
         Text(durationText(item.durationMs))
           .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-          .foregroundStyle(statusColor(item.kind))
-          .fixedSize(horizontal: true, vertical: false)
+          .foregroundStyle(syncPaused ? .white : statusColor(item.kind))
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
       } else if item.occurredAt > 0 {
         Text(Date(timeIntervalSince1970: item.occurredAt), style: .time)
           .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
           .foregroundStyle(statusColor(item.kind))
-          .fixedSize(horizontal: true, vertical: false)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
       } else {
         Text("—")
           .font(.system(size: 12, weight: .semibold))

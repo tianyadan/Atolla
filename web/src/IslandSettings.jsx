@@ -4,50 +4,52 @@ import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
-/** 开启时常驻文案 */
-const ENABLE_STEPS = [
-  '正在配置灵动岛…',
-  '正在注册 LaunchAgent…',
-  '正在唤醒顶部常驻…',
-  '即将完成…',
-]
-
-/** 从 GitHub Release 一键安装 / 更新 */
-const INSTALL_STEPS = [
-  '正在获取最新 GitHub Release…',
-  '正在下载灵动岛组件…',
-  '正在解压并写入本机…',
-  '正在注册 LaunchAgent…',
-  '正在启动灵动岛…',
-  '即将完成…',
-]
-
-const UPDATE_STEPS = [
-  '正在检测最新版本…',
-  '正在下载更新包…',
-  '正在替换本机组件…',
-  '正在重启灵动岛…',
-  '即将完成…',
-]
-
-const DISABLE_STEPS = [
-  '正在关闭灵动岛常驻…',
-  '即将完成…',
-]
-
-const UNINSTALL_STEPS = [
-  '正在停止灵动岛…',
-  '正在清理本机组件…',
-  '即将完成…',
-]
-
 const EMPTY_STEPS = []
 
+/** Progress step labels for Dynamic Island actions */
+function islandSteps(t, mode) {
+  switch (mode) {
+    case 'enable':
+      return [
+        t('settings.island.step.configure'),
+        t('settings.island.step.register'),
+        t('settings.island.step.wake'),
+        t('settings.island.step.almost'),
+      ]
+    case 'install':
+      return [
+        t('settings.island.step.fetchRelease'),
+        t('settings.island.step.download'),
+        t('settings.island.step.extract'),
+        t('settings.island.step.register'),
+        t('settings.island.step.start'),
+        t('settings.island.step.almost'),
+      ]
+    case 'update':
+      return [
+        t('settings.island.step.detect'),
+        t('settings.island.step.downloadUpdate'),
+        t('settings.island.step.replace'),
+        t('settings.island.step.restart'),
+        t('settings.island.step.almost'),
+      ]
+    case 'disable':
+      return [t('settings.island.step.disable'), t('settings.island.step.almost')]
+    case 'uninstall':
+      return [
+        t('settings.island.step.stop'),
+        t('settings.island.step.cleanup'),
+        t('settings.island.step.almost'),
+      ]
+    default:
+      return EMPTY_STEPS
+  }
+}
+
 /**
- * 后端无真实进度流时：用定时文案 + 缓增进度条改善等待体验；
- * 请求结束后拉到 100% 再收起。
+ * Fake staged progress while waiting on a backend call with no real stream.
  */
-function useStagedProgress(active, steps) {
+function useStagedProgress(active, steps, doneLabel) {
   const [pct, setPct] = useState(0)
   const [label, setLabel] = useState('')
   const timerRef = useRef(0)
@@ -80,14 +82,14 @@ function useStagedProgress(active, steps) {
     }
   }, [active, steps])
 
-  /** 请求结束：进度拉满 */
+  /** Snap progress to 100% when the request finishes */
   function finish() {
     if (timerRef.current) {
       window.clearInterval(timerRef.current)
       timerRef.current = 0
     }
     setPct(100)
-    setLabel('完成')
+    setLabel(doneLabel || '')
   }
 
   return { pct, label, finish }
@@ -120,19 +122,8 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
     update_available: false,
   })
 
-  const stepList =
-    progressMode === 'update'
-      ? UPDATE_STEPS
-      : progressMode === 'install'
-        ? INSTALL_STEPS
-        : progressMode === 'uninstall'
-          ? UNINSTALL_STEPS
-          : progressMode === 'disable'
-            ? DISABLE_STEPS
-            : progressMode === 'enable'
-              ? ENABLE_STEPS
-              : EMPTY_STEPS
-  const progress = useStagedProgress(!!progressMode, stepList)
+  const stepList = islandSteps(t, progressMode)
+  const progress = useStagedProgress(!!progressMode, stepList, t('settings.common.done'))
 
   function applyStatus(d) {
     setSt({
@@ -220,7 +211,7 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
 
   /** 完全卸载并清理本机文件 */
   async function uninstall() {
-    if (!window.confirm('确定卸载灵动岛？将停止常驻并删除本机组件。')) return
+    if (!window.confirm(t('settings.island.confirmUninstall'))) return
     setBusy(true)
     setProgressMode('uninstall')
     setErr('')
@@ -298,18 +289,18 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
         <div className="ma-capsule-text">
           <span className="ma-capsule-label">
             {st.installed && st.enabled && !showProgress ? (
-              <span className="engine-dot ok" title="灵动岛运行中" style={{ marginRight: 8, verticalAlign: 'middle' }} />
+              <span className="engine-dot ok" title={t('settings.island.runningTitle')} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             ) : null}
-            灵动岛常驻
+            {t('settings.island.resident')}
           </span>
           <p className="ma-capsule-hint">
-            {st.detail || '未检测'}
+            {st.detail || t('settings.common.undetected')}
             {st.installed_tag && st.release_tag && st.installed_tag !== st.release_tag
-              ? ` · 最新 ${st.release_tag}`
+              ? t('settings.island.latest', { tag: st.release_tag })
               : st.release_tag && !st.installed_tag
-                ? ` · 最新 ${st.release_tag}`
+                ? t('settings.island.latest', { tag: st.release_tag })
                 : ''}
-            {st.cached && st.checked_at ? `（缓存于 ${st.checked_at}）` : ''}
+            {st.cached && st.checked_at ? t('settings.common.cachedAt', { time: st.checked_at }) : ''}
           </p>
         </div>
 
@@ -319,9 +310,9 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
             className="gc-meet-btn"
             disabled={busy}
             onClick={() => void install(false)}
-            title="从 GitHub 最新 Release 自动下载并安装"
+            title={t('settings.island.installTitle')}
           >
-            {busy && progressMode === 'install' ? '安装中…' : '安装'}
+            {busy && progressMode === 'install' ? t('settings.common.installing') : t('settings.common.install')}
           </button>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -331,9 +322,9 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
                 className="gc-meet-btn"
                 disabled={busy}
                 onClick={() => void install(true)}
-                title={st.release_tag ? `更新到 ${st.release_tag}` : '更新到最新 Release'}
+                title={st.release_tag ? t('settings.island.updateTo', { tag: st.release_tag }) : t('settings.island.updateLatest')}
               >
-                {busy && progressMode === 'update' ? '更新中…' : '更新'}
+                {busy && progressMode === 'update' ? t('settings.common.updating') : t('settings.common.update')}
               </button>
             ) : null}
             <label className={`auto-switch ma-capsule ${busy ? 'busy' : ''}`}>
@@ -360,15 +351,15 @@ export default function IslandSettings({ authHeaders, onUnauthorized, active }) 
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button type="button" className="ghost" disabled={busy} onClick={() => void load(true)}>
-          重新检测
+          {t('settings.common.recheck')}
         </button>
         {st.installed ? (
           <>
             <button type="button" className="ghost" disabled={busy} onClick={() => void install(false)}>
-              重新安装
+              {t('settings.common.reinstall')}
             </button>
             <button type="button" className="ghost" disabled={busy} onClick={() => void uninstall()}>
-              卸载
+              {t('settings.common.uninstall')}
             </button>
           </>
         ) : null}

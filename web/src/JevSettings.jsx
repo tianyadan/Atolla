@@ -4,26 +4,41 @@ import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
-const INSTALL_STEPS = [
-  '正在连接 GitHub Release…',
-  '正在下载运行时（约 20MB）…',
-  '正在下载模型（约 600MB，请耐心等待）…',
-  '正在解压并写入 ~/.atolla/jevos…',
-  '即将完成…',
-]
-
-const ENABLE_STEPS = [
-  '正在注册 LaunchAgent…',
-  '正在启动 jev serve…',
-  '正在等待 /health 就绪…',
-  '即将完成…',
-]
-
-const DISABLE_STEPS = ['正在关闭 JEV 常驻…', '即将完成…']
 const EMPTY_STEPS = []
 
-/** 后端无真实进度流时：定时文案 + 缓增进度条 */
-function useStagedProgress(active, steps) {
+/** Progress step labels for JEV actions */
+function jevSteps(t, mode) {
+  switch (mode) {
+    case 'install':
+      return [
+        t('settings.jev.step.connect'),
+        t('settings.jev.step.downloadRuntime'),
+        t('settings.jev.step.downloadModel'),
+        t('settings.jev.step.extract'),
+        t('settings.jev.step.almost'),
+      ]
+    case 'enable':
+      return [
+        t('settings.jev.step.register'),
+        t('settings.jev.step.start'),
+        t('settings.jev.step.health'),
+        t('settings.jev.step.almost'),
+      ]
+    case 'disable':
+      return [t('settings.jev.step.disable'), t('settings.jev.step.almost')]
+    case 'uninstall':
+      return [
+        t('settings.jev.step.stop'),
+        t('settings.jev.step.archive'),
+        t('settings.jev.step.almost'),
+      ]
+    default:
+      return EMPTY_STEPS
+  }
+}
+
+/** Fake staged progress while waiting on a backend call with no real stream */
+function useStagedProgress(active, steps, doneLabel) {
   const [pct, setPct] = useState(0)
   const [label, setLabel] = useState('')
   const timerRef = useRef(0)
@@ -58,7 +73,7 @@ function useStagedProgress(active, steps) {
       timerRef.current = 0
     }
     setPct(100)
-    setLabel('完成')
+    setLabel(doneLabel || '')
   }
 
   return { pct, label, finish }
@@ -94,17 +109,8 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
     can_uninstall: false,
   })
 
-  const stepList =
-    progressMode === 'install'
-      ? INSTALL_STEPS
-      : progressMode === 'uninstall'
-        ? ['正在停止 JEV 常驻…', '正在归档安装目录…', '即将完成…']
-        : progressMode === 'disable'
-          ? DISABLE_STEPS
-          : progressMode === 'enable'
-            ? ENABLE_STEPS
-            : EMPTY_STEPS
-  const progress = useStagedProgress(!!progressMode, stepList)
+  const stepList = jevSteps(t, progressMode)
+  const progress = useStagedProgress(!!progressMode, stepList, t('settings.common.done'))
 
   function applyStatus(d) {
     const pkgs = Array.isArray(d.packages) ? d.packages : []
@@ -158,7 +164,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
   /** 从 GitHub Release 安装所选包 */
   async function install() {
     if (!pick) {
-      setErr('请先选择安装包')
+      setErr(t('settings.jev.needPkg'))
       return
     }
     setBusy(true)
@@ -202,10 +208,10 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
   /** 卸载平台安装的 JEV（归档 ~/.atolla/jevos，不直接 rm） */
   async function uninstall() {
     if (!st.can_uninstall && !st.installed) {
-      setErr('当前没有可卸载的平台安装')
+      setErr(t('settings.jev.noUninstall'))
       return
     }
-    if (!window.confirm('确认卸载平台安装的 JEV？将停止常驻并把安装目录归档到 ~/.atolla（可清出磁盘占用）。')) {
+    if (!window.confirm(t('settings.jev.confirmUninstall'))) {
       return
     }
     setBusy(true)
@@ -289,14 +295,14 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
         <div className="ma-capsule-text">
           <span className="ma-capsule-label">
             {st.enabled && st.healthy && !showProgress ? (
-              <span className="engine-dot ok" title="JEV 就绪" style={{ marginRight: 8, verticalAlign: 'middle' }} />
+              <span className="engine-dot ok" title={t('settings.jev.readyTitle')} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             ) : null}
-            JEV 常驻
+            {t('settings.jev.resident')}
           </span>
           <p className="ma-capsule-hint">
-            {st.detail || '未检测'}
+            {st.detail || t('settings.common.undetected')}
             {st.release_tag ? ` · ${st.release_tag}` : ''}
-            {st.cached && st.checked_at ? `（缓存于 ${st.checked_at}）` : ''}
+            {st.cached && st.checked_at ? t('settings.common.cachedAt', { time: st.checked_at }) : ''}
           </p>
           {st.release_url && showPkgList ? (
             <p className="ma-capsule-hint" style={{ marginTop: 6 }}>
@@ -325,7 +331,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
             disabled={busy}
             onClick={() => setShowPkgList(true)}
           >
-            安装
+            {t('settings.common.install')}
           </button>
         )}
       </div>
@@ -333,7 +339,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
       {needInstall && showPkgList ? (
         <div className="jev-pkg-list" style={{ marginTop: 12 }}>
           <p className="ma-capsule-hint" style={{ marginBottom: 8 }}>
-            选择平台安装包（将下载运行时 + OpenVINO 模型，约 620MB）：
+            {t('settings.jev.pickPkg')}
           </p>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {(st.packages || []).map((p) => (
@@ -360,7 +366,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
                   />
                   <span>
                     <strong>{p.name}</strong>
-                    {p.recommended ? <em style={{ marginLeft: 8, opacity: 0.75 }}>推荐</em> : null}
+                    {p.recommended ? <em style={{ marginLeft: 8, opacity: 0.75 }}>{t('settings.common.recommended')}</em> : null}
                     <br />
                     <span className="ma-capsule-hint">{p.size_hint || p.id}</span>
                   </span>
@@ -376,8 +382,8 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
 			  onChange={(e) => setChinaMirror(e.target.checked)}
 			/>
 			<span>
-			  <strong>中国大陆网络：使用镜像源加速下载</strong>
-			  <small>将优先从 GitHub 镜像获取，失败时自动回退到官方源</small>
+			  <strong>{t('settings.jev.mirrorTitle')}</strong>
+			  <small>{t('settings.jev.mirrorHint')}</small>
 			</span>
 		  </label>
           <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -387,10 +393,10 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
               disabled={busy || !pick}
               onClick={() => void install()}
             >
-              {busy && progressMode === 'install' ? '安装中…' : '下载并安装'}
+              {busy && progressMode === 'install' ? t('settings.common.installing') : t('settings.jev.downloadInstall')}
             </button>
             <button type="button" className="ghost" disabled={busy} onClick={() => setShowPkgList(false)}>
-              取消
+              {t('settings.common.cancel')}
             </button>
           </div>
         </div>
@@ -404,7 +410,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
           <p className="island-boot-label">{progress.label}</p>
 		  {progressMode === 'install' && slowInstall ? (
 			<p className="jev-slow-hint">
-			  安装已超过 2 分钟，大模型仍在下载。可继续等待；若最终超时，开启镜像源后重试。
+			  {t('settings.jev.slowHint')}
 			</p>
 		  ) : null}
         </div>
@@ -412,7 +418,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button type="button" className="ghost" disabled={busy} onClick={() => void load(true)}>
-          重新检测
+          {t('settings.common.recheck')}
         </button>
         {st.installed ? (
           <button
@@ -421,7 +427,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
             disabled={busy}
             onClick={() => setShowPkgList(true)}
           >
-            重新安装
+            {t('settings.common.reinstall')}
           </button>
         ) : null}
         {st.can_uninstall || st.installed ? (
@@ -430,9 +436,9 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
             className="ghost danger-text"
             disabled={busy}
             onClick={() => void uninstall()}
-            title="停止常驻并归档 ~/.atolla/jevos"
+            title={t('settings.jev.uninstallTitle')}
           >
-            {busy && progressMode === 'uninstall' ? '卸载中…' : '卸载'}
+            {busy && progressMode === 'uninstall' ? t('settings.common.uninstalling') : t('settings.common.uninstall')}
           </button>
         ) : null}
       </div>
@@ -440,7 +446,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
       {st.installed && showPkgList ? (
         <div className="jev-pkg-list" style={{ marginTop: 12 }}>
           <p className="ma-capsule-hint" style={{ marginBottom: 8 }}>
-            选择平台包以重新安装：
+            {t('settings.jev.pickPkgRe')}
           </p>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {(st.packages || []).map((p) => (
@@ -466,7 +472,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
                   />
                   <span>
                     <strong>{p.name}</strong>
-                    {p.recommended ? <em style={{ marginLeft: 8, opacity: 0.75 }}>推荐</em> : null}
+                    {p.recommended ? <em style={{ marginLeft: 8, opacity: 0.75 }}>{t('settings.common.recommended')}</em> : null}
                   </span>
                 </label>
               </li>
@@ -480,16 +486,16 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
 			  onChange={(e) => setChinaMirror(e.target.checked)}
 			/>
 			<span>
-			  <strong>中国大陆网络：使用镜像源加速下载</strong>
-			  <small>将优先从 GitHub 镜像获取，失败时自动回退到官方源</small>
+			  <strong>{t('settings.jev.mirrorTitle')}</strong>
+			  <small>{t('settings.jev.mirrorHint')}</small>
 			</span>
 		  </label>
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
             <button type="button" className="gc-meet-btn" disabled={busy || !pick} onClick={() => void install()}>
-              {busy && progressMode === 'install' ? '安装中…' : '下载并安装'}
+              {busy && progressMode === 'install' ? t('settings.common.installing') : t('settings.jev.downloadInstall')}
             </button>
             <button type="button" className="ghost" disabled={busy} onClick={() => setShowPkgList(false)}>
-              取消
+              {t('settings.common.cancel')}
             </button>
           </div>
         </div>
@@ -502,7 +508,7 @@ export default function JevSettings({ authHeaders, onUnauthorized, active }) {
 		  </pre>
 		  {installFailed ? (
 			<button type="button" className="gc-meet-btn" disabled={busy || !pick} onClick={() => void install()}>
-			  重试安装
+			  {t('settings.jev.retryInstall')}
 			</button>
 		  ) : null}
 		</>

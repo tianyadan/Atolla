@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import SettingsFold from './SettingsFold.jsx'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 
-/** 设置 · 会话运行时：沿用现有 SettingsFold 与表单样式。 */
+/** Settings · session runtime: reuse SettingsFold + form styles. */
 export default function RuntimeSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(true)
   const [form, setForm] = useState({ idle_ttl_seconds: 60, memory_limit_mb: 2048 })
   const [busy, setBusy] = useState(false)
@@ -21,7 +23,7 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
         return
       }
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || `运行时配置加载失败(${res.status})`)
+      if (!res.ok) throw new Error(data.error || t('settings.runtime.loadFail', { status: res.status }))
       setForm({
         idle_ttl_seconds: Number(data.idle_ttl_seconds) || 0,
         memory_limit_mb: Number(data.memory_limit_mb) || 2048,
@@ -52,9 +54,9 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
         return false
       }
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || `保存失败(${res.status})`)
+      if (!res.ok) throw new Error(data.error || t('settings.runtime.saveFail', { status: res.status }))
       setRestartRequired(true)
-      setHint('配置已保存，重启后生效。')
+      setHint(t('settings.runtime.savedHint'))
       return true
     } catch (e) {
       setErr(String(e.message || e))
@@ -67,12 +69,12 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
   async function restart() {
     setBusy(true)
     setErr('')
-    setHint('正在保存配置…')
+    setHint(t('settings.runtime.savingHint'))
     try {
       const saved = await save()
       if (!saved) return
       setBusy(true)
-      setHint('正在重启 Atolla…')
+      setHint(t('settings.runtime.restartingHint'))
       const res = await fetch(`${API}/admin/runtime-settings/restart`, {
         method: 'POST',
         headers: authHeaders(),
@@ -82,7 +84,7 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
         return
       }
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || `重启失败(${res.status})`)
+      if (!res.ok) throw new Error(data.error || t('settings.runtime.restartFail', { status: res.status }))
       setTimeout(() => window.location.reload(), 3500)
     } catch (e) {
       setErr(String(e.message || e))
@@ -94,15 +96,15 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
 
   return (
     <SettingsFold
-      title="会话运行时"
-      desc="短时保留支持持续协议的会话进程，统一缓存版本与连接检查；CLI 自动更新已禁用"
+      title={t('settings.runtime')}
+      desc={t('settings.runtimeDesc')}
       open={open}
       onToggle={() => setOpen((value) => !value)}
     >
       <div className="github-idea-settings">
         <div className="github-idea-grid">
           <label>
-            空闲保温时长（秒）
+            {t('settings.runtime.idleTtl')}
             <input
               type="number"
               min="0"
@@ -111,10 +113,10 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
               disabled={busy}
               onChange={(event) => setForm((value) => ({ ...value, idle_ttl_seconds: Number(event.target.value) }))}
             />
-            <small>默认 60；填 0 可关闭进程保温。</small>
+            <small>{t('settings.runtime.idleTtlHint')}</small>
           </label>
           <label>
-            空闲进程内存阈值（MB）
+            {t('settings.runtime.memLimit')}
             <input
               type="number"
               min="128"
@@ -124,30 +126,32 @@ export default function RuntimeSettings({ authHeaders, onUnauthorized, active })
               disabled={busy}
               onChange={(event) => setForm((value) => ({ ...value, memory_limit_mb: Number(event.target.value) }))}
             />
-            <small>默认 2048；达到阈值会释放全部空闲保温进程。</small>
+            <small>{t('settings.runtime.memLimitHint')}</small>
           </label>
         </div>
 
         <div className="ma-capsule-row">
           <div className="ma-capsule-text">
-            <span className="ma-capsule-label">CLI 版本策略</span>
-            <p className="ma-capsule-hint">版本锁定，子进程禁止自动更新；版本与连接健康检查由平台缓存 5 分钟。</p>
+            <span className="ma-capsule-label">{t('settings.runtime.cliPolicy')}</span>
+            <p className="ma-capsule-hint">{t('settings.runtime.cliPolicyHint')}</p>
           </div>
-          <span className="db-status-tag">禁止自动更新</span>
+          <span className="db-status-tag">{t('settings.runtime.noAutoUpdate')}</span>
         </div>
 
-        <p className="engine-note">
-          Claude 使用持续流进程复用；Codex 与 Cursor 当前保持安全冷启动并复用会话 ID，避免用不可持续的一次性进程伪装保温。
-        </p>
+        <p className="engine-note">{t('settings.runtime.note')}</p>
 
         {hint && <p className="engine-note">{hint}</p>}
         {err && <p className="engine-hint">{err}</p>}
         <div className="modal-actions">
           <button type="button" className="ghost" disabled={busy} onClick={() => void save()}>
-            {busy ? '处理中…' : '保存配置'}
+            {busy ? t('settings.common.saving') : t('settings.runtime.save')}
           </button>
           <button type="button" disabled={busy} onClick={() => void restart()}>
-            {busy ? '处理中…' : (restartRequired ? '立即重启生效' : '保存并重启')}
+            {busy
+              ? t('settings.common.saving')
+              : restartRequired
+                ? t('settings.runtime.restartNow')
+                : t('settings.runtime.saveRestart')}
           </button>
         </div>
       </div>
