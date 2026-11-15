@@ -78,6 +78,10 @@ Go（Gin）· React（Vite）· SQLite（默认）/ MySQL 8（可选）· 本机
 
 完整列表见 [.env.example](.env.example)。
 
+## macOS 桌面版（Apple Silicon）
+
+Electron 桌面版会自动启动内置 Go 后端并复用现有 Web 界面。开发、打包、运行目录和未签名分发限制见 [docs/electron-macos.md](docs/electron-macos.md)。
+
 ## 许可证
 
 见 [LICENSE](LICENSE)。
