@@ -1,47 +1,63 @@
-# Go
-.gocache/
-server/server
-server/main
-server/bin/
-bin/
-*.exe
-*.test
-*.out
+# ===== 依赖 =====
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
 
-# 环境
-.env
-.env.local
-
-# 本地运行数据库（禁止提交真实业务数据）
-/data/
-/server/*@tcp*/
-
-# 本地前后台启动日志 / pid
-/logs/
-
-# OS
-.DS_Store
-
-# 前端(node_modules 已在 web/.gitignore)
-
-.superpowers/
-
-# macOS 灵动岛编译产物（源码在 macos/AtollaIsland，二进制用户本机生成）
-macos/AtollaIsland/.build/
-macos/AtollaIsland/.swiftpm/
-macos/AtollaIsland/dist/
-/dist/browser-extension/
-/dist/browser-extension.zip
-/dist/electron/
-
-# iOS / Xcode 构建缓存与产物（源码位于 remote-relay/web/ios）
+# ===== 构建产物 =====
+/dist/
+/desktop/stage/
 **/build-device/
 **/DerivedData/
 **/xcuserdata/
 **/*.xcuserstate
 **/*.xcarchive
 **/*.ipa
+**/*.dmg
+macos/AtollaIsland/.build/
+macos/AtollaIsland/.swiftpm/
+macos/AtollaIsland/dist/
+/dist/browser-extension/
+/dist/browser-extension.zip
 
-# Electron 本地依赖与发行构建中间产物
-/desktop/node_modules/
-/desktop/stage/
+# ===== Go =====
+.gocache/
+server/server
+server/main
+/server/bin/
+/bin/
+*.exe
+*.test
+*.out
+*.prof
+
+# ===== 本地运行数据 / 日志 =====
+/data/
+/logs/
+*.log
+/server/*@tcp*/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ===== 环境与凭据 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# ===== IDE / OS / 工具 =====
+.DS_Store
+.idea/
+.vscode/
+*.iml
+*.swp
+.superpowers/
+__pycache__/
+*.pyc
+.cache/
+tmp/
