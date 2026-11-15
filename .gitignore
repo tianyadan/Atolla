@@ -34,8 +34,13 @@ macos/AtollaIsland/dist/
 /dist/browser-extension.zip
 /dist/electron/
 
-# iOS 设备构建缓存与产物（源码位于 remote-relay/web/ios）
-/remote-relay/web/ios/build-device/
+# iOS / Xcode 构建缓存与产物（源码位于 remote-relay/web/ios）
+**/build-device/
+**/DerivedData/
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xcarchive
+**/*.ipa
 
 # Electron 本地依赖与发行构建中间产物
 /desktop/node_modules/
