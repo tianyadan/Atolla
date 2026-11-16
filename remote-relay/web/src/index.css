@@ -4479,6 +4479,8 @@ html.theme-light .composer-input-wrap .composer-send-btn::before {
 }
 
 .chat-composer-row > .composer-interrupt-btn {
+  position: relative;
+  isolation: isolate;
   flex: 0 0 40px;
   width: 40px;
   height: 40px;
