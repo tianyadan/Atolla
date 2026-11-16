@@ -34,6 +34,7 @@ import {
   type EngineUsageRow,
 } from '../utils/engineUsage'
 import { formatPct, isInstanceOnline } from '../utils/instance'
+import { hasLanInstanceAccess } from '../utils/connectionSession'
 import { loadCollapsedFolders, saveCollapsedFolders } from '../utils/folderCollapse'
 import { rememberSettingsBack } from '../utils/settingsNav'
 import { EngineTag } from './EngineTag'
@@ -94,10 +95,11 @@ export function MobileChatHeader({
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerInstance, setDrawerInstance] = useState<PublicInstance | null>(null)
   const [drawerAccountHint, setDrawerAccountHint] = useState('账号信息')
-  const [drawerLoading, setDrawerLoading] = useState(false)
-  const [drawerError, setDrawerError] = useState('')
+  const [instancesLoading, setInstancesLoading] = useState(false)
+  const [agentsLoading, setAgentsLoading] = useState(false)
+  const [agentsError, setAgentsError] = useState('')
   const [enginesUsage, setEnginesUsage] = useState<EnginesUsageResponse | null>(() =>
-    peekEnginesUsageCache(),
+    peekEnginesUsageCache(instanceId),
   )
   const [instancePopoverOpen, setInstancePopoverOpen] = useState(false)
   const instanceAnchorRef = useRef<HTMLButtonElement>(null)
@@ -167,52 +169,74 @@ export function MobileChatHeader({
     }
   }, [drawerOpen])
 
-  /** Load instance + agents + account hint + engine quotas when drawer opens */
+  /**
+   * Each drawer region owns its own request. Engine usage or the optional
+   * remote account profile must never hide the paired Mac or its agents.
+   */
   useEffect(() => {
     if (!drawerOpen || !instanceId) return undefined
     let cancelled = false
-    setDrawerLoading(true)
-    setDrawerError('')
-    void (async () => {
-      try {
-        const [rows, agentRows, receive, usage] = await Promise.all([
-          fetchInstances(),
-          fetchAgents(instanceId),
-          fetchReceiveEmail().catch(() => null),
-          (async () => {
-            // 打开侧栏刷新一次；1 分钟内复用缓存，过期则 fresh 拉 Cursor/Codex 官网额度
-            if (enginesUsageCacheFresh(DRAWER_USAGE_TTL_MS) && peekEnginesUsageCache()) {
-              return peekEnginesUsageCache()
-            }
-            try {
-              return rememberEnginesUsage(
-                await fetchEnginesUsage(instanceId, { fresh: true }),
-                { instanceId },
-              )
-            } catch {
-              return peekEnginesUsageCache()
-            }
-          })(),
-        ])
+    setInstancesLoading(true)
+    void fetchInstances()
+      .then((rows) => {
         if (cancelled) return
         setInstances(rows)
         setDrawerInstance(rows.find((row) => row.instance_id === instanceId) || null)
-        setAgents(agentRows)
-        if (usage) setEnginesUsage(usage)
-        const email = String(receive?.email_masked || receive?.email || '').trim()
-        setDrawerAccountHint(email || '账号信息')
-      } catch (err) {
-        if (cancelled) return
-        setInstances([])
-        setDrawerInstance(null)
-        setDrawerError(err instanceof Error ? err.message : '加载失败')
-      } finally {
-        if (!cancelled) setDrawerLoading(false)
-      }
-    })()
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInstances([])
+          setDrawerInstance(null)
+        }
+      })
+      .finally(() => { if (!cancelled) setInstancesLoading(false) })
     return () => {
       cancelled = true
     }
+  }, [drawerOpen, instanceId])
+
+  useEffect(() => {
+    if (!drawerOpen || !instanceId) return undefined
+    let cancelled = false
+    setAgentsLoading(true)
+    setAgentsError('')
+    void fetchAgents(instanceId)
+      .then((rows) => { if (!cancelled) setAgents(rows) })
+      .catch((error) => { if (!cancelled) setAgentsError(error instanceof Error ? error.message : '数字人加载失败') })
+      .finally(() => { if (!cancelled) setAgentsLoading(false) })
+    return () => { cancelled = true }
+  }, [drawerOpen, instanceId])
+
+  useEffect(() => {
+    if (!drawerOpen) return
+    let cancelled = false
+    void fetchReceiveEmail()
+      .then((receive) => {
+        if (cancelled) return
+        const email = String(receive?.email_masked || receive?.email || '').trim()
+        setDrawerAccountHint(email || '账号信息')
+      })
+      .catch(() => { if (!cancelled) setDrawerAccountHint('账号信息') })
+    return () => { cancelled = true }
+  }, [drawerOpen])
+
+  useEffect(() => {
+    if (!drawerOpen || !instanceId) return
+    let cancelled = false
+    // 切换云端/LAN 实例时先清掉其他 Mac 的旧额度，再请求当前实例。
+    setEnginesUsage(peekEnginesUsageCache(instanceId))
+    void (async () => {
+      if (enginesUsageCacheFresh(DRAWER_USAGE_TTL_MS, instanceId)) {
+        return peekEnginesUsageCache(instanceId)
+      }
+      try {
+        return rememberEnginesUsage(await fetchEnginesUsage(instanceId, { fresh: true }), { instanceId })
+      } catch {
+        // LAN 请求失败时只允许回退同一台 Mac 的旧值，禁止误展示云端实例额度。
+        return peekEnginesUsageCache(instanceId)
+      }
+    })().then((usage) => { if (!cancelled && usage) setEnginesUsage(usage) })
+    return () => { cancelled = true }
   }, [drawerOpen, instanceId])
 
   /** Keep collapse prefs in sync when switching instance */
@@ -270,7 +294,7 @@ export function MobileChatHeader({
       return
     }
     const iid = row.instance_id
-    if (!hasUnlockToken(iid)) {
+    if (!hasUnlockToken(iid) && !hasLanInstanceAccess(iid)) {
       setInstancePopoverOpen(false)
       closeMenu()
       closeDrawer()
@@ -315,6 +339,10 @@ export function MobileChatHeader({
   const title = agent?.display_name || agent?.agent_id || '数字人'
   const currentGroup = String(agent?.payload?.folder_name || '').trim() || '未入组'
   const instanceOnline = !!(drawerInstance && isInstanceOnline(drawerInstance.last_heartbeat_at))
+  const currentUsesLan = drawerInstance?.connection === 'lan'
+  const currentConnectionLabel = instanceOnline
+    ? currentUsesLan ? '局域网连接' : '服务器连接'
+    : '离线 · 当前实例'
 
   return (
     <>
@@ -400,8 +428,8 @@ export function MobileChatHeader({
                         {drawerInstance?.display_name || drawerInstance?.instance_id || instanceId}
                       </strong>
                       <small>
-                        <i className={instanceOnline ? 'is-idle' : 'is-offline'} aria-hidden />
-                        {instanceOnline ? '已连接 · 当前实例' : '离线 · 当前实例'}
+                        <i className={instanceOnline ? currentUsesLan ? 'is-lan' : 'is-idle' : 'is-offline'} aria-hidden />
+                        <span className={instanceOnline && currentUsesLan ? 'is-lan-text' : ''}>{currentConnectionLabel}</span>
                       </small>
                     </span>
                     <span className="mobile-nav-drawer-instance-caret" aria-hidden>
@@ -416,7 +444,9 @@ export function MobileChatHeader({
                     placement="bottom-start"
                   >
                     <div className="mobile-nav-instance-popover-head">在线电脑</div>
-                    {onlineInstances.length === 0 ? (
+                    {instancesLoading ? (
+                      <p className="mobile-nav-instance-popover-empty">正在加载实例…</p>
+                    ) : onlineInstances.length === 0 ? (
                       <p className="mobile-nav-instance-popover-empty">暂无在线实例</p>
                     ) : (
                       <ul className="mobile-nav-instance-popover-list">
@@ -436,8 +466,10 @@ export function MobileChatHeader({
                                 <span className="mobile-nav-drawer-instance-copy">
                                   <strong>{row.display_name || row.instance_id}</strong>
                                   <small>
-                                    <i className="is-idle" aria-hidden />
-                                    {selected ? '当前实例' : '在线'}
+                                    <i className={row.connection === 'lan' ? 'is-lan' : 'is-idle'} aria-hidden />
+                                    <span className={row.connection === 'lan' ? 'is-lan-text' : ''}>
+                                      {row.connection === 'lan' ? '局域网连接' : '服务器连接'}{selected ? ' · 当前实例' : ''}
+                                    </span>
                                   </small>
                                 </span>
                                 {selected ? <span className="mobile-nav-instance-check" aria-hidden>✓</span> : null}
@@ -466,12 +498,12 @@ export function MobileChatHeader({
 
                 <section className="mobile-nav-drawer-block is-plain is-grow" aria-label="数字人分组">
                   <div className="mobile-nav-drawer-groups">
-                    {drawerLoading ? <p className="mobile-nav-drawer-hint">加载中…</p> : null}
-                    {drawerError ? <p className="mobile-nav-drawer-error">{drawerError}</p> : null}
-                    {!drawerLoading && !drawerError && agentGroups.length === 0 ? (
+                    {agentsLoading ? <p className="mobile-nav-drawer-hint">正在加载数字人…</p> : null}
+                    {agentsError ? <p className="mobile-nav-drawer-error">{agentsError}</p> : null}
+                    {!agentsLoading && !agentsError && agentGroups.length === 0 ? (
                       <p className="mobile-nav-drawer-hint">当前实例暂无数字人</p>
                     ) : null}
-                    {!drawerLoading
+                    {!agentsLoading
                       ? agentGroups.map((group) => {
                           const open = !collapsedGroups.has(group.key)
                           return (

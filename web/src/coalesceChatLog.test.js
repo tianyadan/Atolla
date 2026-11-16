@@ -120,6 +120,28 @@ function assert(cond, msg) {
   assert(!got.some((m) => m.id == null && m.role === 'command'), 'still no stray commands')
 }
 
+// 最新页受限时，用户消息可能暂未被服务端分页带回，但同一轮的命令/回复已出现。
+// 乐观气泡仍必须锚定在本轮输出之前，不能被简单追加到时间线末尾。
+{
+  const local = [
+    { id: 1, role: 'user', content: '上一轮问题', time: 1_000 },
+    { id: 2, role: 'assistant', content: '上一轮回复', time: 1_100 },
+    { role: 'user', content: '刚发的任务', pending: true, time: 2_000, uid: 'local-current' },
+  ]
+  const db = [
+    { id: 10, role: 'command', content: 'rg -n foo', time: 2_100 },
+    { id: 11, role: 'assistant', content: '任务已经完成', time: 2_200 },
+  ]
+  const got = coalesceChatLog(local, db)
+  const userIndex = got.findIndex((m) => m.uid === 'local-current')
+  const firstCurrentOutputIndex = got.findIndex((m) => m.id === 10)
+  assert(userIndex >= 0, 'must retain the local pending user message')
+  assert(
+    userIndex < firstCurrentOutputIndex,
+    'pending user must be shown before server output from the same turn',
+  )
+}
+
 // DB 已有同文 user 后不再重复追加乐观气泡
 {
   const local = [

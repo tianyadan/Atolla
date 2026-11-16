@@ -26,6 +26,14 @@ struct AtollaCredentialSnapshot {
     let recentInstanceUnlockToken: String?
 }
 
+struct AtollaLanConnection: Codable {
+    let instanceID: String
+    let baseURL: String
+    let deviceID: String
+    let deviceSecret: String
+    let strategy: String
+}
+
 /// Atolla 原生凭据存储，供 App 与后续 App Intents 统一读取。
 final class AtollaCredentialStore {
     static let shared = AtollaCredentialStore()
@@ -34,6 +42,7 @@ final class AtollaCredentialStore {
         static let relayAPIBase = "relay-api-base"
         static let siteToken = "site-token"
         static let recentInstanceID = "recent-instance-id"
+        static let lanConnectionPrefix = "lan-connection:"
     }
 
     private let credentialService: String
@@ -112,6 +121,32 @@ final class AtollaCredentialStore {
     func removeAllCredentials() throws {
         try removeAll(service: credentialService)
         try removeAll(service: unlockTokenService)
+    }
+
+    // LAN pairing material is a capability to control the local Mac. It must
+    // not remain only in WebView localStorage, which can be copied by a web
+    // inspection tool or lost during storage cleanup.
+    func setLanConnection(_ connection: AtollaLanConnection?, for instanceID: String) throws {
+        let id = try normalizedInstanceID(instanceID)
+        guard let connection else {
+            try remove(account: Account.lanConnectionPrefix + id, service: credentialService)
+            return
+        }
+        let data = try JSONEncoder().encode(connection)
+        guard let serialized = String(data: data, encoding: .utf8) else { throw AtollaCredentialStoreError.invalidStoredValue }
+        try write(serialized, account: Account.lanConnectionPrefix + id, service: credentialService)
+    }
+
+    func lanConnection(for instanceID: String) throws -> AtollaLanConnection? {
+        let id = try normalizedInstanceID(instanceID)
+        guard let serialized = try read(account: Account.lanConnectionPrefix + id, service: credentialService) else { return nil }
+        guard let data = serialized.data(using: .utf8) else { throw AtollaCredentialStoreError.invalidStoredValue }
+        return try JSONDecoder().decode(AtollaLanConnection.self, from: data)
+    }
+
+    func removeLanConnection(for instanceID: String) throws {
+        let id = try normalizedInstanceID(instanceID)
+        try remove(account: Account.lanConnectionPrefix + id, service: credentialService)
     }
 
     private func normalizedInstanceID(_ instanceID: String) throws -> String {

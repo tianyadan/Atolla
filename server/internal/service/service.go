@@ -15,6 +15,7 @@ import (
 	"atolla/server/internal/agent"
 	"atolla/server/internal/auth"
 	"atolla/server/internal/dbquery"
+	"atolla/server/internal/lanrelay"
 	"atolla/server/internal/notify"
 	"atolla/server/internal/permission"
 	"atolla/server/internal/plugin/githubidea"
@@ -54,7 +55,9 @@ type Service struct {
 	WF           *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
-	GitHubIdea   *githubidea.Manager
+	// LanRelay is separate from the desktop admin listener and only serves paired LAN clients.
+	LanRelay   *lanrelay.Server
+	GitHubIdea *githubidea.Manager
 	// DispatchClassifier 仅在规则无法归类时调用；不得直接选择执行者。
 	DispatchClassifier DispatchClassificationFallback
 	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
@@ -137,6 +140,10 @@ func New(cfg config.Config, st *store.Store) *Service {
 	svc.BeginWorkflowRecoveryWindow()
 	svc.RepairAgentTaskQueueOnBoot(context.Background())
 	svc.startRemoteBridge(cfg.WorkspaceRoot)
+	// 已显式启用过的 LAN Relay 在重启后恢复；失败仅记录，不能阻断主服务启动。
+	if err := svc.ApplyLanRelayConfig(context.Background()); err != nil {
+		log.Printf("restore LAN relay: %v", err)
+	}
 	return svc
 }
 

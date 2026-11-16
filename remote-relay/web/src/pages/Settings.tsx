@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { clearToken, fetchReceiveEmail, fetchVersion } from '../api'
+import { clearToken, fetchReceiveEmail, fetchVersion, getToken } from '../api'
 import { PageShell } from '../components/PageShell'
 import {
   SettingsGroup,
@@ -17,13 +17,14 @@ import {
   SettingsIconNetwork,
 } from '../components/settings/SettingsIcons'
 import { useLocale } from '../i18n/useLocale'
-import { getApiBase } from '../utils/apiBase'
+import { getLanConnection, getLanRouteState, type LanRouteState } from '../utils/lanConnection'
+import { formatConnectionRoute } from '../utils/connectionDisplay'
 import {
   currentLocaleLabel,
-  formatApiBaseSummary,
   formatEmailSummary,
 } from '../utils/settingsDisplay'
 import { clearSettingsBack, peekSettingsBack } from '../utils/settingsNav'
+import { clearConnectionSession, getConnectionSession } from '../utils/connectionSession'
 
 /**
  * Global Settings — iOS-style menu. Detail forms live on secondary routes.
@@ -35,36 +36,62 @@ export function SettingsPage() {
   const [version, setVersion] = useState('…')
   const [emailMasked, setEmailMasked] = useState('')
   const [email, setEmail] = useState('')
-  const [apiBase, setApiBaseState] = useState(() => getApiBase())
-  const [error, setError] = useState<string | null>(null)
+  const [connectionRoute, setConnectionRoute] = useState<LanRouteState>(() => {
+    const connection = getLanConnection()
+    return getLanRouteState(connection.instanceId || '')
+  })
   const backTo = useMemo(() => peekSettingsBack('/instances'), [])
+  // LAN-only has no remote site session. Do not request or expose controls
+  // which depend on remote relay APIs; a valid local pairing is not an error.
+  const lanOnly = !!getConnectionSession() && !getToken()
 
   useEffect(() => {
     // Refresh summaries when returning from secondary pages
-    setApiBaseState(getApiBase())
+    const connection = getLanConnection()
+    setConnectionRoute(getLanRouteState(connection.instanceId || ''))
+    if (lanOnly) {
+      setVersion('—')
+      setEmail('')
+      setEmailMasked('')
+      return
+    }
     void (async () => {
-      try {
-        const [v, re] = await Promise.all([fetchVersion(), fetchReceiveEmail()])
-        setVersion(v.startsWith('v') ? v : `v${v}`)
-        setEmail(re.email || '')
-        setEmailMasked(re.email_masked || '')
-      } catch (err) {
-        const status = (err as { status?: number })?.status
-        if (status === 401) {
-          clearToken()
-          clearSettingsBack()
-          navigate('/login', { replace: true })
-          return
-        }
-        setError(err instanceof Error ? err.message : 'Load failed')
+      const [versionResult, emailResult] = await Promise.allSettled([fetchVersion(), fetchReceiveEmail()])
+      const rejected = [versionResult, emailResult].find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      const status = (rejected?.reason as { status?: number } | undefined)?.status
+      if (status === 401) {
+        clearToken()
+        clearSettingsBack()
+        navigate('/login', { replace: true })
+        return
+      }
+      if (versionResult.status === 'fulfilled') {
+        setVersion(versionResult.value.startsWith('v') ? versionResult.value : `v${versionResult.value}`)
+      } else {
         setVersion('—')
       }
+      if (emailResult.status === 'fulfilled') {
+        setEmail(emailResult.value.email || '')
+        setEmailMasked(emailResult.value.email_masked || '')
+      } else {
+        setEmail('')
+        setEmailMasked('')
+      }
     })()
-  }, [navigate])
+  }, [lanOnly, navigate])
 
-  /** Site gate logout — clears token and returns to login */
+  /**
+   * 主动退出必须同时清除远程 JWT 和局域网会话。
+   *
+   * QR 配对后的 LAN session 也能通过 RequireAuth；此前只调用 clearToken()
+   * 会让路由守卫继续判定为已登录，并自动恢复到最近的数字人对话。
+   * 保留配对凭据本身，用户下次可在设置中复用或重新扫码，不等同于遗忘设备。
+   */
   function onLogout() {
     clearToken()
+    clearConnectionSession()
     clearSettingsBack()
     navigate('/login', { replace: true })
   }
@@ -72,16 +99,16 @@ export function SettingsPage() {
   return (
     <PageShell title={t('settings.title')} backTo={backTo}>
       <SettingsPageBody>
-        {error ? <p className="error-banner">{error}</p> : null}
-
         <SettingsGroup title={t('settings.section.app')}>
-          <SettingsRow
-            icon={<SettingsIconLayers />}
-            title={t('settings.relayVersion')}
-            value={version}
-            chevron={false}
-            readOnly
-          />
+          {!lanOnly ? (
+            <SettingsRow
+              icon={<SettingsIconLayers />}
+              title={t('settings.relayVersion')}
+              value={version}
+              chevron={false}
+              readOnly
+            />
+          ) : null}
           <SettingsRow
             icon={<SettingsIconGlobe />}
             title={t('settings.language')}
@@ -91,16 +118,18 @@ export function SettingsPage() {
         </SettingsGroup>
 
         <SettingsGroup title={t('settings.section.connection')}>
-          <SettingsRow
-            icon={<SettingsIconMail />}
-            title={t('settings.otpLogin')}
-            value={formatEmailSummary(emailMasked, email)}
-            onClick={() => navigate('/settings/otp')}
-          />
+          {!lanOnly ? (
+            <SettingsRow
+              icon={<SettingsIconMail />}
+              title={t('settings.otpLogin')}
+              value={formatEmailSummary(emailMasked, email)}
+              onClick={() => navigate('/settings/otp')}
+            />
+          ) : null}
           <SettingsRow
             icon={<SettingsIconNetwork />}
-            title={t('settings.relayServer')}
-            value={formatApiBaseSummary(apiBase)}
+            title={t('settings.relayAndConnection')}
+            value={formatConnectionRoute(connectionRoute, locale).label}
             onClick={() => navigate('/settings/relay')}
           />
         </SettingsGroup>

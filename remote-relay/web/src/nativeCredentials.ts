@@ -8,6 +8,12 @@ type NativeCredentialPlugin = {
   clearSiteSession(): Promise<{ ok: boolean }>
   clearUnlockToken(options: { instanceId: string }): Promise<{ ok: boolean }>
   clearAllUnlockTokens(): Promise<{ ok: boolean }>
+  saveLanConnection(options: { instanceId: string; baseUrl: string; deviceId: string; deviceSecret: string; strategy: string }): Promise<{ ok: boolean }>
+  loadLanConnection(options: { instanceId: string }): Promise<{ found: boolean; instanceId?: string; baseUrl?: string; deviceId?: string; deviceSecret?: string; strategy?: string }>
+  clearLanConnection(options: { instanceId: string }): Promise<{ ok: boolean }>
+  discoverLanRelays(): Promise<{ services: Array<{ endpoint: string }> }>
+  scanLanPairingQRCode(): Promise<{ payload?: string; cancelled?: boolean }>
+  cancelLanPairingQRCode(): Promise<{ ok: boolean }>
 }
 
 const NativeCredentials = registerPlugin<NativeCredentialPlugin>('AtollaCredentials')
@@ -49,4 +55,28 @@ export function clearNativeUnlockToken(instanceId: string): Promise<void> {
 
 export function clearAllNativeUnlockTokens(): Promise<void> {
   return runNative(() => NativeCredentials.clearAllUnlockTokens())
+}
+
+export function syncNativeLanConnection(value: { instanceId: string; baseUrl: string; deviceId: string; deviceSecret: string; strategy: string }): Promise<void> {
+  return runNative(() => NativeCredentials.saveLanConnection(value))
+}
+
+export async function loadNativeLanConnection(instanceId: string) {
+  if (!Capacitor.isNativePlatform()) return { found: false }
+  try { return await NativeCredentials.loadLanConnection({ instanceId }) } catch (error) { console.error('[credentials] Keychain LAN load failed', error); return { found: false } }
+}
+
+export function clearNativeLanConnection(instanceId: string): Promise<void> {
+  return runNative(() => NativeCredentials.clearLanConnection({ instanceId }))
+}
+
+export async function discoverNativeLanRelays(): Promise<Array<{ endpoint: string }>> {
+  if (!Capacitor.isNativePlatform()) return []
+  try { return (await NativeCredentials.discoverLanRelays()).services } catch (error) { console.error('[credentials] Bonjour discovery failed', error); return [] }
+}
+
+export async function scanNativeLanPairingQRCode(): Promise<string | null> {
+  if (!Capacitor.isNativePlatform()) throw new Error('二维码扫描仅在 iPhone App 中可用')
+  const result = await NativeCredentials.scanLanPairingQRCode()
+  return result.cancelled ? null : result.payload || null
 }

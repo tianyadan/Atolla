@@ -123,14 +123,27 @@ function appendPendingLocalUsers(merged, local) {
     localCounts.set(key, seen + 1)
     const dbCount = dbUserContents.get(key) || 0
     if (seen < dbCount) continue
-    merged.push({
+    const optimistic = {
       role: 'user',
       content: m.content,
       attachments: m.attachments || [],
       time: m.time,
       pending: true,
       uid: m.uid,
-    })
+    }
+
+    // 镜像分页只带最新 N 条：一次工具较多的回合里，用户消息可能已被挤出
+    // 当前页，而这轮 command / assistant 输出仍在。此时若直接 append，会在视觉上
+    // 形成「AI 先回复，用户消息最后出现」的倒序。用客户端发送时间将气泡插到第一条
+    // 同轮服务端输出之前；没有可靠时间戳时保持追加，避免重排历史记录。
+    const optimisticTime = Number(optimistic.time) || 0
+    const firstLaterOutput = optimisticTime > 0
+      ? merged.findIndex((row) =>
+        row.role !== 'user' && Number(row.time) >= optimisticTime,
+      )
+      : -1
+    if (firstLaterOutput >= 0) merged.splice(firstLaterOutput, 0, optimistic)
+    else merged.push(optimistic)
   }
 }
 

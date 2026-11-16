@@ -14,6 +14,8 @@ const (
 	EnvDriver = "AVATAR_DB_DRIVER"
 	EnvDSN    = "AVATAR_DB_DSN"
 	EnvChosen = "AVATAR_DB_CHOSEN" // 1=用户已在引导/设置中确认过驱动
+	// EnvRuntimeRoot 供打包桌面端保存数据库选择；其运行目录没有源码仓库结构。
+	EnvRuntimeRoot = "AVATAR_RUNTIME_ROOT"
 )
 
 // MySQLDefaultDSN 本机 Docker compose 默认连接串。
@@ -46,6 +48,11 @@ func NormalizeDriver(d string) string {
 
 // RepoRoot 从 cwd 向上找含 docker-compose.yml 与 scripts/start.sh 的目录。
 func RepoRoot() (string, error) {
+	// 桌面版从 App Bundle 启动，cwd 通常为 /，不能再依赖源码仓库标记文件。
+	// Electron 传入 Application Support 目录，使 .env 和 SQLite 数据保持在用户可写位置。
+	if runtimeRoot := strings.TrimSpace(os.Getenv(EnvRuntimeRoot)); runtimeRoot != "" {
+		return filepath.Clean(runtimeRoot), nil
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", err

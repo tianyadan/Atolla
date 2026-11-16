@@ -2629,6 +2629,58 @@ details.ma-tasks summary { cursor: pointer; color: #dddddd; font-weight: 500; }
   background: color-mix(in srgb, #3b82f6 14%, transparent);
 }
 .rr-reg-tag.unset { color: #8a8a8a; }
+/* 局域网安全审计：默认收起，展开后限定高度滚动 */
+.rr-audit-fold { margin-top: 16px; }
+.rr-audit-fold > summary {
+  display: flex; align-items: center; gap: 8px;
+  list-style: none; cursor: pointer; user-select: none;
+  font-size: 13px; color: #dddddd;
+}
+.rr-audit-fold > summary::-webkit-details-marker { display: none; }
+.rr-audit-fold .rr-reg-tag { margin-left: auto; }
+.rr-audit-caret {
+  display: inline-block; color: #666666; font-size: 11px;
+  transition: transform 0.16s ease;
+}
+.rr-audit-fold[open] .rr-audit-caret { transform: rotate(90deg); }
+.rr-audit-list {
+  list-style: none; margin: 8px 0 0; padding: 0 4px 0 0;
+  max-height: 260px; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 12px; color: #a3a3a3;
+}
+.rr-audit-list li {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 5px 8px; border-radius: 6px; background: #0d0d0d;
+}
+.rr-audit-list li > span:last-child { color: #737373; }
+/* 配对二维码状态：等待 / 已扫描 / 成功 / 过期 */
+.rr-pair-block { max-width: 320px; }
+.rr-pair-block .empty-hint { margin: 8px 0 0; line-height: 1.5; }
+.rr-pair-state {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px; border-radius: 10px;
+  background: #131313; border: 1px solid #2a2a2a;
+}
+.rr-pair-state .empty-hint { margin: 4px 0 0; }
+.rr-pair-state.ok { border-color: color-mix(in srgb, #22c55e 40%, #2a2a2a); }
+.rr-pair-state.expired { border-color: color-mix(in srgb, #f59e0b 40%, #2a2a2a); }
+.rr-pair-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex: none; border-radius: 50%;
+  font-size: 13px; font-weight: 600;
+}
+.rr-pair-state.ok .rr-pair-mark { background: #166534; color: #bbf7d0; }
+.rr-pair-state.expired .rr-pair-mark { background: #78350f; color: #fde68a; }
+.rr-pair-spinner {
+  width: 18px; height: 18px; flex: none; margin-top: 1px;
+  border: 2px solid #3a3a3a; border-top-color: #a78bfa;
+  border-radius: 50%; animation: rr-pair-spin 0.8s linear infinite;
+}
+@keyframes rr-pair-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .rr-pair-spinner { animation: none; border-top-color: #a78bfa; }
+}
 .rr-err-text { color: #fca5a5; word-break: break-all; }
 
 .rr-mobile-card .version-head {

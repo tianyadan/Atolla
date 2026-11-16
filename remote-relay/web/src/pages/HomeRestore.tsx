@@ -22,6 +22,8 @@ import {
   rememberChatSelection,
 } from '../utils/chatResume'
 import { isInstanceOnline } from '../utils/instance'
+import { getConnectionSession, hasLanInstanceAccess } from '../utils/connectionSession'
+import { resolveRestoreInstanceId } from '../utils/restoreTarget'
 
 type RestoreView =
   | 'loading'
@@ -58,7 +60,15 @@ export function HomeRestorePage() {
       }
 
       const globalTarget = loadLastChatSelection()
-      let targetInstanceId = routeInstanceId || globalTarget?.instanceId || ''
+      const lanSession = getConnectionSession()
+      // LAN Facade deliberately exposes only the QR-bound Mac. Prefer that
+      // target over a previous cloud conversation, which cannot exist in the
+      // local instance list and would otherwise be misreported as removed.
+      let targetInstanceId = resolveRestoreInstanceId({
+        routeInstanceId,
+        lanSessionInstanceId: lanSession?.instanceId,
+        lastChatInstanceId: globalTarget?.instanceId,
+      })
       if (!targetInstanceId) {
         if (instanceRows.length === 1) targetInstanceId = instanceRows[0].instance_id
         else {
@@ -81,7 +91,7 @@ export function HomeRestorePage() {
         setMessage(`${instance.display_name} 当前离线，Atolla 没有自动切换到其它实例。`)
         return
       }
-      if (!hasUnlockToken(targetInstanceId)) {
+      if (!hasUnlockToken(targetInstanceId) && !hasLanInstanceAccess(targetInstanceId)) {
         navigate(`/instances?unlock=${encodeURIComponent(targetInstanceId)}&resume=1`, {
           replace: true,
         })
@@ -142,7 +152,7 @@ export function HomeRestorePage() {
 
   function chooseInstance(row: PublicInstance) {
     if (!isInstanceOnline(row.last_heartbeat_at)) return
-    if (!hasUnlockToken(row.instance_id)) {
+    if (!hasUnlockToken(row.instance_id) && !hasLanInstanceAccess(row.instance_id)) {
       navigate(`/instances?unlock=${encodeURIComponent(row.instance_id)}&resume=1`, {
         replace: true,
       })

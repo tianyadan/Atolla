@@ -342,6 +342,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureTaskDispatchSchema(ctx); err != nil {
 		return err
 	}
+	// 28) 局域网中继配置与配对设备。
+	if err := s.EnsureLanRelaySchema(ctx); err != nil {
+		return err
+	}
 	// 27) MySQL→SQLite 迁库曾把 VARCHAR 写成 BLOB，修回 TEXT 以免 role='user' 等比较失败
 	if err := s.repairSQLiteTextAffinity(ctx); err != nil {
 		return err

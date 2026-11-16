@@ -15,6 +15,7 @@ type Config struct {
 	ClaudeBin     string   // claude CLI 路径
 	AllowedIPs    []string // 局域网 IP 白名单
 	WorkspaceRoot string   // 授权工作区根(用于 resolve 绝对路径)
+	WebDir        string   // 生产环境 Web 静态资源目录；为空时仅提供 API
 	TimeoutSec    int      // 分身单次回答超时(秒)
 
 	PermissionEnabled bool   // 是否启用工具授权代理(默认 true)
@@ -87,6 +88,7 @@ func Load() Config {
 		ClaudeBin:     getenv("AVATAR_CLAUDE_BIN", "claude"),
 		AllowedIPs:    ips,
 		WorkspaceRoot: getenv("AVATAR_WORKSPACE_ROOT", "/Users/tianhaowen/Desktop/code_work_space"),
+		WebDir:        strings.TrimSpace(getenv("AVATAR_WEB_DIR", "")),
 		TimeoutSec:    clampTimeoutSec(atoi(getenv("AVATAR_TIMEOUT_SEC", "28800"))),
 
 		PermissionEnabled: getenv("AVATAR_PERMISSION_ENABLED", "1") != "0",

@@ -43,3 +43,16 @@ func TestWriteDriverChoiceSQLite(t *testing.T) {
 		t.Fatalf("dsn=%s", m[EnvDSN])
 	}
 }
+
+func TestRepoRootUsesDesktopRuntimeRoot(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	t.Setenv(EnvRuntimeRoot, runtimeRoot)
+
+	root, err := RepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != runtimeRoot {
+		t.Fatalf("root=%q, want %q", root, runtimeRoot)
+	}
+}

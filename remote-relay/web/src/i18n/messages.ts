@@ -27,6 +27,10 @@ export const messages: Record<LocaleId, Dict> = {
     'settings.saveReceive': '保存接收邮箱',
     'settings.saving': '保存中…',
     'settings.relayService': '中继服务',
+    'settings.relayAndConnection': '中继与连接',
+    'settings.connection.lan': '局域网直连',
+    'settings.connection.cloud': '服务器中继',
+    'settings.connection.unavailable': '连接不可用',
     'settings.relayServer': '中继服务器',
     'settings.relayHint':
       'App 壳内无浏览器同源代理，请填写可访问的中继根地址（含 https://，不要末尾斜杠）。',
@@ -109,6 +113,10 @@ export const messages: Record<LocaleId, Dict> = {
     'settings.saveReceive': 'Save inbox',
     'settings.saving': 'Saving…',
     'settings.relayService': 'Relay',
+    'settings.relayAndConnection': 'Relay & Connection',
+    'settings.connection.lan': 'Local network direct',
+    'settings.connection.cloud': 'Server relay',
+    'settings.connection.unavailable': 'Unavailable',
     'settings.relayServer': 'Relay server',
     'settings.relayHint':
       'Native app has no same-origin proxy. Enter the relay root URL (https://, no trailing slash).',

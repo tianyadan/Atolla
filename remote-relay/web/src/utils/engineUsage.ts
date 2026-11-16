@@ -35,16 +35,20 @@ let usageMem: {
   at: number
   ttlMs: number
   data: EnginesUsageResponse | null
-} = { at: 0, ttlMs: USAGE_TTL_MS, data: null }
+  /** 用量属于某台 Mac，不能跨云端 / LAN 实例复用。 */
+  instanceId: string
+} = { at: 0, ttlMs: USAGE_TTL_MS, data: null, instanceId: '' }
 
 /** 缓存是否仍新鲜（默认 1 分钟） */
-export function enginesUsageCacheFresh(maxAgeMs = USAGE_TTL_MS): boolean {
+export function enginesUsageCacheFresh(maxAgeMs = USAGE_TTL_MS, instanceId?: string): boolean {
   if (!usageMem.data || !usageMem.at) return false
+  if (instanceId && usageMem.instanceId !== instanceId) return false
   return Date.now() - usageMem.at < Math.min(usageMem.ttlMs || maxAgeMs, maxAgeMs)
 }
 
 /** 读模块缓存 */
-export function peekEnginesUsageCache(): EnginesUsageResponse | null {
+export function peekEnginesUsageCache(instanceId?: string): EnginesUsageResponse | null {
+  if (instanceId && usageMem.instanceId !== instanceId) return null
   return usageMem.data
 }
 
@@ -60,6 +64,7 @@ export function rememberEnginesUsage(
     at: Date.now(),
     ttlMs: Math.min(fromServer, USAGE_TTL_MS),
     data,
+    instanceId: opts?.instanceId || '',
   }
   if (opts?.publishNative !== false) {
     void import('../nativeUsage')
@@ -69,6 +74,11 @@ export function rememberEnginesUsage(
       .catch(() => {})
   }
   return data
+}
+
+/** 仅用于单元测试，避免模块级缓存污染后续断言。 */
+export function clearEnginesUsageCacheForTest(): void {
+  usageMem = { at: 0, ttlMs: USAGE_TTL_MS, data: null, instanceId: '' }
 }
 
 /** agent.engine → usage 引擎 id（Cursor CLI 在库里是 agent） */

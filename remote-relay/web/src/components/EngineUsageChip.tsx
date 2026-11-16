@@ -27,7 +27,7 @@ function tone(pct: number): string {
 
 /** 引擎标签旁的小用量条；点击打开详情弹窗 */
 export function EngineUsageChip({ instanceId, engine }: Props) {
-  const [data, setData] = useState<EnginesUsageResponse | null>(() => peekEnginesUsageCache())
+  const [data, setData] = useState<EnginesUsageResponse | null>(() => peekEnginesUsageCache(instanceId))
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -35,10 +35,12 @@ export function EngineUsageChip({ instanceId, engine }: Props) {
   /** 拉取用量；默认吃 5 分钟缓存 */
   async function load(force = false) {
     if (!instanceId) return
-    if (!force && enginesUsageCacheFresh() && peekEnginesUsageCache()) {
-      setData(peekEnginesUsageCache())
+    if (!force && enginesUsageCacheFresh(60_000, instanceId) && peekEnginesUsageCache(instanceId)) {
+      setData(peekEnginesUsageCache(instanceId))
       return
     }
+    // 避免切换实例时短暂显示另一台 Mac 的订阅额度。
+    setData(null)
     setBusy(true)
     setErr(null)
     try {

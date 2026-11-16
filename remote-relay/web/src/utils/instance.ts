@@ -83,9 +83,10 @@ export function instanceCardSubtitle(
 ): string {
   const online = isInstanceOnline(inst.last_heartbeat_at, now)
   const os = hostOsLabel(inst.host?.os)
+  const channel = inst.connection === 'lan' ? '局域网连接' : '服务器连接'
   if (online) {
     const up = formatDurationCompact(inst.host?.uptime_sec)
-    return up ? `${os} · 在线 ${up}` : `${os} · 在线`
+    return up ? `${os} · ${channel} · ${up}` : `${os} · ${channel}`
   }
   const hb = inst.last_heartbeat_at
   const ago =

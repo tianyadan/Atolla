@@ -40,6 +40,15 @@ App 内无浏览器同源代理，登录页需填写 **Relay API URL**（中继�
 
 也可在 **设置 → 中继服务** 修改。构建时可用 `.env` 的 `VITE_API_BASE` 预填。
 
+## 局域网直连 Beta（当前范围）
+
+在 Mac 管理台的 **远程中继 → 局域网直连（Beta）** 启用服务、创建 iPhone 配对设备后，App 可在 **设置 → 局域网连接** 填入 Mac HTTP 地址、设备 ID 与一次性配对密钥，并运行“测试局域网连接”。
+
+- 已实现：独立 LAN 监听器、私网来源限制、HMAC 请求签名、时间戳/nonce 防重放、撤销设备立即失效，以及 App 内签名健康检查。
+- 已验证：`go -C server test ./internal/lanrelay ./internal/service ./internal/handler` 与 `npm --prefix remote-relay/web run build`。
+- 尚未实现：Bonjour/二维码发现、Keychain 保存密钥、实例/聊天/任务/审批业务改走 LAN、自动回退云端。因此日常业务目前仍使用现有远程中继。
+- 安全边界：该功能使用 HTTP，内容不加密；仅应在可信 Wi-Fi 或 iPhone 个人热点中使用，不应开放到公网。
+
 ## HTTP / 公网 IP
 
 App 页在壳内是 `https://localhost`，用浏览器 `fetch` 打公网 `http://` 会被当成**混合内容**直接失败（表现常为 Load failed / 无法连接中继），**与密码无关**。

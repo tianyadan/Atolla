@@ -53,13 +53,16 @@ import {
   compressImageFile,
   MAX_CHAT_IMAGES,
   revokePendingImages,
+  resolveChatImageDisplayURL,
   type PendingImage,
 } from '../utils/chatImages'
 import { ChatThinkingTip } from '../components/ChatThinkingTip'
 import {
-  ClearIcon,
   ImageIcon,
+  PlusIcon,
+  QueueIcon,
   SendIcon,
+  SlidersIcon,
   StopIcon,
   TaskPlanIcon,
 } from '../components/ComposerIcons'
@@ -77,6 +80,7 @@ import {
   agentTaskPlanEnabled,
 } from '../utils/agentStatus'
 import { resolveProgressTaskTitle } from '../utils/taskTitle'
+import { clampComposerHeight, COMPOSER_MAX_HEIGHT, COMPOSER_MIN_HEIGHT } from '../utils/composerLayout'
 
 
 /** Seconds left until permission deadline */
@@ -101,6 +105,36 @@ type LocalBubble = PublicMirrorMessage & {
   failed?: boolean
   /** 已成功入队、尚未真正发出执行 */
   queued?: boolean
+}
+
+/** Resolves a Mac-owned relative attachment URL before an iOS WebView renders it. */
+function ChatAttachmentImage({
+  instanceId,
+  url,
+  name,
+  onOpen,
+}: {
+  instanceId: string
+  url: string
+  name: string
+  onOpen: (source: string) => void
+}) {
+  const [source, setSource] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    void resolveChatImageDisplayURL(instanceId, url).then((next) => {
+      if (!cancelled) setSource(next)
+    })
+    return () => { cancelled = true }
+  }, [instanceId, url])
+
+  if (!source) return null
+  return (
+    <button type="button" className="chat-msg-img" onClick={() => onOpen(source)}>
+      <img src={source} alt={name} loading="lazy" />
+    </button>
+  )
 }
 
 /** Sort ascending for chat UI */
@@ -180,6 +214,8 @@ export function ChatHistoryPage() {
   const [kbdInset, setKbdInset] = useState(0)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+  const [composerMenuOpen, setComposerMenuOpen] = useState(false)
+  const [busyStartedAt, setBusyStartedAt] = useState(0)
 
   const [lightboxSrc, setLightboxSrc] = useState('')
   /** Album / screenshot picker (no capture) */
@@ -187,6 +223,7 @@ export function ChatHistoryPage() {
   const threadRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLDivElement | null>(null)
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   const stickToBottomRef = useRef(true)
   const loadingOlderRef = useRef(false)
   /** Only seed hasMoreOlder from the first newest-page fetch */
@@ -223,6 +260,20 @@ export function ChatHistoryPage() {
       return []
     })
   }, [instanceId, agentId])
+
+  /** 根据真实内容高度调整 textarea；只滚动输入框，不挤压两侧 44px 操作键。 */
+  const resizeComposerInput = useCallback(() => {
+    const input = composerInputRef.current
+    if (!input) return
+    input.style.height = `${COMPOSER_MIN_HEIGHT}px`
+    const nextHeight = clampComposerHeight(input.scrollHeight)
+    input.style.height = `${nextHeight}px`
+    input.style.overflowY = input.scrollHeight > COMPOSER_MAX_HEIGHT ? 'auto' : 'hidden'
+  }, [])
+
+  useLayoutEffect(() => {
+    resizeComposerInput()
+  }, [question, resizeComposerInput])
 
   useEffect(() => {
     return () => {
@@ -565,6 +616,11 @@ export function ChatHistoryPage() {
   const pendingPerm = permQueue[0] ?? null
   const pendingMore = Math.max(0, permQueue.length - 1)
 
+  useEffect(() => {
+    if (busy && !busyStartedAt) setBusyStartedAt(Math.floor(Date.now() / 1000))
+    if (!busy && busyStartedAt) setBusyStartedAt(0)
+  }, [busy, busyStartedAt])
+
   /** 对话中忙碌 / 等待回复时立刻上岛（不必回到列表） */
   useEffect(() => {
     if (!agent) return
@@ -639,6 +695,9 @@ export function ChatHistoryPage() {
     [activePlan, activeTask],
   )
 
+  const runStartedAt = agentRunStartedAt(agent?.payload) ?? (awaitSinceRef.current > 0
+    ? Math.floor(awaitSinceRef.current / 1000)
+    : busyStartedAt || Math.floor(Date.now() / 1000))
   const activeSteps: string[] = useMemo(() => {
     const raw = activeTask?.payload?.steps
     if (Array.isArray(raw)) return raw.map((s) => String(s))
@@ -1143,14 +1202,13 @@ export function ChatHistoryPage() {
                     <div className="chat-msg-images">
                       {imgs.map((a, i) =>
                         a.url ? (
-                          <button
+                          <ChatAttachmentImage
                             key={a.id || a.url || i}
-                            type="button"
-                            className="chat-msg-img"
-                            onClick={() => setLightboxSrc(a.url)}
-                          >
-                            <img src={a.url} alt={a.name || ''} loading="lazy" />
-                          </button>
+                            instanceId={instanceId}
+                            url={a.url}
+                            name={a.name || ''}
+                            onOpen={setLightboxSrc}
+                          />
                         ) : null,
                       )}
                     </div>
@@ -1159,184 +1217,128 @@ export function ChatHistoryPage() {
               </article>
             )
           })}
-          {/* 发送后 / 忙碌中：小水母浮动 + Claude CLI 风格 loading 文案 */}
+          {/* 消息发送后保留原有的动态加载提示，直到新回复到达。 */}
           {busy ? (
             <ChatThinkingTip
               color={jellyColor}
-              runStartedAt={
-                agentRunStartedAt(agent?.payload) ??
-                (awaitSinceRef.current > 0
-                  ? Math.floor(awaitSinceRef.current / 1000)
-                  : null)
-              }
+              runStartedAt={runStartedAt || null}
             />
           ) : null}
           <div ref={bottomRef} className="chat-thread-end" aria-hidden />
         </div>
 
         <div className="chat-composer" ref={composerRef}>
-          <div className="chat-composer-toggles">
+          <TaskQueueChoiceSheet
+            open={!!tqChoice}
+            busy={tqChoiceBusy}
+            onInterrupt={() => void onTqInterrupt()}
+            onEnqueue={() => void onTqEnqueue()}
+            onCancel={onTqCancel}
+          />
+          {pendingImages.length > 0 ? (
+            <div className="chat-attach-preview" aria-label="待发送图片">
+              {pendingImages.map((it) => (
+                <div key={it.localId} className={`chat-attach-thumb${it.uploading ? ' uploading' : ''}${it.error ? ' err' : ''}`}>
+                  <button type="button" className="chat-attach-thumb-open" aria-label="放大查看图片" onClick={() => setLightboxSrc(it.previewUrl)}>
+                    <img src={it.previewUrl} alt="" />
+                  </button>
+                  {it.uploading ? <span className="chat-attach-spin" aria-hidden /> : null}
+                  {it.error ? <span className="chat-attach-err" title={it.error}>!</span> : null}
+                  <button type="button" className="chat-attach-rm" aria-label="移除图片" disabled={sending} onClick={(e) => { e.stopPropagation(); onRemovePending(it.localId) }}>×</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="chat-composer-row">
+            <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => { onPickImages(e.target.files); e.target.value = '' }} />
             <button
               type="button"
-              className={`composer-plan-btn${taskPlanOn ? ' is-on' : ''}`}
-              aria-pressed={taskPlanOn}
-              aria-label="任务规划"
-              title="任务规划"
-              disabled={planBusy || !agent}
-              onClick={() => void onTogglePlan(!taskPlanOn)}
+              className={`composer-round-btn composer-more-btn${composerMenuOpen ? ' is-open' : ''}`}
+              aria-label="更多功能"
+              aria-expanded={composerMenuOpen}
+              onClick={() => setComposerMenuOpen((open) => !open)}
             >
-              <TaskPlanIcon size={20} />
+              <PlusIcon />
+              {tqActive > 0 ? <em className="composer-menu-badge">{tqActive > 9 ? '9+' : tqActive}</em> : null}
             </button>
-            <button
-              type="button"
-              className={`btn outline small approve-settings-btn${approveAllOn || autoReviewOn ? ' is-on' : ''}`}
-              disabled={!agent}
-              onClick={() => setApproveSettingsOpen(true)}
-            >
-              命令审批设置
-              {(approveAllOn || autoReviewOn) && <span className="approve-dot" aria-hidden />}
-            </button>
-            {/* 队列入口：与审批设置同高小按钮，避免挤歪顶栏实例切换 */}
-            <button
-              type="button"
-              className={`btn outline small tq-composer-btn${tqActive > 0 ? ' has-badge' : ''}`}
-              disabled={!agent}
-              aria-label={t('tq.badge')}
-              onClick={() => setTqListOpen(true)}
-            >
-              <svg
-                className="tq-composer-icon"
-                viewBox="0 0 20 20"
-                aria-hidden="true"
-              >
-                <circle cx="3.25" cy="5" r="1" />
-                <circle cx="3.25" cy="10" r="1" />
-                <circle cx="3.25" cy="15" r="1" />
-                <path d="M6 5h10.5M6 10h10.5M6 15h7.25" />
-              </svg>
-              {tqActive > 0 ? (
-                <em className="tq-composer-count">{tqActive > 9 ? '9+' : tqActive}</em>
-              ) : null}
-            </button>
-          </div>
-          <div className="chat-composer-shell">
-            <TaskQueueChoiceSheet
-              open={!!tqChoice}
-              busy={tqChoiceBusy}
-              onInterrupt={() => void onTqInterrupt()}
-              onEnqueue={() => void onTqEnqueue()}
-              onCancel={onTqCancel}
-            />
-            {pendingImages.length > 0 ? (
-              <div className="chat-attach-preview" aria-label="待发送图片">
-                {pendingImages.map((it) => (
-                  <div
-                    key={it.localId}
-                    className={`chat-attach-thumb${it.uploading ? ' uploading' : ''}${it.error ? ' err' : ''}`}
-                  >
-                    <button
-                      type="button"
-                      className="chat-attach-thumb-open"
-                      aria-label="放大查看图片"
-                      onClick={() => setLightboxSrc(it.previewUrl)}
-                    >
-                      <img src={it.previewUrl} alt="" />
-                    </button>
-                    {it.uploading ? <span className="chat-attach-spin" aria-hidden /> : null}
-                    {it.error ? <span className="chat-attach-err" title={it.error}>!</span> : null}
-                    <button
-                      type="button"
-                      className="chat-attach-rm"
-                      aria-label="移除图片"
-                      disabled={sending}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onRemovePending(it.localId)
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            <textarea
-              rows={2}
-              className="chat-composer-field"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onFocus={() => {
-                stickToBottomRef.current = true
-                window.setTimeout(() => scrollThreadToBottom('smooth'), 80)
-              }}
-              placeholder={busy ? '输入插话内容…' : '输入任务或附图…'}
-            />
-            <div className="chat-composer-toolbar">
-              <input
-                ref={albumInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={(e) => {
-                  onPickImages(e.target.files)
-                  e.target.value = ''
+            <div className="composer-input-wrap">
+              <textarea
+                ref={composerInputRef}
+                rows={1}
+                className="chat-composer-field"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onFocus={() => {
+                  // 用户正在查看历史消息时不抢回到底部；仅在原本贴底时跟随键盘轻微校正。
+                  if (stickToBottomRef.current) {
+                    window.setTimeout(() => scrollThreadToBottom('smooth'), 80)
+                  }
                 }}
+                placeholder={busy ? '输入插话内容…' : '输入消息…'}
               />
-              <button
-                type="button"
-                className="composer-icon-btn"
-                aria-label="选择图片"
-                title="选择图片"
-                disabled={sending || pendingImages.length >= MAX_CHAT_IMAGES}
-                onClick={() => albumInputRef.current?.click()}
-              >
-                <ImageIcon />
-              </button>
-              <div className="chat-composer-toolbar-spacer" />
-              {/* 右簇：上下文环 / 清空 / 终止 / 发送，彼此留间隙 */}
-              <div className="chat-composer-actions">
-                <ContextRing usage={ctxUsage} />
-                {(question || pendingImages.length > 0) && !sending ? (
-                  <button
-                    type="button"
-                    className="composer-icon-btn"
-                    aria-label="清空"
-                    title="清空"
-                    onClick={() => {
-                      setQuestion('')
-                      saveChatDraft(instanceId, agentId, '')
-                      revokePendingImages(pendingImages)
-                      setPendingImages([])
-                    }}
-                  >
-                    <ClearIcon />
-                  </button>
-                ) : null}
-                {busy ? (
-                  <button
-                    type="button"
-                    className="composer-icon-btn is-stop"
-                    aria-label={t('composer.stop')}
-                    title={t('composer.stop')}
-                    onClick={() => void onStop()}
-                  >
-                    <StopIcon />
-                  </button>
-                ) : null}
+              {busy ? (
                 <button
                   type="button"
-                  className={`composer-send-btn${busy ? ' is-interrupt' : ''}`}
-                  aria-label={sending ? '发送中' : busy ? '插话' : '发送'}
-                  title={sending ? '发送中' : busy ? '插话' : '发送'}
+                  className="composer-send-btn is-stop"
+                  aria-label={t('composer.stop')}
+                  title={t('composer.stop')}
+                  onClick={() => void onStop()}
+                >
+                  <StopIcon size={15} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="composer-send-btn"
+                  aria-label={sending ? '发送中' : '发送'}
+                  title={sending ? '发送中' : '发送'}
                   disabled={sending || (!question.trim() && pendingImages.length === 0)}
                   onClick={() => void onSend()}
                 >
                   <SendIcon />
                 </button>
+              )}
+            </div>
+            {busy ? (
+              <button
+                type="button"
+                className="composer-send-btn composer-interrupt-btn is-interrupt"
+                aria-label={sending ? '发送中' : '发送插话'}
+                title={sending ? '发送中' : '发送插话'}
+                disabled={sending || (!question.trim() && pendingImages.length === 0)}
+                onClick={() => void onSend()}
+              >
+                <SendIcon />
+              </button>
+            ) : null}
+          </div>
+          {composerMenuOpen ? (
+            <div className="composer-menu" role="menu" aria-label="更多聊天功能">
+              <button type="button" role="menuitem" disabled={sending || pendingImages.length >= MAX_CHAT_IMAGES} onClick={() => { setComposerMenuOpen(false); albumInputRef.current?.click() }}>
+                <ImageIcon />
+                <span>图片上传</span>
+              </button>
+              <button type="button" role="menuitem" disabled={!agent} onClick={() => { setComposerMenuOpen(false); setTqListOpen(true) }}>
+                <QueueIcon />
+                <span>任务队列</span>
+                {tqActive > 0 ? <em>{tqActive > 9 ? '9+' : tqActive}</em> : null}
+              </button>
+              <button type="button" role="menuitemcheckbox" aria-checked={taskPlanOn} disabled={planBusy || !agent} onClick={() => { setComposerMenuOpen(false); void onTogglePlan(!taskPlanOn) }}>
+                <TaskPlanIcon />
+                <span>任务规划</span>
+                <small>{taskPlanOn ? '已开启' : '已关闭'}</small>
+              </button>
+              <button type="button" role="menuitem" disabled={!agent} onClick={() => { setComposerMenuOpen(false); setApproveSettingsOpen(true) }}>
+                <SlidersIcon />
+                <span>命令审批设置</span>
+                {(approveAllOn || autoReviewOn) ? <i className="composer-menu-dot" aria-label="已启用" /> : null}
+              </button>
+              <div className="composer-menu-context" aria-label="上下文使用量">
+                <ContextRing usage={ctxUsage} />
+                <span>上下文使用量</span>
               </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
 

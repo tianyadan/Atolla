@@ -466,6 +466,18 @@ html.theme-light .mobile-nav-drawer-brand-logo.is-dark {
 .mobile-nav-drawer-instance-copy small i.is-idle {
   background: var(--online, #16a34a);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--online, #16a34a) 28%, transparent);
+  animation: mobile-status-breathe-green 1.6s ease-in-out infinite;
+}
+
+.mobile-nav-drawer-instance-copy small i.is-lan {
+  background: #3b82f6;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #3b82f6 28%, transparent);
+  animation: mobile-status-breathe-blue 1.6s ease-in-out infinite;
+}
+
+.mobile-nav-drawer-instance-copy small .is-lan-text {
+  color: #2563eb;
+  font-weight: 650;
 }
 
 .mobile-nav-drawer-instance-copy small i.is-offline {
@@ -961,6 +973,11 @@ html.theme-light .mobile-nav-drawer-brand-logo.is-dark {
 @keyframes mobile-status-breathe-green {
   0%, 100% { opacity: 0.55; box-shadow: 0 0 0 0.12rem color-mix(in srgb, #22c55e 14%, transparent); }
   50% { opacity: 1; box-shadow: 0 0 0 0.28rem color-mix(in srgb, #22c55e 28%, transparent); }
+}
+
+@keyframes mobile-status-breathe-blue {
+  0%, 100% { opacity: 0.55; box-shadow: 0 0 0 0.12rem color-mix(in srgb, #3b82f6 14%, transparent); }
+  50% { opacity: 1; box-shadow: 0 0 0 0.28rem color-mix(in srgb, #3b82f6 28%, transparent); }
 }
 
 @keyframes mobile-status-breathe-orange {
@@ -1832,6 +1849,15 @@ html.native-app .login-home {
   .login-logo {
     animation: none;
   }
+
+  .connection-entry,
+  .login-form-enter {
+    animation: none;
+  }
+
+  .connection-entry-card {
+    transition-duration: 1ms;
+  }
 }
 
 .login-product {
@@ -1859,6 +1885,79 @@ html.native-app .login-home {
   border-radius: 16px;
   padding: 1.15rem;
 }
+
+/* 首次连接：两张大触达卡替代预先暴露全部输入项。动画只改变透明度与位移，避免布局抖动。 */
+.connection-entry {
+  width: 100%;
+  display: grid;
+  gap: 0.75rem;
+  animation: connection-entry-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes connection-entry-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.connection-entry-card {
+  width: 100%;
+  min-height: 5.6rem;
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) 1rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.connection-entry-card-primary {
+  border-color: color-mix(in srgb, var(--text) 52%, var(--border));
+  box-shadow: 0 10px 28px rgb(0 0 0 / 10%);
+}
+
+.connection-entry-card:active:not(:disabled) { transform: scale(0.985); }
+.connection-entry-card:focus-visible,
+.login-back:focus-visible { outline: 3px solid color-mix(in srgb, var(--text) 46%, transparent); outline-offset: 3px; }
+
+.connection-entry-icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--text-h);
+  color: var(--surface);
+  font-size: 1.45rem;
+  font-weight: 650;
+}
+
+.connection-entry-copy { min-width: 0; display: grid; gap: 0.2rem; }
+.connection-entry-copy strong { font-size: 1rem; font-weight: 650; }
+.connection-entry-copy small { color: var(--muted); font-size: 0.82rem; line-height: 1.35; }
+.connection-entry-arrow { color: var(--muted); font-size: 1.65rem; line-height: 1; }
+.login-connection-error { margin: 0.25rem 0 0; }
+
+.login-form-enter { animation: connection-entry-enter 220ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.login-back {
+  min-height: 2.75rem;
+  margin: -0.35rem 0 0.55rem -0.5rem;
+  padding: 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.login-form-title { margin: 0 0 0.9rem; font-size: 1.1rem; font-weight: 650; }
 
 .login-form .field {
   margin-top: 0;
@@ -2820,23 +2919,21 @@ html.native-app .login-home {
   border-bottom: 0;
 }
 
-/* Logout under settings menu — red dashed frame */
+/* Compact destructive action: full iOS-sized hit target without a banner-like frame. */
 .ios-settings-logout-box {
-  margin-top: 0.35rem;
-  padding: 0.65rem;
-  border-radius: 12px;
-  border: 1.5px dashed color-mix(in srgb, #ef4444 75%, transparent);
-  background: color-mix(in srgb, #ef4444 6%, transparent);
+  margin-top: 0.55rem;
+  padding: 0;
 }
 
 .ios-settings-logout-btn {
   display: block;
   width: 100%;
-  border: 0;
-  border-radius: 10px;
-  padding: 0.78rem 0.85rem;
-  background: transparent;
-  color: #ef4444;
+  min-height: 2.75rem;
+  border: 1px solid #fca5a5;
+  border-radius: 0.65rem;
+  padding: 0.55rem 1rem;
+  background: #fff;
+  color: #dc2626;
   font: inherit;
   font-size: 0.95rem;
   font-weight: 600;
@@ -2846,7 +2943,7 @@ html.native-app .login-home {
 }
 
 .ios-settings-logout-btn:active {
-  background: color-mix(in srgb, #ef4444 10%, transparent);
+  background: #fef2f2;
 }
 
 .ios-settings-row.is-static {
@@ -2958,6 +3055,128 @@ html.native-app .login-home {
 .ios-settings-save:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+/* Unified cloud/LAN connection screen: distinct sections prevent credentials
+ * from visually competing with the active transport and relay endpoint. */
+.relay-connection-settings {
+  gap: 0.95rem;
+}
+
+.connection-route-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.3rem 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.connection-route-card > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.connection-route-card > strong {
+  font-size: 0.95rem;
+  color: var(--text-h);
+}
+
+.connection-route-card > p {
+  grid-column: 1 / -1;
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.connection-route-card.is-success {
+  border-color: color-mix(in srgb, #16a34a 55%, var(--border));
+  background: color-mix(in srgb, #16a34a 10%, var(--surface));
+}
+
+.connection-route-card.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.connection-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.85rem;
+}
+
+.connection-instance {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-h);
+  font-size: 0.82rem;
+}
+
+.connection-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.ios-settings-action {
+  width: 100%;
+  padding: 0.78rem 0.85rem;
+  border: 1px solid var(--text-h);
+  border-radius: 10px;
+  background: var(--text-h);
+  color: var(--surface);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ios-settings-action.secondary {
+  background: transparent;
+  color: var(--text-h);
+}
+
+.ios-settings-action.danger {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+
+.ios-settings-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Fixed so the result remains visible even when a long credentials form is scrolled. */
+.settings-feedback-toast {
+  position: fixed;
+  z-index: 50;
+  top: max(0.7rem, env(safe-area-inset-top, 0px));
+  left: 50%;
+  width: min(calc(100vw - 2rem), 34rem);
+  transform: translateX(-50%);
+  padding: 0.8rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 16%);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.settings-feedback-toast.is-success {
+  border-color: color-mix(in srgb, #16a34a 65%, transparent);
+  background: #15803d;
+  color: #fff;
+}
+
+.settings-feedback-toast.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 65%, transparent);
+  background: #dc2626;
+  color: #fff;
 }
 
 .ios-settings-about-hero {
@@ -4116,6 +4335,203 @@ html.theme-light .composer-send-btn.is-interrupt {
 
 .chat-composer-shell .chat-attach-preview {
   margin: 0 0 0.15rem;
+}
+
+/* iOS 原生风格输入器：仅保留「更多 + 文本 + 发送」主路径。 */
+.chat-composer {
+  position: relative;
+  gap: 0.45rem;
+  padding: 0.55rem 1rem calc(0.65rem + max(env(safe-area-inset-bottom, 0px), var(--kbd-inset, 0px)));
+  background: var(--bg);
+}
+
+.chat-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.composer-input-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-composer-row .chat-composer-field {
+  flex: 1 1 auto;
+  display: block;
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+  max-height: 160px;
+  margin: 0;
+  padding: 10px 52px 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 22px;
+  background: var(--surface);
+  color: var(--text-h);
+  font: inherit;
+  font-size: 16px;
+  line-height: 24px;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.chat-composer-row .chat-composer-field:focus {
+  border-color: color-mix(in srgb, var(--text-h) 32%, var(--border));
+}
+
+.composer-round-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  flex: 0 0 44px;
+  border-radius: 50%;
+}
+
+.composer-round-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.composer-round-btn.is-open {
+  transform: rotate(45deg);
+  background: color-mix(in srgb, var(--text) 7%, var(--surface));
+}
+
+.composer-round-btn:active:not(:disabled),
+.chat-composer-row .composer-send-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+/* 发送键属于输入框本身，文本预留空间避免与按钮重叠。 */
+.composer-input-wrap .composer-send-btn {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+}
+
+/* 运行中将输入框内的主发送位切换为停止；黄色发送键独立承担插话。 */
+.composer-input-wrap .composer-send-btn.is-stop {
+  background: var(--danger, #ef4444);
+  color: #fff;
+}
+
+.chat-composer-row > .composer-interrupt-btn {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.composer-round-btn:focus-visible,
+.composer-menu button:focus-visible {
+  outline: 2px solid var(--text-h);
+  outline-offset: 2px;
+}
+
+.composer-menu-badge {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border: 2px solid var(--bg);
+  border-radius: 999px;
+  background: var(--text-h);
+  color: var(--surface);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 12px;
+}
+
+/* 弹出而非堆叠：低频入口不占用对话与输入空间。 */
+.composer-menu {
+  position: absolute;
+  z-index: 12;
+  left: 1rem;
+  right: 1rem;
+  bottom: calc(100% + 0.45rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.1);
+  animation: composer-menu-enter 180ms ease-out;
+}
+
+.composer-menu button,
+.composer-menu-context {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.48rem 0.7rem;
+  border: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.76rem;
+  text-align: left;
+}
+
+.composer-menu button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.composer-menu button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, var(--surface));
+}
+
+.composer-menu button:disabled { opacity: 0.42; cursor: not-allowed; }
+.composer-menu button > svg { flex: 0 0 auto; }
+.composer-menu button > span,
+.composer-menu-context > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-menu button > em { margin-left: auto; font-style: normal; font-size: 0.68rem; color: var(--muted); }
+.composer-menu button > small { margin-left: auto; color: var(--muted); font-size: 0.66rem; }
+.composer-menu-dot { width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: #22c55e; }
+.composer-menu-context .ctx-ring { flex: 0 0 auto; }
+
+@keyframes composer-menu-enter {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-menu { animation: none; }
+  .composer-round-btn, .chat-composer-row .composer-send-btn { transition: none; }
 }
 
 @media (max-width: 420px) {

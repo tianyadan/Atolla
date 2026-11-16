@@ -33,6 +33,7 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/settings/otp" element={<SettingsOtpPage />} />
           <Route path="/settings/relay" element={<SettingsRelayPage />} />
+          <Route path="/settings/lan" element={<Navigate to="/settings/relay" replace />} />
           <Route path="/settings/language" element={<SettingsLanguagePage />} />
           <Route path="/settings/preferences" element={<SettingsPreferencesPage />} />
           <Route path="/settings/about" element={<SettingsAboutPage />} />

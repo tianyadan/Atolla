@@ -48,6 +48,7 @@ import {
   rememberChatSelection,
 } from '../utils/chatResume'
 import { rememberSettingsBack } from '../utils/settingsNav'
+import { hasLanInstanceAccess } from '../utils/connectionSession'
 
 type StatusFilter = 'online' | 'offline'
 
@@ -137,7 +138,7 @@ export function InstancesPage() {
       setError('目标实例不存在或已被移除')
       return
     }
-    if (hasUnlockToken(unlockTargetId)) {
+    if (hasUnlockToken(unlockTargetId) || hasLanInstanceAccess(unlockTargetId)) {
       if (deepLinkTarget) {
         navigateToDeepLinkChat(navigate, deepLinkTarget, {
           pathname: window.location.pathname,
@@ -225,7 +226,7 @@ export function InstancesPage() {
   /** Enter digital-agent list (unlock if needed); skip legacy「功能」hub */
   function onEnterClick(inst: PublicInstance) {
     setMenuId(null)
-    if (hasUnlockToken(inst.instance_id)) {
+    if (hasUnlockToken(inst.instance_id) || hasLanInstanceAccess(inst.instance_id)) {
       navigate(`/instances/${encodeURIComponent(inst.instance_id)}/agents`)
       return
     }

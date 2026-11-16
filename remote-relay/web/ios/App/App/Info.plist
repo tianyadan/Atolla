@@ -69,6 +69,10 @@
 	<string>用于确认发送实例解锁验证码</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于连接同一 Wi-Fi 下的 Atolla 中继服务</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_atolla._tcp</string>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于在对话中选择图片发送给数字员工</string>
 	<key>NSSupportsLiveActivities</key>

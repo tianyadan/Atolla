@@ -7,6 +7,9 @@ import {
   syncNativeUnlockToken,
 } from './nativeCredentials'
 import { resolveApiUrl } from './utils/apiBase'
+import { invalidateRevokedLanSession } from './utils/connectionSession'
+import { mergeInstanceSources, type InstanceConnection } from './utils/instanceSources'
+import { LanActionIdempotencyRegistry, LanAuthorizationError, callLanAction, callLanRead, checkLanConnection, decideLanActionRecovery, getLanConnection, listLanConnections, recordLanFailure, recordLanRoute } from './utils/lanConnection'
 
 /** Site JWT storage key */
 export const TOKEN_KEY = 'relay_site_token'
@@ -51,6 +54,8 @@ export type PublicInstance = {
   unlock_otp_smtp_ok?: boolean
   /** SMTP + 站点收件邮箱均就绪 */
   unlock_otp_ready?: boolean
+  /** The selected transport for this instance in the mobile client. */
+  connection?: InstanceConnection
 }
 
 export type UnlockOtpStatus = {
@@ -185,6 +190,18 @@ export function hasUnlockToken(instanceId: string): boolean {
 }
 
 type ApiError = { error?: string }
+const lanActionKeys = new LanActionIdempotencyRegistry()
+
+/**
+ * Forget a revoked QR credential before a route-level 401 handler redirects
+ * to Login. Without this, Login sees the stale LAN session as valid and sends
+ * the App straight back to the protected page, creating a white-screen loop.
+ */
+function handleLanAuthorizationFailure(instanceId: string, error: unknown): void {
+  if (error instanceof LanAuthorizationError) {
+    invalidateRevokedLanSession(instanceId)
+  }
+}
 
 /** Extract instance id from /api/instances/:id/... paths */
 function instanceIdFromPath(path: string): string | null {
@@ -197,6 +214,124 @@ function instanceIdFromPath(path: string): string | null {
   }
 }
 
+/** Maps the currently supported mobile writes to the local Mac action registry.
+ * Every mapped write receives an idempotency fingerprint before dispatch. */
+function lanActionForRequest(path: string, method: string, body?: BodyInit | null): { action: string; payload: Record<string, unknown>; idempotencyFingerprint: string } | null {
+  if (method !== 'POST' && method !== 'DELETE') return null
+  const imageMatch = /^\/api\/instances\/[^/]+\/agents\/([^/]+)\/chat-images$/.exec(path)
+  if (method === 'POST' && imageMatch) {
+    const payload = typeof body === 'string' ? (JSON.parse(body || '{}') as Record<string, unknown>) : {}
+    payload.agent_id = decodeURIComponent(imageMatch[1])
+    return { action: 'chat.image.upload', payload, idempotencyFingerprint: `${path}\n${String(body || '')}` }
+  }
+  const taskQueueMatch = /^\/api\/instances\/[^/]+\/agents\/([^/]+)\/task-queue(?:\/(interrupt|continue|clear-done)|\/(\d+)\/(cancel|update))?$/.exec(path)
+  if (method === 'POST' && taskQueueMatch) {
+    const payload = typeof body === 'string' ? (JSON.parse(body || '{}') as Record<string, unknown>) : {}
+    payload.agent_id = decodeURIComponent(taskQueueMatch[1])
+    if (taskQueueMatch[3]) payload.task_id = Number(taskQueueMatch[3])
+    const suffix = taskQueueMatch[2] || taskQueueMatch[4] || 'enqueue'
+    const actionBySuffix: Record<string, string> = {
+      enqueue: 'agent.task_queue.enqueue',
+      interrupt: 'agent.task_queue.interrupt',
+      continue: 'agent.task_queue.continue',
+      cancel: 'agent.task_queue.cancel',
+      update: 'agent.task_queue.update',
+      'clear-done': 'agent.task_queue.clear_done',
+    }
+    return {
+      action: actionBySuffix[suffix],
+      payload,
+      idempotencyFingerprint: `${path}\n${String(body || '')}`,
+    }
+  }
+  const match = /^\/api\/instances\/[^/]+\/agents\/([^/]+)\/(ask|stop|task-plan|auto-review|auto-approve-all)$/.exec(path)
+  if (!match) return null
+  const payload = typeof body === 'string' ? (JSON.parse(body || '{}') as Record<string, unknown>) : {}
+  payload.agent_id = decodeURIComponent(match[1])
+  const actionByEndpoint: Record<string, string> = {
+    ask: 'agent.ask', stop: 'agent.stop', 'task-plan': 'agent.set_task_plan',
+    'auto-review': 'agent.set_auto_review', 'auto-approve-all': 'agent.set_auto_approve_all',
+  }
+  return { action: actionByEndpoint[match[2]], payload, idempotencyFingerprint: `${path}\n${String(body || '')}` }
+}
+
+/** Maps only LAN Facade reads that already have a local DTO implementation.
+ * Unknown reads deliberately remain cloud-backed until their contract is
+ * added to the Mac Facade; guessing here would create stale or partial UI. */
+function lanReadForRequest(path: string, method: string): string | null {
+  if (method !== 'GET') return null
+  const url = new URL(path, 'http://atolla.invalid')
+  const segments = url.pathname.split('/').filter(Boolean)
+  if (url.pathname === '/api/instances') return '/lan/v1/reads/instances'
+  if (segments[0] !== 'api' || segments[1] !== 'instances' || !segments[2]) return null
+  const instanceId = decodeURIComponent(segments[2])
+  const base = new URLSearchParams({ instance_id: instanceId })
+  if (segments.length === 4 && segments[3] === 'agents') {
+    return `/lan/v1/reads/agents?${base.toString()}`
+  }
+  if (segments.length === 5 && segments[3] === 'permissions' && segments[4] === 'pending') {
+    return `/lan/v1/reads/permissions?${base.toString()}`
+  }
+  if (segments.length === 5 && segments[3] === 'engines' && segments[4] === 'usage') {
+    copyLanQuery(base, url, ['fresh'])
+    return lanReadActionPath('engines.usage.get', base)
+  }
+  if (segments.length === 4 && segments[3] === 'notify-prefs') {
+    return lanReadActionPath('notify.prefs.get', base)
+  }
+  if (segments.length === 5 && segments[3] === 'jevos' && segments[4] === 'settings') {
+    copyLanQuery(base, url, ['force'])
+    return lanReadActionPath('jevos.settings.get', base)
+  }
+  if (segments.length < 6 || segments[3] !== 'agents') return null
+  const agentId = decodeURIComponent(segments[4])
+  base.set('agent_id', agentId)
+  if (segments.length === 6 && segments[5] === 'tasks') {
+    return `/lan/v1/reads/tasks?${base.toString()}`
+  }
+  if (segments.length === 6 && segments[5] === 'messages') {
+    for (const key of ['before_id', 'limit']) {
+      const value = url.searchParams.get(key)
+      if (value) base.set(key, value)
+    }
+    return `/lan/v1/reads/messages?${base.toString()}`
+  }
+  if (segments.length === 7 && segments[5] === 'permissions' && segments[6] === 'pending') {
+    return `/lan/v1/reads/permissions?${base.toString()}`
+  }
+  if (segments.length === 6 && segments[5] === 'task-queue') {
+    return lanReadActionPath('agent.task_queue.list', base)
+  }
+  if (segments.length === 7 && segments[5] === 'task-plan' && segments[6] === 'active') {
+    return lanReadActionPath('agent.task_plan.active', base)
+  }
+  if (segments.length === 6 && segments[5] === 'settings') {
+    return lanReadActionPath('agent.settings.get', base)
+  }
+  if (segments.length === 6 && segments[5] === 'skills') {
+    return lanReadActionPath('agent.skills.list', base)
+  }
+  if (segments.length === 7 && segments[5] === 'skills' && segments[6] === 'store') {
+    copyLanQuery(base, url, ['q', 'category', 'risk'])
+    return lanReadActionPath('agent.skills.store', base)
+  }
+  if (segments.length === 6 && segments[5] === 'legacy-mounts') {
+    return lanReadActionPath('agent.legacy_mounts.list', base)
+  }
+  return null
+}
+
+function copyLanQuery(target: URLSearchParams, source: URL, keys: string[]): void {
+  for (const key of keys) {
+    const value = source.searchParams.get(key)
+    if (value) target.set(key, value)
+  }
+}
+
+function lanReadActionPath(action: string, query: URLSearchParams): string {
+  return `/lan/v1/reads/actions/${encodeURIComponent(action)}?${query.toString()}`
+}
+
 /** JSON fetch with bearer auth (+ unlock header for instance detail); throws on non-OK */
 type ApiRequestInit = RequestInit & { nativeReadTimeout?: number }
 
@@ -204,6 +339,71 @@ async function request<T>(
   path: string,
   init: ApiRequestInit = {},
 ): Promise<T> {
+	const method = String(init.method || 'GET').toUpperCase()
+	const lan = lanActionForRequest(path, method, init.body)
+	const lanRead = lanReadForRequest(path, method)
+	if (lan || lanRead) {
+		const instanceId = instanceIdFromPath(path)
+		const connection = getLanConnection(instanceId || undefined)
+		if (connection.strategy !== 'cloud_only' && connection.baseUrl && connection.deviceId && connection.deviceSecret) {
+			if (lan) {
+				try {
+					await checkLanConnection(connection)
+				} catch (error) {
+					handleLanAuthorizationFailure(instanceId || '', error)
+					if (error instanceof LanAuthorizationError) throw error
+					if (decideLanActionRecovery({ phase: 'preflight_failed', strategy: connection.strategy }) !== 'cloud_fallback') throw error
+					lanActionKeys.clearAfterKnownOutcome(lan.idempotencyFingerprint)
+					// No action request has been dispatched, so the existing cloud
+					// request is safe to use as the fallback.
+					recordLanFailure(instanceId || '', error)
+					return requestCloud<T>(path, init)
+				}
+				try {
+					const idempotencyKey = lanActionKeys.acquire(lan.idempotencyFingerprint)
+					const result = await callLanAction<T>(connection, lan.action, lan.payload, idempotencyKey)
+					lanActionKeys.clearAfterKnownOutcome(lan.idempotencyFingerprint)
+					recordLanRoute(instanceId || '', { channel: 'lan', failureCount: 0, lastSuccessAt: Date.now() })
+					return result
+				} catch (error) {
+					handleLanAuthorizationFailure(instanceId || '', error)
+					// The action may have reached Mac. Never replay it on cloud without
+					// a shared idempotency protocol on the remote relay.
+					lanActionKeys.keepForUnknownOutcome(lan.idempotencyFingerprint)
+					recordLanFailure(instanceId || '', error)
+					throw error
+				}
+			}
+			try { const value = await callLanRead<T>(connection, lanRead as string); recordLanRoute(instanceId || '', { channel: 'lan', failureCount: 0, lastSuccessAt: Date.now() }); return value }
+			catch (error) {
+				handleLanAuthorizationFailure(instanceId || '', error)
+				recordLanFailure(instanceId || '', error)
+				if (error instanceof LanAuthorizationError || connection.strategy === 'lan_only') throw error
+			}
+		}
+	}
+	const localConnection = getLanConnection(instanceIdFromPath(path) || undefined)
+	if (
+		path !== '/api/auth/login' &&
+		!getToken() &&
+		localConnection.strategy === 'lan_only' &&
+		localConnection.baseUrl &&
+		localConnection.deviceId &&
+		localConnection.deviceSecret
+	) {
+		// A first-time LAN user has deliberately not configured cloud access.
+		// 登录接口是例外：用户正是在首次登录页提供中继地址和密码，
+		// 不能因为旧的 LAN-only 配对记录而拦截这次显式的远程登录。
+		// 其它业务请求仍阻止落到空的云端地址，避免产生误导性网络错误。
+		throw new Error('此功能需要配置远程中继。请在“中继与连接”添加服务器地址并完成登录。')
+	}
+	return requestCloud<T>(path, init)
+}
+
+/** Existing Tencent Cloud request path. Kept separate so LAN write preflight
+ * can safely choose it only before any local side effect is dispatched. */
+async function requestCloud<T>(path: string, init: ApiRequestInit): Promise<T> {
+	const method = String(init.method || 'GET').toUpperCase()
 	const { nativeReadTimeout, ...fetchInit } = init
 	const headers = new Headers(init.headers)
   if (!headers.has('Content-Type') && init.body) {
@@ -221,7 +421,6 @@ async function request<T>(
 
   // App 壳内无同源代理，需拼 VITE_API_BASE / 设置里的中继地址
   const url = resolveApiUrl(path)
-  const method = String(init.method || 'GET').toUpperCase()
   const headerMap: Record<string, string> = {}
   headers.forEach((value, key) => {
     headerMap[key] = value
@@ -317,8 +516,30 @@ export async function fetchMe(): Promise<void> {
 
 /** List registered instances */
 export async function fetchInstances(): Promise<PublicInstance[]> {
-  const data = await request<{ instances: PublicInstance[] }>('/api/instances')
-  return data.instances
+  const lanConnections = listLanConnections()
+  const lanResults = await Promise.allSettled(
+    lanConnections.map((connection) => callLanRead<{ instances: PublicInstance[] }>(connection, '/lan/v1/reads/instances')),
+  )
+  const lanInstances = lanResults.flatMap((result) =>
+    result.status === 'fulfilled' && Array.isArray(result.value.instances) ? result.value.instances : [],
+  )
+
+  let serverInstances: PublicInstance[] = []
+  let serverError: unknown
+  if (getToken()) {
+    try {
+      const data = await requestCloud<{ instances: PublicInstance[] }>('/api/instances', {})
+      serverInstances = Array.isArray(data.instances) ? data.instances : []
+    } catch (error) {
+      serverError = error
+    }
+  }
+  if (lanInstances.length === 0 && serverError) throw serverError
+  if (lanInstances.length === 0 && !getToken() && lanConnections.length > 0) {
+    const failed = lanResults.find((result) => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
+  }
+  return mergeInstanceSources(serverInstances, lanInstances) as PublicInstance[]
 }
 
 /** 注销：撤销实例 Mac 密码 */

@@ -64,6 +64,7 @@ func newEngine(cfg config.Config, h *handler.Handler) *gin.Engine {
 		r.Use(auth.GinIPAllowlist(cfg.AllowedIPs))
 	}
 	h.Register(r)
+	registerWebApp(r, cfg.WebDir)
 	return r
 }
 

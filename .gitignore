@@ -33,6 +33,7 @@ server/main
 # ===== 本地运行数据 / 日志 =====
 /data/
 /logs/
+.atolla/
 *.log
 /server/*@tcp*/
 *.db

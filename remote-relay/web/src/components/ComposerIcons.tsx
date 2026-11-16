@@ -2,6 +2,36 @@
 
 type IconProps = { size?: number }
 
+/** 更多功能入口 */
+export function PlusIcon({ size = 22 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
+
+/** 任务队列 */
+export function QueueIcon({ size = 21 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8 6h11M8 12h11M8 18h11" />
+      <circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+/** 命令审批设置 */
+export function SlidersIcon({ size = 21 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden>
+      <path d="M4 7h16M4 17h16M9 4v6M15 14v6" />
+    </svg>
+  )
+}
+
 /** 相册 / 附图 */
 export function ImageIcon({ size = 22 }: IconProps) {
   return (

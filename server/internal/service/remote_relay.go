@@ -70,6 +70,9 @@ func (s *Service) Shutdown() {
 	s.remoteBridgeShutdown.Do(func() {
 		s.closeAgentRunners()
 		s.StopRemoteBridge()
+		if s.LanRelay != nil {
+			s.LanRelay.Stop()
+		}
 	})
 }
 

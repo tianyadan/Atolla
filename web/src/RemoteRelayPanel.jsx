@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
 import { deployLogExpiresAt, shouldShowDeployProgress } from './remoteRelayPanelModel.js'
 
 const API = '/api'
@@ -141,6 +142,23 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
   const [mobileErr, setMobileErr] = useState('')
   const [kickId, setKickId] = useState('')
 
+  // 局域网中继与云端中继完全隔离：此处只管理本机 LAN Relay，不改云端配置。
+  const [lanConfig, setLanConfig] = useState({ enabled: false, strategy: 'auto', port: 7943 })
+  const [lanDevices, setLanDevices] = useState([])
+  const [lanStatus, setLanStatus] = useState(null)
+  const [lanAudits, setLanAudits] = useState([])
+  const [lanLoading, setLanLoading] = useState(false)
+  const [lanBusy, setLanBusy] = useState(false)
+  const [lanError, setLanError] = useState('')
+  const [lanPairName, setLanPairName] = useState('iPhone')
+  const [lanPairID, setLanPairID] = useState('')
+  const [lanPairPayload, setLanPairPayload] = useState('')
+  const [lanPairExpiresAt, setLanPairExpiresAt] = useState('')
+  /** 服务端返回的扫码状态：pending | scanned | paired | expired | invalid */
+  const [lanPairStatus, setLanPairStatus] = useState(null)
+  const [lanPairNow, setLanPairNow] = useState(() => Date.now())
+  const [lanRevokeID, setLanRevokeID] = useState('')
+
   const [deployHost, setDeployHost] = useState('')
   const [deployHostHistory, setDeployHostHistory] = useState(() => loadDeployHostHistory())
   const [deployHostSuggestOpen, setDeployHostSuggestOpen] = useState(false)
@@ -240,6 +258,159 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
   useEffect(() => {
     if (active) load()
   }, [active, load])
+
+  const loadLanRelay = useCallback(async () => {
+    setLanLoading(true)
+    setLanError('')
+    try {
+      const [configRes, devicesRes, statusRes, auditsRes] = await Promise.all([
+        fetch(`${API}/admin/lan-relay/config`, { headers: authHeaders() }),
+        fetch(`${API}/admin/lan-relay/devices`, { headers: authHeaders() }),
+        fetch(`${API}/admin/lan-relay/status`, { headers: authHeaders() }),
+        fetch(`${API}/admin/lan-relay/audits`, { headers: authHeaders() }),
+      ])
+      if (configRes.status === 401 || devicesRes.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const config = await configRes.json().catch(() => ({}))
+      const devices = await devicesRes.json().catch(() => ({}))
+      const status = await statusRes.json().catch(() => ({}))
+      const audits = await auditsRes.json().catch(() => ({}))
+      if (!configRes.ok) throw new Error(config.error || '加载局域网中继配置失败')
+      if (!devicesRes.ok) throw new Error(devices.error || '加载已配对设备失败')
+      setLanConfig({ enabled: !!config.enabled, strategy: config.strategy || 'auto', port: config.port || 7943 })
+      setLanDevices(Array.isArray(devices.devices) ? devices.devices : [])
+      setLanStatus(statusRes.ok ? status : null)
+      setLanAudits(auditsRes.ok && Array.isArray(audits.items) ? audits.items : [])
+    } catch (e) {
+      setLanError(String(e.message || e))
+    } finally {
+      setLanLoading(false)
+    }
+  }, [authHeaders, onUnauthorized])
+
+  useEffect(() => {
+    if (active) void loadLanRelay()
+  }, [active, loadLanRelay])
+
+  async function saveLanRelay(e) {
+    e?.preventDefault?.()
+    if (lanBusy) return
+    setLanBusy(true)
+    setLanError('')
+    try {
+      const res = await fetch(`${API}/admin/lan-relay/config`, {
+        method: 'PUT',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(lanConfig),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '保存局域网中继失败')
+      setLanConfig({ enabled: !!data.enabled, strategy: data.strategy || 'auto', port: data.port || 7943 })
+      setMsg('局域网直连策略已保存。')
+    } catch (e) {
+      setLanError(String(e.message || e))
+    } finally {
+      setLanBusy(false)
+    }
+  }
+
+  async function pairLanDevice() {
+    if (lanBusy || !lanPairName.trim()) return
+    setLanBusy(true)
+    setLanError('')
+    setLanPairID('')
+    setLanPairStatus(null)
+    setLanPairPayload('')
+    setLanPairExpiresAt('')
+    try {
+      const res = await fetch(`${API}/admin/lan-relay/pair`, {
+        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: lanPairName.trim() }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '创建配对失败')
+      setLanPairID(data.pairing_id || '')
+      setLanPairPayload(data.qr_code_payload || '')
+      setLanPairExpiresAt(data.expires_at || '')
+      setLanPairStatus({ status: 'pending', expires_at: data.expires_at || '' })
+      setLanPairNow(Date.now())
+      setMsg('二维码五分钟内有效；iPhone 扫描后此二维码会立即更新状态。')
+      await loadLanRelay()
+    } catch (e) {
+      setLanError(String(e.message || e))
+    } finally {
+      setLanBusy(false)
+    }
+  }
+
+  /** 轮询配对会话：未扫描 → 已扫描 → 已配对 / 已过期。 */
+  useEffect(() => {
+    if (!active || !lanPairID || !lanPairPayload) return
+    if (lanPairStatus?.status === 'paired' || lanPairStatus?.status === 'expired' || lanPairStatus?.status === 'invalid') return
+    let cancelled = false
+    let timer = null
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API}/admin/lan-relay/pair/${encodeURIComponent(lanPairID)}`, { headers: authHeaders() })
+        if (res.status === 401) { onUnauthorized?.(); return }
+        if (cancelled) return
+        if (res.status === 404) { setLanPairStatus({ status: 'invalid' }); return }
+        const data = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (!res.ok) { timer = window.setTimeout(poll, 2000); return }
+        setLanPairStatus(data)
+        if (data.status === 'paired') {
+          setMsg(`配对成功：${data.device_name || lanPairName.trim() || 'iPhone'} 已加入局域网设备。`)
+          void loadLanRelay()
+          return
+        }
+        if (data.status === 'pending' || data.status === 'scanned') {
+          timer = window.setTimeout(poll, 1200)
+        }
+      } catch {
+        if (!cancelled) timer = window.setTimeout(poll, 2000)
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [active, lanPairID, lanPairPayload, lanPairStatus?.status, authHeaders, onUnauthorized, loadLanRelay, lanPairName])
+
+  /** 本地倒计时；即使轮询失败也会在到点时收起二维码。 */
+  useEffect(() => {
+    if (!active || !lanPairPayload) return
+    if (lanPairStatus?.status === 'paired' || lanPairStatus?.status === 'expired' || lanPairStatus?.status === 'invalid') return
+    const timer = window.setInterval(() => setLanPairNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [active, lanPairPayload, lanPairStatus?.status])
+
+  async function revokeLanDevice(device) {
+    const ids = Array.isArray(device?.ids) && device.ids.length ? device.ids : [device?.id].filter(Boolean)
+    if (!ids.length || lanRevokeID || !window.confirm('撤销后该 iPhone 将立即无法使用局域网直连，确定？')) return
+    setLanRevokeID(device.id)
+    setLanError('')
+    try {
+      const res = await fetch(`${API}/admin/lan-relay/devices/revoke`, {
+        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ ids }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '撤销设备失败')
+      setMsg('已撤销该局域网设备。')
+      await loadLanRelay()
+    } catch (e) {
+      setLanError(String(e.message || e))
+    } finally {
+      setLanRevokeID('')
+    }
+  }
 
   /** 拉取移动端解锁会话列表 */
   const loadMobileSessions = useCallback(async () => {
@@ -723,6 +894,19 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
     }
   }
 
+  const lanPairExpiresMs = lanPairExpiresAt ? new Date(lanPairExpiresAt).getTime() : 0
+  const lanPairRemaining = lanPairExpiresMs ? Math.max(0, Math.ceil((lanPairExpiresMs - lanPairNow) / 1000)) : 0
+  const lanPairStatusName = lanPairStatus?.status || ''
+  const lanPairPhase = (() => {
+    if (lanPairStatusName === 'paired' || lanPairStatusName === 'scanned' || lanPairStatusName === 'invalid') return lanPairStatusName
+    if (!lanPairPayload) return ''
+    if (lanPairStatusName === 'expired') return 'expired'
+    if (!lanPairExpiresMs || lanPairRemaining <= 0) return 'expired'
+    return 'pending'
+  })()
+  const lanPairCountdown = `${Math.floor(lanPairRemaining / 60)}:${String(lanPairRemaining % 60).padStart(2, '0')}`
+  const activeLanDevices = lanDevices.filter((device) => !device.revoked_at)
+
   const running = !!status?.running
   const registered = !!status?.registered
   const lastError = String(status?.last_error || '').trim()
@@ -746,6 +930,114 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       {err && <pre className="error">{err}</pre>}
       {msg && <p className="empty-hint">{msg}</p>}
       {loading && !baseUrl && !instanceId && <p className="empty">加载中…</p>}
+
+      <article className="version-card rr-config-card" style={{ order: 20 }}>
+        <div className="version-head">
+          <span className="version-tag">局域网直连（Beta）</span>
+          <button type="button" className="ghost" disabled={lanLoading || lanBusy} onClick={() => void loadLanRelay()}>
+            {lanLoading ? '刷新中…' : '刷新'}
+          </button>
+        </div>
+        <p className="empty-hint">iPhone 与 Mac 可通信时优先直连；自动模式不可达会回退腾讯云。HTTP 仅适用于可信网络，内容不加密。</p>
+        {lanError ? <pre className="error" style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>{lanError}</pre> : null}
+        <form className="tm-form-row" onSubmit={saveLanRelay} style={{ maxWidth: 640 }}>
+          <label>
+            <span>启用局域网中继</span>
+            <input type="checkbox" checked={lanConfig.enabled} onChange={(e) => setLanConfig((prev) => ({ ...prev, enabled: e.target.checked }))} />
+          </label>
+          <label>
+            <span>移动端连接策略</span>
+            <select value={lanConfig.strategy} onChange={(e) => setLanConfig((prev) => ({ ...prev, strategy: e.target.value }))}>
+              <option value="auto">自动：局域网优先，云端回退</option>
+              <option value="lan_only">仅局域网</option>
+              <option value="cloud_only">仅腾讯云</option>
+            </select>
+          </label>
+          <label>
+            <span>局域网端口</span>
+            <input type="number" min={1024} max={65535} value={lanConfig.port} onChange={(e) => setLanConfig((prev) => ({ ...prev, port: Number(e.target.value) || 7943 }))} />
+          </label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button type="submit" className="primary" disabled={lanBusy || lanLoading}>{lanBusy ? '保存中…' : '保存局域网策略'}</button>
+            <span className="empty-hint" style={{ margin: 0 }}>{lanConfig.enabled ? (lanStatus?.running ? `监听中 :${lanStatus.port}${lanStatus.bonjour ? ' · Bonjour 已发布' : ''}` : `未监听${lanStatus?.error ? `：${lanStatus.error}` : ''}`) : '关闭时 iPhone 不会使用局域网通道。'}</span>
+          </div>
+        </form>
+        <div className="rr-password-block" style={{ marginTop: 16 }}>
+          <div className="rr-password-head"><span>配对 iPhone</span><span className="rr-reg-tag unset">二维码一次有效</span></div>
+          <div className="rr-password-actions">
+            <input aria-label="设备名称" type="text" value={lanPairName} onChange={(e) => setLanPairName(e.target.value)} placeholder="例如：我的 iPhone" />
+            <button type="button" className="ghost" disabled={lanBusy || !lanPairName.trim()} onClick={() => void pairLanDevice()}>{lanBusy ? '处理中…' : lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? '重新生成二维码' : '生成配对二维码'}</button>
+          </div>
+          {lanPairPayload ? (
+            <div className="rr-pair-block" style={{ marginTop: 12 }}>
+              {lanPairPhase === 'pending' ? (
+                <>
+                  <QRCodeSVG value={lanPairPayload} size={208} level="M" includeMargin />
+                  <p className="empty-hint">请用 iPhone「设置 → 局域网连接」扫描。二维码 <strong>{lanPairCountdown}</strong> 后失效，扫描后会立即更新状态。</p>
+                </>
+              ) : null}
+              {lanPairPhase === 'scanned' ? (
+                <div className="rr-pair-state">
+                  <span className="rr-pair-spinner" aria-hidden="true" />
+                  <div>
+                    <strong>iPhone 已扫描</strong>
+                    <p className="empty-hint">正在完成配对，请保持 iPhone 页面开启。二维码 <strong>{lanPairCountdown}</strong> 后失效；若长时间未完成，请在 iPhone 上重试。</p>
+                  </div>
+                </div>
+              ) : null}
+              {lanPairPhase === 'paired' ? (
+                <div className="rr-pair-state ok">
+                  <span className="rr-pair-mark" aria-hidden="true">✓</span>
+                  <div>
+                    <strong>配对成功</strong>
+                    <p className="empty-hint">{lanPairStatus?.device_name || lanPairName.trim() || 'iPhone'} 已加入下方设备列表，此二维码已失效。</p>
+                  </div>
+                </div>
+              ) : null}
+              {lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? (
+                <div className="rr-pair-state expired">
+                  <span className="rr-pair-mark" aria-hidden="true">!</span>
+                  <div>
+                    <strong>{lanPairPhase === 'expired' ? '二维码已过期' : '二维码已失效'}</strong>
+                    <p className="empty-hint">为安全起见，请重新生成二维码后再扫描。</p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <details className="rr-audit-fold">
+          <summary>
+            <span className="rr-audit-caret" aria-hidden="true">›</span>
+            <span>局域网安全审计</span>
+            <span className="rr-reg-tag unset">最近 {lanAudits.length} 条</span>
+          </summary>
+          {lanAudits.length === 0 ? <p className="empty-hint">暂无局域网访问记录</p> : (
+            <ul className="rr-audit-list">
+              {lanAudits.slice(0, 50).map((item) => (
+                <li key={item.id}>
+                  <span>{formatTime(item.created_at)} · {item.operation} · {item.outcome}</span>
+                  <span>{item.source_ip} · HTTP {item.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+        <div className="rr-mobile-grid" style={{ marginTop: 12 }}>
+          {activeLanDevices.length === 0 ? <p className="empty-hint">暂无已配对的局域网设备</p> : activeLanDevices.map((device) => (
+            <div key={device.id} className="rr-mobile-device">
+              <div className="rr-mobile-device-body">
+                <div className="rr-mobile-device-title"><strong>{device.name || 'iPhone'}</strong><span className="rr-mobile-device-state">已配对</span></div>
+                <ul className="rr-mobile-meta">
+                  <li><span>最近配对</span><span>{formatTime(device.updated_at || device.created_at)}</span></li>
+                  {device.pairing_count > 1 ? <li><span>累计配对</span><span>{device.pairing_count} 次</span></li> : null}
+                </ul>
+                <button type="button" className="ghost rr-kick-btn" disabled={lanRevokeID === device.id} onClick={() => void revokeLanDevice(device)}>{lanRevokeID === device.id ? '撤销中…' : '撤销设备'}</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </article>
 
       <article className="version-card rr-config-card" style={{ order: 30 }}>
         <div className="version-head">
