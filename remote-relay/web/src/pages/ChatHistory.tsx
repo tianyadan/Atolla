@@ -215,6 +215,8 @@ export function ChatHistoryPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
+  // 关闭时保留短暂挂载期，给浮层完成淡出动画，避免菜单突然消失。
+  const [composerMenuMounted, setComposerMenuMounted] = useState(false)
   const [busyStartedAt, setBusyStartedAt] = useState(0)
 
   const [lightboxSrc, setLightboxSrc] = useState('')
@@ -238,6 +240,17 @@ export function ChatHistoryPage() {
   /** 当前路由数字人；异步 sync/refresh 返回后必须仍匹配，否则会把 A 的消息灌进 B */
   const routeAgentRef = useRef(agentId)
   routeAgentRef.current = agentId
+
+  useEffect(() => {
+    if (composerMenuOpen) {
+      setComposerMenuMounted(true)
+      return undefined
+    }
+    if (!composerMenuMounted) return undefined
+
+    const closeTimer = window.setTimeout(() => setComposerMenuMounted(false), 140)
+    return () => window.clearTimeout(closeTimer)
+  }, [composerMenuOpen, composerMenuMounted])
 
   useEffect(() => {
     if (requestedTaskQueue) setTqListOpen(true)
@@ -1256,7 +1269,10 @@ export function ChatHistoryPage() {
               className={`composer-round-btn composer-more-btn${composerMenuOpen ? ' is-open' : ''}`}
               aria-label="更多功能"
               aria-expanded={composerMenuOpen}
-              onClick={() => setComposerMenuOpen((open) => !open)}
+              onClick={() => {
+                tapHaptic()
+                setComposerMenuOpen((open) => !open)
+              }}
             >
               <PlusIcon />
               {tqActive > 0 ? <em className="composer-menu-badge">{tqActive > 9 ? '9+' : tqActive}</em> : null}
@@ -1312,8 +1328,13 @@ export function ChatHistoryPage() {
               </button>
             ) : null}
           </div>
-          {composerMenuOpen ? (
-            <div className="composer-menu" role="menu" aria-label="更多聊天功能">
+          {composerMenuMounted ? (
+            <div
+              className={`composer-menu${composerMenuOpen ? ' is-open' : ' is-closing'}`}
+              role="menu"
+              aria-label="更多聊天功能"
+              aria-hidden={!composerMenuOpen}
+            >
               <button type="button" role="menuitem" disabled={sending || pendingImages.length >= MAX_CHAT_IMAGES} onClick={() => { setComposerMenuOpen(false); albumInputRef.current?.click() }}>
                 <ImageIcon />
                 <span>图片上传</span>

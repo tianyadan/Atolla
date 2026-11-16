@@ -4362,13 +4362,13 @@ html.theme-light .composer-send-btn.is-interrupt {
   flex: 1 1 auto;
   display: block;
   width: 100%;
-  height: 44px;
-  min-height: 44px;
+  height: 40px;
+  min-height: 40px;
   max-height: 160px;
   margin: 0;
-  padding: 10px 52px 10px 14px;
+  padding: 8px 48px 8px 13px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 22px;
+  border-radius: 20px;
   background: var(--surface);
   color: var(--text-h);
   font: inherit;
@@ -4384,12 +4384,12 @@ html.theme-light .composer-send-btn.is-interrupt {
 }
 
 .composer-round-btn {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   margin: 0;
-  flex: 0 0 44px;
+  flex: 0 0 40px;
   border-radius: 50%;
 }
 
@@ -4423,30 +4423,91 @@ html.theme-light .composer-send-btn.is-interrupt {
   bottom: 0;
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   margin: 0;
   padding: 0;
+  /* 保留 40px 触控热区，实际色块由伪元素收为 30px，避免压迫输入框。 */
+  background: transparent;
   border-radius: 50%;
+}
+
+.composer-input-wrap .composer-send-btn::before,
+.chat-composer-row > .composer-interrupt-btn::before {
+  position: absolute;
+  inset: 5px;
+  z-index: 0;
+  border-radius: 50%;
+  background: #18181b;
+  content: '';
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.composer-input-wrap .composer-send-btn > svg,
+.chat-composer-row > .composer-interrupt-btn > svg {
+  position: relative;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+}
+
+html.theme-dark .composer-input-wrap .composer-send-btn::before,
+html:not(.theme-light):not(.theme-dark) .composer-input-wrap .composer-send-btn::before {
+  background: #fafafa;
+}
+
+@media (prefers-color-scheme: light) {
+  html:not(.theme-light):not(.theme-dark) .composer-input-wrap .composer-send-btn::before {
+    background: #18181b;
+  }
+}
+
+html.theme-light .composer-input-wrap .composer-send-btn::before {
+  background: #18181b;
 }
 
 /* 运行中将输入框内的主发送位切换为停止；黄色发送键独立承担插话。 */
 .composer-input-wrap .composer-send-btn.is-stop {
-  background: var(--danger, #ef4444);
+  background: transparent;
   color: #fff;
 }
 
+.composer-input-wrap .composer-send-btn.is-stop::before {
+  background: var(--danger, #ef4444);
+}
+
 .chat-composer-row > .composer-interrupt-btn {
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   margin: 0;
   padding: 0;
+  background: transparent;
   border-radius: 50%;
+}
+
+/* 插话和终止属于运行期动作，用更小的语义色圆点而非整块按钮承载。 */
+.chat-composer-row > .composer-interrupt-btn.is-interrupt::before {
+  background: #eab308;
+}
+
+html.theme-dark .chat-composer-row > .composer-interrupt-btn.is-interrupt::before,
+html:not(.theme-light):not(.theme-dark) .chat-composer-row > .composer-interrupt-btn.is-interrupt::before {
+  background: #facc15;
+}
+
+@media (prefers-color-scheme: light) {
+  html:not(.theme-light):not(.theme-dark) .chat-composer-row > .composer-interrupt-btn.is-interrupt::before {
+    background: #eab308;
+  }
+}
+
+html.theme-light .chat-composer-row > .composer-interrupt-btn.is-interrupt::before {
+  background: #eab308;
 }
 
 .composer-round-btn:focus-visible,
@@ -4477,7 +4538,9 @@ html.theme-light .composer-send-btn.is-interrupt {
   position: absolute;
   z-index: 12;
   left: 1rem;
-  right: 1rem;
+  right: auto;
+  /* 靠近加号的窄浮层，避免在手机上横跨整行。 */
+  width: clamp(9.25rem, 34vw, 11rem);
   bottom: calc(100% + 0.45rem);
   display: flex;
   flex-direction: column;
@@ -4487,7 +4550,21 @@ html.theme-light .composer-send-btn.is-interrupt {
   border-radius: 14px;
   background: var(--surface);
   box-shadow: 0 12px 26px rgba(0, 0, 0, 0.1);
-  animation: composer-menu-enter 180ms ease-out;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px) scale(0.98);
+  transform-origin: left bottom;
+  transition: opacity 140ms ease-in, transform 140ms ease-in;
+  will-change: opacity, transform;
+}
+
+/* 从加号方向淡入上浮；关闭更快，保证连续但不拖沓。 */
+.composer-menu.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .composer-menu button,
@@ -4524,13 +4601,8 @@ html.theme-light .composer-send-btn.is-interrupt {
 .composer-menu-dot { width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: #22c55e; }
 .composer-menu-context .ctx-ring { flex: 0 0 auto; }
 
-@keyframes composer-menu-enter {
-  from { opacity: 0; transform: translateY(6px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .composer-menu { animation: none; }
+  .composer-menu { transition: none; }
   .composer-round-btn, .chat-composer-row .composer-send-btn { transition: none; }
 }
 

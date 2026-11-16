@@ -3,7 +3,7 @@ import { clampComposerHeight, formatElapsed } from './composerLayout'
 
 describe('composerLayout', () => {
   it('clamps the textarea height to the native composer range', () => {
-    expect(clampComposerHeight(20)).toBe(44)
+    expect(clampComposerHeight(20)).toBe(40)
     expect(clampComposerHeight(88)).toBe(88)
     expect(clampComposerHeight(300)).toBe(160)
   })

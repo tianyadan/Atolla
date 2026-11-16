@@ -1,5 +1,8 @@
-/** iOS 聊天输入框的可增长区间，避免内容顶开底部操作区。 */
-export const COMPOSER_MIN_HEIGHT = 44
+/**
+ * 输入框与发送按钮共用起始高度，保证单行时视觉紧凑且底部不跳动。
+ * 多行内容仍可向上扩展，避免牺牲长消息输入体验。
+ */
+export const COMPOSER_MIN_HEIGHT = 40
 export const COMPOSER_MAX_HEIGHT = 160
 
 export function clampComposerHeight(height: number): number {
