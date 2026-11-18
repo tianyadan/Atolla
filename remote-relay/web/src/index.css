@@ -4352,6 +4352,26 @@ html.theme-light .composer-send-btn.is-interrupt {
   min-width: 0;
 }
 
+/* 只读模型状态：贴近输入区但不抢占输入和发送操作。 */
+.composer-model-chip {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  font-family: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.composer-model-chip:active { opacity: .7; }
+.composer-model-chip:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
 .composer-input-wrap {
   position: relative;
   flex: 1 1 auto;

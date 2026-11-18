@@ -279,6 +279,7 @@ export function AgentSettingsSheet({
             <div className="settings-basic">
               <p className="muted settings-meta-line">
                 引擎 <strong>{settings.engine || '—'}</strong>
+                {' · '}模型 <strong>{settings.model || '默认模型'}</strong>
                 {settings.skill_count > 0 ? ` · 技能 ${settings.skill_count}` : null}
               </p>
               <JellyColorPicker

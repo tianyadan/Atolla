@@ -1048,6 +1048,8 @@ export type AgentSettings = {
   agent_id: string
   name: string
   engine: string
+  /** 空字符串表示引擎 CLI 默认模型。 */
+  model: string
   rules_prompt: string
   /** Pixel jelly color from Mac */
   jelly_color?: string

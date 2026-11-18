@@ -49,6 +49,8 @@ func buildAgentMirrorPayloadEx(
 		"context_source":          usage.ContextSource,
 		"context_updated_at":      usage.ContextUpdatedAt,
 		"anomaly":                 usage.Anomaly,
+		// 手机端对话输入区需要展示实际生效的模型；空值明确表示 CLI 默认模型。
+		"model": a.Model,
 	}
 	if a.TaskUnreadAt != nil {
 		payload["task_unread_at"] = a.TaskUnreadAt.Unix()

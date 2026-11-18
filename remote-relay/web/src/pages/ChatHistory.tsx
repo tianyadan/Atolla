@@ -147,6 +147,14 @@ function sortMessages(list: LocalBubble[]): LocalBubble[] {
   })
 }
 
+/** 对话框只展示已保存的模型 id；空值代表引擎 CLI 的默认模型。 */
+function composerModelLabel(agent: PublicMirrorAgent | null, defaultModelLabel: string): string {
+  const engine = String(agent?.engine || '').trim().toLowerCase()
+  const engineLabel = engine === 'codex' ? 'Codex' : engine === 'claude' ? 'Claude' : engine === 'agent' ? 'Cursor' : (agent?.engine || 'Engine')
+  const model = typeof agent?.payload?.model === 'string' ? agent.payload.model.trim() : ''
+  return `${engineLabel} · ${model || defaultModelLabel}`
+}
+
 /** Merge server page into local list without dropping older loaded history */
 function mergeServerMessages(prev: LocalBubble[], page: PublicMirrorMessage[]): LocalBubble[] {
   const byId = new Map<string, LocalBubble>()
@@ -1262,6 +1270,15 @@ export function ChatHistoryPage() {
               ))}
             </div>
           ) : null}
+          <button
+            type="button"
+            className="composer-model-chip"
+            title={composerModelLabel(agent, t('composer.defaultModel'))}
+            aria-label={`${t('composer.model')}: ${composerModelLabel(agent, t('composer.defaultModel'))}`}
+            onClick={() => setAgentSettingsOpen(true)}
+          >
+            {composerModelLabel(agent, t('composer.defaultModel'))}
+          </button>
           <div className="chat-composer-row">
             <input ref={albumInputRef} type="file" accept="image/*" multiple hidden onChange={(e) => { onPickImages(e.target.files); e.target.value = '' }} />
             <button

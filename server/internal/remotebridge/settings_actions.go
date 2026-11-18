@@ -14,6 +14,7 @@ func settingsPublic(a *store.ManagedAgent, skillCount int) map[string]any {
 		"agent_id":     strconv.FormatInt(a.ID, 10),
 		"name":         a.Name,
 		"engine":       a.Engine,
+		"model":        a.Model,
 		"rules_prompt": a.RulesPrompt,
 		"jelly_color":  a.JellyColor,
 		"skill_count":  skillCount,

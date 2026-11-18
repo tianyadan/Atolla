@@ -1431,7 +1431,28 @@ button.primary:disabled { opacity: .5; cursor: not-allowed; }
   align-items: center;
   gap: 7px;
   min-height: 32px;
+  min-width: 0;
 }
+.ma-composer-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 240px;
+  overflow: hidden;
+  padding: 3px 8px;
+  border: 1px solid #343842;
+  border-radius: 999px;
+  background: #181b20;
+  color: #aeb7c5;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  font-family: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ma-composer-model:hover { border-color: #576174; color: #e1e7f0; }
+.ma-composer-model:focus-visible { outline: 2px solid #8ba8d7; outline-offset: 2px; }
 .ma-composer-tool {
   position: relative;
   display: grid;

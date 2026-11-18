@@ -72,6 +72,23 @@ const JOB_ROLES = [
   { value: '文档', key: 'docs' },
 ]
 
+/**
+ * 模型目录的 label 可能是“名称 — 功能说明”。下拉框只承担选择职责，
+ * 不应把说明挤进原生 select；实际提交仍使用完整且稳定的 model id。
+ */
+function compactModelOptionLabel(item) {
+  const label = String(item?.label || item?.id || '').trim()
+  const separator = label.indexOf(' — ')
+  return separator >= 0 ? label.slice(0, separator) : label
+}
+
+function composerModelLabel(agent, defaultModelLabel) {
+  const engine = String(agent?.engine || '').trim().toLowerCase()
+  const engineLabel = engine === 'codex' ? 'Codex' : engine === 'claude' ? 'Claude' : engine === 'agent' ? 'Cursor' : (agent?.engine || 'Engine')
+  const model = String(agent?.model || '').trim()
+  return `${engineLabel} · ${model || defaultModelLabel}`
+}
+
 /** 本地消息稳定 key：无 DB id 的流式/乐观消息在数组重排后也不能重新挂载。 */
 let localMsgSeq = 0
 function localMsgUid() {
@@ -2520,6 +2537,15 @@ export default function ManagedAgentsPanel({
                   <div className="ma-composer-tools" aria-label="任务工具">
                     <button
                       type="button"
+                      className="ma-composer-model"
+                      title={composerModelLabel(selected, t('composer.defaultModel'))}
+                      aria-label={`${t('composer.model')}：${composerModelLabel(selected, t('composer.defaultModel'))}`}
+                      onClick={() => openSelectedSettings('basic')}
+                    >
+                      {composerModelLabel(selected, t('composer.defaultModel'))}
+                    </button>
+                    <button
+                      type="button"
                       className={`ma-composer-tool${taskPlanOn ? ' is-active' : ''}`}
                       data-tooltip="Task Plan"
                       aria-label={`${t('composer.taskPlan')} · ${taskPlanOn ? '已开启' : '已关闭'}`}
@@ -2903,7 +2929,7 @@ export default function ManagedAgentsPanel({
                       >
                         <option value="">{t('agentSettings.modelDefault')}</option>
                         {(modelCatalog.items || []).map((it) => (
-                          <option key={it.id} value={it.id}>{it.label || it.id}</option>
+                          <option key={it.id} value={it.id}>{compactModelOptionLabel(it)}</option>
                         ))}
                         {(modelCatalog.allow_custom !== false) ? (
                           <option value="__custom__">{t('agentSettings.modelCustom')}</option>

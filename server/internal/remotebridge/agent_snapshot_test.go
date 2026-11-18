@@ -18,6 +18,7 @@ func TestBuildAgentMirrorPayloadCompletedSnapshot(t *testing.T) {
 		TaskUnreadAt:         &at,
 		TaskUnreadDurationMs: 4567,
 		TaskUnreadSummary:    "done",
+		Model:                "gpt-6.2-astra",
 	}, "研发部", agentMirrorUsage{UsedTokens: 12, WindowTokens: 100, UsedPercent: 12})
 
 	if payload["folder_name"] != "研发部" || payload["task_unread_kind"] != "completed" {
@@ -25,6 +26,9 @@ func TestBuildAgentMirrorPayloadCompletedSnapshot(t *testing.T) {
 	}
 	if payload["task_unread_at"] != at.Unix() || payload["task_unread_duration_ms"] != 4567 || payload["task_unread_summary"] != "done" {
 		t.Fatalf("payload snapshot = %#v", payload)
+	}
+	if payload["model"] != "gpt-6.2-astra" {
+		t.Fatalf("model = %#v", payload["model"])
 	}
 }
 

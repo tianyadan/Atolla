@@ -89,6 +89,8 @@ export const messages: Record<LocaleId, Dict> = {
     'composer.stop': '终止',
     'composer.interrupt': '插话',
     'composer.send': '发送',
+    'composer.model': '当前模型',
+    'composer.defaultModel': '默认模型',
   },
   en: {
     'settings.title': 'Settings',
@@ -175,6 +177,8 @@ export const messages: Record<LocaleId, Dict> = {
     'composer.stop': 'Stop',
     'composer.interrupt': 'Interrupt',
     'composer.send': 'Send',
+    'composer.model': 'Active model',
+    'composer.defaultModel': 'Default model',
   },
 }
 
