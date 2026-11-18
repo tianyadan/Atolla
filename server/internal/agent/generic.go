@@ -191,6 +191,11 @@ func runCursorStreamJSON(
 			onMeta(meta)
 		}
 		switch strAny(m["type"]) {
+		case "thinking":
+			// 思考增量：onPhase 已标 thinking，走 reasoning 折叠区，不进正文/落库
+			if piece := cursorThinkingDelta(m); piece != "" && onChunk != nil {
+				onChunk(piece)
+			}
 		case "assistant":
 			piece := cursorAssistantText(m)
 			if piece == "" {
@@ -249,6 +254,32 @@ func runCursorStreamJSON(
 		return "", meta, fmt.Errorf("%s: %s", bin, msg)
 	}
 	return final, meta, nil
+}
+
+// cursorThinkingDelta 取出 Cursor stream-json thinking delta 正文。
+func cursorThinkingDelta(m map[string]interface{}) string {
+	if m == nil {
+		return ""
+	}
+	subtype := strAny(m["subtype"])
+	if subtype != "" && subtype != "delta" {
+		return ""
+	}
+	if t := strings.TrimSpace(strAny(m["text"])); t != "" {
+		return t
+	}
+	if t := strings.TrimSpace(strAny(m["thinking"])); t != "" {
+		return t
+	}
+	if delta, _ := m["delta"].(map[string]interface{}); delta != nil {
+		if t := strings.TrimSpace(strAny(delta["text"])); t != "" {
+			return t
+		}
+		if t := strings.TrimSpace(strAny(delta["thinking"])); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // cursorAssistDelta 若 CLI 重复推送「越来越长」的同一段，只吐增量。

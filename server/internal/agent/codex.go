@@ -214,6 +214,15 @@ func ParseCodexJSONLLine(line []byte) (CodexEvent, bool) {
 	return ev, ok
 }
 
+// codexLineType 读取 JSONL 行顶层 type（失败返回空）。
+func codexLineType(line []byte) string {
+	var raw map[string]interface{}
+	if json.Unmarshal(line, &raw) != nil {
+		return ""
+	}
+	return strAny(raw["type"])
+}
+
 func strAny(v interface{}) string {
 	switch t := v.(type) {
 	case string:
@@ -350,8 +359,40 @@ func runCodexJSONStream(
 	var lastMeta RunMeta
 	lastAct := ""
 	sawJSON := false
-	msgCount := 0
 	compacted := false
+	// pendingAgent：尚未确认是否为终稿的 agent_message；新消息到来时把旧的降为思考过程。
+	pendingAgent := ""
+	emitReasoning := func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" || onChunk == nil {
+			return
+		}
+		if onPhase != nil {
+			onPhase(exactPhase("codex", PhaseThinking, ""))
+		}
+		onChunk(text)
+	}
+	flushFinalAgent := func() {
+		text := strings.TrimSpace(pendingAgent)
+		pendingAgent = ""
+		if text == "" {
+			return
+		}
+		if onPhase != nil {
+			onPhase(exactPhase("codex", PhaseResponding, ""))
+		}
+		// 终稿不再加 · 前缀，避免落库正文像过程流水账
+		if cursorAlreadyStreamed(full.String(), text) {
+			return
+		}
+		if full.Len() > 0 {
+			full.WriteByte('\n')
+		}
+		full.WriteString(text)
+		if onChunk != nil {
+			onChunk(text)
+		}
+	}
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	for sc.Scan() {
@@ -408,25 +449,22 @@ func runCodexJSONStream(
 		}
 		if ev.Chunk != "" {
 			raw := strings.TrimSpace(ev.Chunk)
-			// 与已推送正文重复的 agent_message（修订尾段）不再拼接，避免 PC 出现「改动」贴两次
-			if raw != "" && cursorAlreadyStreamed(full.String(), raw) {
+			if raw == "" {
 				continue
 			}
-			// 时间线：每条 agent 消息前加换行 + ·
-			piece := ev.Chunk
-			if msgCount == 0 {
-				piece = "· " + strings.TrimLeft(piece, "· ")
-			} else {
-				piece = "\n· " + strings.TrimLeft(piece, "· \n")
+			// 中间 agent_message → 思考折叠；仅保留最后一条作为终稿
+			if pendingAgent != "" {
+				emitReasoning(pendingAgent)
 			}
-			msgCount++
-			full.WriteString(piece)
-			if onChunk != nil {
-				onChunk(piece)
-			}
+			pendingAgent = raw
+		}
+		// turn 结束：立刻落终稿，避免等进程退出才出最终气泡
+		if typ := codexLineType(line); typ == "turn.completed" || typ == "turn.failed" {
+			flushFinalAgent()
 		}
 	}
 	_ = sc.Err()
+	flushFinalAgent()
 	waitErr := cmd.Wait()
 	if !sawJSON {
 		tail := ShortEngineError(stderr.String())

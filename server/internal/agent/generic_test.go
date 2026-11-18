@@ -46,6 +46,18 @@ func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
 	}
 }
 
+func TestCursorThinkingDelta(t *testing.T) {
+	got := cursorThinkingDelta(map[string]interface{}{
+		"type": "thinking", "subtype": "delta", "text": "分析中",
+	})
+	if got != "分析中" {
+		t.Fatalf("got=%q", got)
+	}
+	if cursorThinkingDelta(map[string]interface{}{"type": "thinking", "subtype": "completed"}) != "" {
+		t.Fatal("completed should be empty")
+	}
+}
+
 func TestCursorCLIArgsTrust(t *testing.T) {
 	args := CursorCLIArgs("hi", "sess", "json", true, "")
 	if len(args) < 2 || args[0] != "--trust" {
