@@ -32,7 +32,7 @@ func TestCLIChildEnvDisablesAutomaticUpdates(t *testing.T) {
 	if !strings.Contains(claude, "DISABLE_AUTOUPDATER=1") || !strings.Contains(claude, "DISABLE_UPDATES=1") {
 		t.Fatalf("claude update guard missing: %s", claude)
 	}
-	codex := strings.Join(CodexArgs("", "hello", true, "workspace-write"), " ")
+	codex := strings.Join(CodexArgs("", "hello", true, "workspace-write", ""), " ")
 	if !strings.Contains(codex, "check_for_update_on_startup=false") {
 		t.Fatalf("codex update guard missing: %s", codex)
 	}

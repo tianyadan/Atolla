@@ -53,7 +53,8 @@ func NormalizeCodexSandbox(s string) string {
 
 // CodexArgs 构造非交互 `codex exec` 参数(禁止 -p:那是 profile)。
 // sandbox 为空时默认 workspace-write（兼容旧调用）。
-func CodexArgs(dir, prompt string, jsonMode bool, sandbox string) []string {
+// model 非空时追加 -m（resume / 新会话均生效）。
+func CodexArgs(dir, prompt string, jsonMode bool, sandbox, model string) []string {
 	args := []string{
 		"exec",
 		"-c", "check_for_update_on_startup=false",
@@ -63,11 +64,33 @@ func CodexArgs(dir, prompt string, jsonMode bool, sandbox string) []string {
 	if jsonMode {
 		args = append(args, "--json")
 	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "-m", m)
+	}
 	if strings.TrimSpace(dir) != "" {
 		args = append(args, "-C", dir)
 	}
 	args = append(args, prompt)
 	return args
+}
+
+// codexResumeArgs 构造 `codex exec … resume <thread> <prompt>`（-m 在 resume 子命令前）。
+func codexResumeArgs(dir, prompt, sandbox, model, thread string, jsonMode bool) []string {
+	args := []string{
+		"exec", "-c", "check_for_update_on_startup=false",
+		"--skip-git-repo-check", "-s", NormalizeCodexSandbox(sandbox),
+	}
+	if jsonMode {
+		args = append(args, "--json")
+	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "-m", m)
+	}
+	args = append(args, "--dangerously-bypass-hook-trust")
+	if strings.TrimSpace(dir) != "" {
+		args = append(args, "-C", dir)
+	}
+	return append(args, "resume", strings.TrimSpace(thread), prompt)
 }
 
 // ParseCodexJSONLLine 解析 codex exec --json 的一行。
@@ -214,11 +237,12 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 // sandbox：Codex -s 模式；未限制工作区时应传 danger-full-access。
 // extraEnv：授权路由 AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承。
 func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox string, extraEnv ...string) (string, int, error) {
-	return CodexAskMetaExPhase(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeThread, onCommand, onCompact, sandbox, extraEnv...)
+	return CodexAskMetaExPhase(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeThread, onCommand, onCompact, sandbox, "", extraEnv...)
 }
 
 // CodexAskMetaExPhase 同 CodexAskMetaEx，并转发 Codex JSONL 原生运行阶段。
-func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox string, extraEnv ...string) (string, int, error) {
+// model 非空时传 -m（含 resume）。
+func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox, model string, extraEnv ...string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -244,21 +268,9 @@ func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, 
 	// resume：codex exec --json … resume <thread_id> <prompt>
 	var args []string
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
-		args = []string{
-			"exec", "-c", "check_for_update_on_startup=false", "--json", "--skip-git-repo-check", "-s", sb,
-			"--dangerously-bypass-hook-trust",
-			"resume", rs, prompt,
-		}
-		if strings.TrimSpace(dir) != "" {
-			// -C 需在 resume 子命令前
-			args = []string{
-				"exec", "-c", "check_for_update_on_startup=false", "--json", "--skip-git-repo-check", "-s", sb,
-				"--dangerously-bypass-hook-trust",
-				"-C", dir, "resume", rs, prompt,
-			}
-		}
+		args = codexResumeArgs(dir, prompt, sb, model, rs, true)
 	} else {
-		args = CodexArgs(dir, prompt, true, sb)
+		args = CodexArgs(dir, prompt, true, sb, model)
 	}
 
 	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onPhase, onCommand, onCompact, extraEnv)
@@ -269,13 +281,9 @@ func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, 
 	if onActivity != nil {
 		onActivity(Activity{Tool: "codex", Summary: "Codex 执行中…"})
 	}
-	fallbackArgs := CodexArgs(dir, prompt, false, sb)
+	fallbackArgs := CodexArgs(dir, prompt, false, sb, model)
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
-		fallbackArgs = []string{"exec", "-c", "check_for_update_on_startup=false", "--skip-git-repo-check", "-s", sb, "--dangerously-bypass-hook-trust"}
-		if strings.TrimSpace(dir) != "" {
-			fallbackArgs = append(fallbackArgs, "-C", dir)
-		}
-		fallbackArgs = append(fallbackArgs, "resume", rs, prompt)
+		fallbackArgs = codexResumeArgs(dir, prompt, sb, model, rs, false)
 	}
 	cmd := exec.CommandContext(cctx, bin, fallbackArgs...)
 	AttachKillable(cmd)

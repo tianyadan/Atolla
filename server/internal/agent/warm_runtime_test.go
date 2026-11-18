@@ -19,7 +19,7 @@ func TestWarmRuntimeReusesProcessForSameConversation(t *testing.T) {
 	defer r.Close()
 	hook := HookSpec{ConvID: 7}
 	for i := 0; i < 2; i++ {
-		out, _, err := r.Ask(context.Background(), dir, "", "hello", "", nil, time.Second, hook, nil, nil, nil, "", nil)
+		out, _, err := r.Ask(context.Background(), dir, "", "hello", "", nil, time.Second, hook, nil, nil, nil, "", nil, "")
 		if err != nil || out != "ok" {
 			t.Fatalf("ask %d output=%q err=%v", i+1, out, err)
 		}

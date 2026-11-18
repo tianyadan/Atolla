@@ -695,7 +695,7 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 			onChunk(chunk)
 		}
 	}
-	full, ms, aerr := s.Agent.AskStreamWithImagesPhase(ctx, dir, sysPrompt, req.Question, history, streamChunk, timeout, hook, nil, onMeta, onPhase, resume, nil)
+	full, ms, aerr := s.Agent.AskStreamWithImagesPhase(ctx, dir, sysPrompt, req.Question, history, streamChunk, timeout, hook, nil, onMeta, onPhase, resume, "", nil)
 
 	status := "ok"
 	content := full

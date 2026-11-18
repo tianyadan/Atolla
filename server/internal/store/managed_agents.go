@@ -18,6 +18,7 @@ type ManagedAgent struct {
 	JobRole              string                `json:"job_role"`    // 调度岗位（单选；空表示未配置）
 	Engine               string                `json:"engine"`
 	ContextWindowTokens  int64                 `json:"context_window_tokens"` // claude | codex | agent
+	Model                string                `json:"model"`                 // 引擎模型 id；空=CLI 默认
 	BinPath              string                `json:"bin_path"`
 	RulesPrompt          string                `json:"rules_prompt"`
 	AutoReview           bool                  `json:"auto_review"`
@@ -56,6 +57,7 @@ type ManagedAgentInput struct {
 	JobRole             *string
 	Engine              string
 	ContextWindowTokens *int64
+	Model               *string // 更新：nil=不改；非 nil 可清空为 ""
 	BinPath             string
 	RulesPrompt         string
 	AllowWrite          *bool
@@ -181,7 +183,7 @@ func scanManagedAgent(scanner interface {
 	var runAt, unreadAt sql.NullTime
 	var auto, aaa, tp, aw, an, ar, ab, se, recv, unread int
 	err := scanner.Scan(
-		&a.ID, &a.Name, &a.AvatarURL, &a.JellyColor, &a.FolderID, &a.JobRole, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
+		&a.ID, &a.Name, &a.AvatarURL, &a.JellyColor, &a.FolderID, &a.JobRole, &a.Engine, &a.ContextWindowTokens, &a.Model, &a.BinPath, &a.RulesPrompt, &auto, &aaa, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
 		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &unread,
 		&a.TaskUnreadKind, &unreadAt, &a.TaskUnreadDurationMs, &a.TaskUnreadSummary,
@@ -217,7 +219,7 @@ func scanManagedAgent(scanner interface {
 	return a, nil
 }
 
-const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(jelly_color,''), IFNULL(folder_id,0), IFNULL(job_role,''), engine, context_window_tokens, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
+const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(jelly_color,''), IFNULL(folder_id,0), IFNULL(job_role,''), engine, context_window_tokens, IFNULL(model,''), bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
 		IFNULL(auto_approve_all,0), IFNULL(task_plan_enabled,1),
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
@@ -316,6 +318,10 @@ func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (i
 	if in.ContextWindowTokens != nil {
 		window = *in.ContextWindowTokens
 	}
+	model := ""
+	if in.Model != nil {
+		model = strings.TrimSpace(*in.Model)
+	}
 	jobRole := ""
 	if in.JobRole != nil {
 		jobRole = strings.TrimSpace(*in.JobRole)
@@ -330,10 +336,10 @@ func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (i
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
-			 (name, jelly_color, job_role, engine, context_window_tokens, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
+			 (name, jelly_color, job_role, engine, context_window_tokens, model, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
 			  workspace_path, schedule_enabled, schedule_cron, schedule_label)
-			 VALUES (?,?,?,?,?,?,?, 'idle',?,?,?,?,?,?,?,?)`,
-		in.Name, JellyColors[0], jobRole, engine, window, binPath, in.RulesPrompt,
+			 VALUES (?,?,?,?,?,?,?,?, 'idle',?,?,?,?,?,?,?,?)`,
+		in.Name, JellyColors[0], jobRole, engine, window, model, binPath, in.RulesPrompt,
 		bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label)
 	if err != nil {
 		return 0, err
@@ -378,11 +384,11 @@ func (s *Store) InsertClonedManagedAgent(ctx context.Context, a ManagedAgent) (i
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
-			 (name, avatar_url, jelly_color, folder_id, job_role, engine, context_window_tokens, bin_path, rules_prompt, auto_review, task_plan_enabled,
+			 (name, avatar_url, jelly_color, folder_id, job_role, engine, context_window_tokens, model, bin_path, rules_prompt, auto_review, task_plan_enabled,
 			  allow_write, allow_network, allow_rm, allow_browser, workspace_path,
 			  schedule_enabled, schedule_cron, schedule_label, status, conversation_id, cloned_from_id)
-			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.Name, nullIfEmpty(a.AvatarURL), JellyColors[0], folder, strings.TrimSpace(a.JobRole), engine, a.ContextWindowTokens, binPath, a.RulesPrompt,
+			 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.Name, nullIfEmpty(a.AvatarURL), JellyColors[0], folder, strings.TrimSpace(a.JobRole), engine, a.ContextWindowTokens, strings.TrimSpace(a.Model), binPath, a.RulesPrompt,
 		bool01(a.AutoReview), bool01(a.TaskPlanEnabled),
 		bool01(a.AllowWrite), bool01(a.AllowNetwork), bool01(a.AllowRm), bool01(a.AllowBrowser),
 		a.WorkspacePath, 0, "", "", st, nil, cloned)
@@ -425,8 +431,12 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	ws, se, cron, label := a.WorkspacePath, a.ScheduleEnabled, a.ScheduleCron, a.ScheduleLabel
 	jobRole := a.JobRole
 	window := a.ContextWindowTokens
+	model := a.Model
 	if in.ContextWindowTokens != nil {
 		window = *in.ContextWindowTokens
+	}
+	if in.Model != nil {
+		model = strings.TrimSpace(*in.Model)
 	}
 	if in.JobRole != nil {
 		jobRole = strings.TrimSpace(*in.JobRole)
@@ -477,10 +487,10 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE managed_agents SET name=?, jelly_color=?, job_role=?, context_window_tokens=?, bin_path=?, rules_prompt=?,
+		`UPDATE managed_agents SET name=?, jelly_color=?, job_role=?, context_window_tokens=?, model=?, bin_path=?, rules_prompt=?,
 			 allow_write=?, allow_network=?, allow_rm=?, allow_browser=?, workspace_path=?,
 			 schedule_enabled=?, schedule_cron=?, schedule_label=? WHERE id=?`,
-		n, jelly, jobRole, window, b, r, bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label, id)
+		n, jelly, jobRole, window, model, b, r, bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label, id)
 	return err
 }
 

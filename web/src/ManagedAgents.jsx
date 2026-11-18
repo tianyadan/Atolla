@@ -308,6 +308,12 @@ export default function ManagedAgentsPanel({
   const [newJobRole, setNewJobRole] = useState('')
   const [newContextWindow, setNewContextWindow] = useState(1000000)
   const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
+  /** 引擎模型 id；空=CLI 默认 */
+  const [modelDraft, setModelDraft] = useState('')
+  /** '' | catalog id | '__custom__' */
+  const [modelPick, setModelPick] = useState('')
+  const [modelCatalog, setModelCatalog] = useState({ items: [], allow_custom: true, source: '', detail: '' })
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
   const [newRules, setNewRules] = useState('')
   const [newJellyColor, setNewJellyColor] = useState(() => assignJellyColor('new'))
   const [jellyColorDraft, setJellyColorDraft] = useState('blue')
@@ -1107,6 +1113,7 @@ export default function ManagedAgentsPanel({
           name: renameDraft.trim() || selected.name,
           job_role: jobRoleDraft,
           context_window_tokens: contextWindowDraft,
+          model: String(modelDraft || '').trim(),
           rules_prompt: rulesDraft,
           allow_write: !!policyDraft.allow_write,
           allow_network: !!policyDraft.allow_network,
@@ -1153,6 +1160,44 @@ export default function ManagedAgentsPanel({
     setDismissTarget(selected)
   }
 
+  /** 拉取引擎可选模型（CLI/cache/docs）；失败仍允许手输。 */
+  async function loadModelCatalog(engine) {
+    const eng = String(engine || '').trim() || 'claude'
+    setModelCatalogLoading(true)
+    try {
+      const res = await fetch(`${API}/admin/engines/${encodeURIComponent(eng)}/models`, { headers: authHeaders() })
+      if (res.status === 401) { onUnauthorized?.(); return null }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setModelCatalog({ items: [], allow_custom: true, source: 'none', detail: d.error || 'load failed' })
+        return { items: [], allow_custom: true }
+      }
+      const cat = {
+        items: Array.isArray(d.items) ? d.items : [],
+        allow_custom: d.allow_custom !== false,
+        source: d.source || '',
+        detail: d.detail || '',
+      }
+      setModelCatalog(cat)
+      return cat
+    } catch {
+      const cat = { items: [], allow_custom: true, source: 'none', detail: 'network error' }
+      setModelCatalog(cat)
+      return cat
+    } finally {
+      setModelCatalogLoading(false)
+    }
+  }
+
+  /** 按 catalog 把当前 modelDraft 映射到下拉选中态。 */
+  function syncModelPick(model, catalog) {
+    const m = String(model || '').trim()
+    const ids = new Set((catalog?.items || []).map((it) => it.id))
+    if (!m) setModelPick('')
+    else if (ids.has(m)) setModelPick(m)
+    else setModelPick('__custom__')
+  }
+
   /** 统一准备员工设置草稿，避免从不同入口打开后残留旧字段。 */
   function openSelectedSettings(tab = 'basic') {
     if (!selected) return
@@ -1161,10 +1206,16 @@ export default function ManagedAgentsPanel({
     setRulesDraft(selected.rules_prompt || '')
     setPolicyDraft(policyFromAgent(selected))
     setContextWindowDraft(selected.context_window_tokens || 1000000)
+    const m = selected.model || ''
+    setModelDraft(m)
+    setModelPick(m ? '__custom__' : '')
     setJellyColorDraft(resolveJellyColor(selected))
     setSettingsTab(tab)
     setSettingsOpen(true)
     setDetailMoreOpen(false)
+    loadModelCatalog(selected.engine).then((cat) => {
+      if (cat) syncModelPick(m, cat)
+    })
   }
 
   /** 加载设置页「继承记忆」 */
@@ -2838,7 +2889,43 @@ export default function ManagedAgentsPanel({
                         <option value={1000000}>1M</option>
                       </select>
                     </label>
+                    <label>
+                      {t('agentSettings.model')}
+                      <select
+                        value={modelPick}
+                        disabled={busy || modelCatalogLoading}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setModelPick(v)
+                          if (v === '__custom__') return
+                          setModelDraft(v)
+                        }}
+                      >
+                        <option value="">{t('agentSettings.modelDefault')}</option>
+                        {(modelCatalog.items || []).map((it) => (
+                          <option key={it.id} value={it.id}>{it.label || it.id}</option>
+                        ))}
+                        {(modelCatalog.allow_custom !== false) ? (
+                          <option value="__custom__">{t('agentSettings.modelCustom')}</option>
+                        ) : null}
+                      </select>
+                    </label>
+                    {modelPick === '__custom__' ? (
+                      <label>
+                        {t('agentSettings.modelCustomId')}
+                        <input
+                          value={modelDraft}
+                          onChange={(e) => setModelDraft(e.target.value)}
+                          disabled={busy}
+                          placeholder={t('agentSettings.modelCustomPh')}
+                          spellCheck={false}
+                        />
+                      </label>
+                    ) : null}
                   </div>
+                  {modelCatalog.detail ? (
+                    <p className="ma-settings-tip" style={{ marginTop: 8 }}>{modelCatalog.detail}</p>
+                  ) : null}
                 </section>
                 <section className="ma-settings-section">
                   <div className="ma-settings-section-label">

@@ -61,6 +61,7 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 		JobRole             string  `json:"job_role"`
 		Engine              string  `json:"engine"`
 		ContextWindowTokens *int64  `json:"context_window_tokens"`
+		Model               *string `json:"model"`
 		BinPath             string  `json:"bin_path"`
 		RulesPrompt         string  `json:"rules_prompt"`
 		AllowWrite          *bool   `json:"allow_write"`
@@ -103,8 +104,13 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	cron := strings.TrimSpace(body.ScheduleCron)
 	label := strings.TrimSpace(body.ScheduleLabel)
 	jobRole := strings.TrimSpace(body.JobRole)
+	var modelPtr *string
+	if body.Model != nil {
+		m := strings.TrimSpace(*body.Model)
+		modelPtr = &m
+	}
 	in := store.ManagedAgentInput{
-		Name: name, JobRole: &jobRole, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
+		Name: name, JobRole: &jobRole, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, Model: modelPtr, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
 		AllowWrite: body.AllowWrite, AllowNetwork: body.AllowNetwork, AllowRm: body.AllowRm, AllowBrowser: body.AllowBrowser,
 		WorkspacePath: &ws, ScheduleEnabled: &se, ScheduleCron: &cron, ScheduleLabel: &label,
 		JellyColor: body.JellyColor,
@@ -216,6 +222,15 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 			return
 		}
 		in.ContextWindowTokens = &window
+	}
+	if v, ok := body["model"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model"})
+			return
+		}
+		s = strings.TrimSpace(s)
+		in.Model = &s
 	}
 	if v, ok := body["name"]; ok {
 		var s string

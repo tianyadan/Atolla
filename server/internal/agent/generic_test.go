@@ -47,7 +47,7 @@ func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
 }
 
 func TestCursorCLIArgsTrust(t *testing.T) {
-	args := CursorCLIArgs("hi", "sess", "json", true)
+	args := CursorCLIArgs("hi", "sess", "json", true, "")
 	if len(args) < 2 || args[0] != "--trust" {
 		t.Fatalf("args=%v", args)
 	}
@@ -55,9 +55,13 @@ func TestCursorCLIArgsTrust(t *testing.T) {
 	if strings.Contains(joined, "--yolo") || strings.Contains(joined, " -f") {
 		t.Fatalf("must not skip all approvals: %v", args)
 	}
-	plain := CursorCLIArgs("hi", "", "json", false)
+	plain := CursorCLIArgs("hi", "", "json", false, "")
 	if plain[0] == "--trust" {
 		t.Fatalf("untrusted args=%v", plain)
+	}
+	withModel := CursorCLIArgs("hi", "sess", "json", false, "composer-2.5")
+	if !strings.Contains(strings.Join(withModel, " "), "--model composer-2.5") {
+		t.Fatalf("model args=%v", withModel)
 	}
 }
 
@@ -97,7 +101,7 @@ func TestCursorAnswerIgnoresPlainSyntaxError(t *testing.T) {
 }
 
 func TestCursorCLIArgsStreamJSON(t *testing.T) {
-	args := CursorCLIArgs("hi", "", "stream-json", false)
+	args := CursorCLIArgs("hi", "", "stream-json", false, "")
 	if !strings.Contains(strings.Join(args, " "), "--output-format stream-json") {
 		t.Fatalf("args=%v", args)
 	}

@@ -264,16 +264,17 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 
 // AskStreamWithImages 同 AskStream，可附带多模态图片（Claude content image blocks）。
 func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, resumeSession string, images []ImagePart) (string, int, error) {
-	return r.AskStreamWithImagesPhase(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, nil, resumeSession, images)
+	return r.AskStreamWithImagesPhase(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, nil, resumeSession, "", images)
 }
 
 // AskStreamWithImagesPhase 同 AskStreamWithImages，并转发 Claude 原生运行阶段。
-func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, images []ImagePart) (string, int, error) {
+// model 非空时传 --model（含 resume / warm）。
+func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession, model string, images []ImagePart) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
 	if warm := r.warmRuntime(); warm != nil && hook.ConvID > 0 {
-		return warm.Ask(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resumeSession, images)
+		return warm.Ask(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resumeSession, images, model)
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -294,6 +295,9 @@ func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt
 	}
 	if rs := strings.TrimSpace(resumeSession); rs != "" {
 		args = append(args, "--resume", rs)
+	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "--model", m)
 	}
 	if st := hook.Settings(); st != "" {
 		args = append(args, "--settings", st)

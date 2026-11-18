@@ -290,6 +290,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	// 13b) 数字员工引擎模型（空=CLI 默认；Ask 时传 --model/-m）
+	if ok, err := s.hasColumn(ctx, "managed_agents", "model"); err != nil {
+		return err
+	} else if !ok {
+		if err := s.execDDL(ctx, `ALTER TABLE managed_agents ADD COLUMN model VARCHAR(191) NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
 	// 14) v0.4.0 技能商店：目录 + 按数字人安装
 	if err := s.EnsureSkillSchema(ctx); err != nil {
 		return err

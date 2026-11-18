@@ -30,6 +30,7 @@ type WarmRuntime struct {
 
 type warmWorker struct {
 	convID int64
+	model  string // 启动时 --model；切换模型时重建进程
 	cmd    *exec.Cmd
 	stdin  interface {
 		Write([]byte) (int, error)
@@ -83,9 +84,10 @@ func (r *WarmRuntime) Close() {
 }
 
 // Ask 在同一 conversation 内串行投递消息，result 后保留进程供下一轮直接复用。
-func (r *WarmRuntime) Ask(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, images []ImagePart) (string, int, error) {
+// model 变更时丢弃旧保温进程并重建。
+func (r *WarmRuntime) Ask(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, images []ImagePart, model string) (string, int, error) {
 	start := time.Now()
-	w, err := r.worker(hook.ConvID, dir, systemPrompt, hook, resumeSession)
+	w, err := r.worker(hook.ConvID, dir, systemPrompt, hook, resumeSession, model)
 	if err != nil {
 		return "", 0, err
 	}
@@ -183,22 +185,37 @@ func (r *WarmRuntime) Ask(ctx context.Context, dir, systemPrompt, question, hist
 	}
 }
 
-func (r *WarmRuntime) worker(convID int64, dir, systemPrompt string, hook HookSpec, resumeSession string) (*warmWorker, error) {
+func (r *WarmRuntime) worker(convID int64, dir, systemPrompt string, hook HookSpec, resumeSession, model string) (*warmWorker, error) {
+	model = strings.TrimSpace(model)
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		return nil, fmt.Errorf("warm runtime closed")
 	}
 	if w := r.workers[convID]; w != nil {
-		w.users++
+		if w.model == model {
+			w.users++
+			r.mu.Unlock()
+			return w, nil
+		}
+		// 模型切换：停掉旧进程再重建
+		delete(r.workers, convID)
 		r.mu.Unlock()
-		return w, nil
+		r.stopOne(w)
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return nil, fmt.Errorf("warm runtime closed")
+		}
 	}
 	r.mu.Unlock()
 
 	args := []string{"-p", "--verbose", "--output-format", "stream-json", "--input-format", "stream-json", "--include-partial-messages", "--permission-mode", "default"}
 	if rs := strings.TrimSpace(resumeSession); rs != "" {
 		args = append(args, "--resume", rs)
+	}
+	if model != "" {
+		args = append(args, "--model", model)
 	}
 	if st := hook.Settings(); st != "" {
 		args = append(args, "--settings", st)
@@ -225,7 +242,7 @@ func (r *WarmRuntime) worker(convID int64, dir, systemPrompt string, hook HookSp
 		return nil, err
 	}
 	pgid, _ := syscall.Getpgid(cmd.Process.Pid)
-	w := &warmWorker{convID: convID, cmd: cmd, stdin: stdin, lines: make(chan []byte, 128), done: make(chan error, 1), users: 1, lastUsed: time.Now(), pgid: pgid}
+	w := &warmWorker{convID: convID, model: model, cmd: cmd, stdin: stdin, lines: make(chan []byte, 128), done: make(chan error, 1), users: 1, lastUsed: time.Now(), pgid: pgid}
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

@@ -187,7 +187,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	traceStarted := time.Now()
 	emitAsk(onEvent, map[string]any{
 		"type": "llm_trace_start", "trace_run_id": traceRunID, "agent_id": a.ID,
-		"engine": engineName, "source": traceSource, "model": "引擎未提供",
+		"engine": engineName, "source": traceSource, "model": traceModelLabel(a.Model),
 		"input_content":     llmTraceInputContent(sys, engineQ, history, atts),
 		"availability_note": availability,
 	})
@@ -222,7 +222,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				TimeoutS: s.Cfg.PermissionWaitSeconds() + 30,
 			}
 		}
-		return r.AskStreamWithImagesPhase(ctx, dir, sys, engineQ, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resume, claudeImages)
+		return r.AskStreamWithImagesPhase(ctx, dir, sys, engineQ, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resume, strings.TrimSpace(a.Model), claudeImages)
 	case "codex":
 		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
 			agent.EnsureCodexPermissionHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
@@ -256,7 +256,8 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
 		// 未限制工作区 → danger-full-access；绑定工作区 → workspace-write
 		codexSandbox := agent.CodexSandboxMode(workspaceBound)
-		out, ms, err := agent.CodexAskMetaExPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, onCmd, onCompact, codexSandbox, hookEnv...)
+		model := strings.TrimSpace(a.Model)
+		out, ms, err := agent.CodexAskMetaExPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, onCmd, onCompact, codexSandbox, model, hookEnv...)
 		// thread 在本机已无 rollout：清掉粘着的 session，拼平台历史后无 resume 重试
 		if err != nil && resume != "" && agent.IsCodexResumeGone(err.Error()) {
 			_ = s.Store.ClearConversationEngineMeta(context.WithoutCancel(ctx), metaConv)
@@ -268,7 +269,7 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				"type":    "system_note",
 				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
 			})
-			return agent.CodexAskMetaExPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, "", onCmd, onCompact, codexSandbox, hookEnv...)
+			return agent.CodexAskMetaExPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, "", onCmd, onCompact, codexSandbox, model, hookEnv...)
 		}
 		return out, ms, err
 	default:
@@ -277,13 +278,14 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
 		hookEnv := agent.ConvRoutingEnv(hookConv, s.Cfg.BackendURL, policyAgentID)
+		model := strings.TrimSpace(a.Model)
 		var out string
 		var ms int
 		var err error
 		if s.workspaceTrusted(dir) {
-			out, ms, err = agent.GenericAskMetaTrustedPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, hookEnv...)
+			out, ms, err = agent.GenericAskMetaTrustedPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, model, hookEnv...)
 		} else {
-			out, ms, err = agent.GenericAskMetaPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, hookEnv...)
+			out, ms, err = agent.GenericAskMetaPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, model, hookEnv...)
 		}
 		if err == nil || !agent.IsCursorWorkspaceTrustRequired(err.Error()) || s.workspaceTrusted(dir) {
 			return out, ms, err
@@ -297,8 +299,16 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			return "", ms, fmt.Errorf("工作区信任未确认（%s）: %s", reason, dir)
 		}
 		s.rememberWorkspaceTrust(dir)
-		return agent.GenericAskMetaTrustedPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, hookEnv...)
+		return agent.GenericAskMetaTrustedPhase(ctx, bin, dir, sys, engineQ, history, onChunk, timeout, onActivity, onMeta, onPhase, resume, model, hookEnv...)
 	}
+}
+
+// traceModelLabel 审计展示用模型名。
+func traceModelLabel(model string) string {
+	if m := strings.TrimSpace(model); m != "" {
+		return m
+	}
+	return "引擎默认"
 }
 
 func llmTraceSource(engine string) string {

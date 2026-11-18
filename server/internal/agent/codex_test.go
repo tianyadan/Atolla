@@ -88,14 +88,19 @@ func TestCodexSandboxMode(t *testing.T) {
 }
 
 func TestCodexArgsSandbox(t *testing.T) {
-	bound := CodexArgs("/tmp/ws", "hi", true, CodexSandboxMode(true))
+	bound := CodexArgs("/tmp/ws", "hi", true, CodexSandboxMode(true), "")
 	joined := strings.Join(bound, " ")
 	if !strings.Contains(joined, "-s workspace-write") || !strings.Contains(joined, "-C /tmp/ws") {
 		t.Fatalf("bound args=%v", bound)
 	}
-	free := CodexArgs("/tmp/ws", "hi", false, CodexSandboxMode(false))
+	free := CodexArgs("/tmp/ws", "hi", false, CodexSandboxMode(false), "gpt-6.2-sol")
 	joined = strings.Join(free, " ")
-	if !strings.Contains(joined, "-s danger-full-access") {
+	if !strings.Contains(joined, "-s danger-full-access") || !strings.Contains(joined, "-m gpt-6.2-sol") {
 		t.Fatalf("unbound args=%v", free)
+	}
+	resume := codexResumeArgs("/tmp/ws", "hi", "workspace-write", "gpt-6.2-astra", "thr-1", true)
+	rj := strings.Join(resume, " ")
+	if !strings.Contains(rj, "-m gpt-6.2-astra") || !strings.Contains(rj, "resume thr-1") {
+		t.Fatalf("resume args=%v", resume)
 	}
 }

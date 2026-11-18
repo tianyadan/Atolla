@@ -22,22 +22,23 @@ func GenericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // history 保留参数以兼容旧调用；v0.2.18 起调用方应传空，由引擎 resume 维护上下文。
 // extraEnv：AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承，避免同工作区串台。
 func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, false, extraEnv)
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, false, "", extraEnv)
 }
 
 // GenericAskMetaPhase 同 GenericAskMeta，并转发 Cursor 原生运行阶段。
-func GenericAskMetaPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, false, extraEnv)
+// model 非空时传 --model。
+func GenericAskMetaPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession, model string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, false, model, extraEnv)
 }
 
 // GenericAskMetaTrusted 在用户已确认工作区信任后，为 Cursor Agent 附加 --trust 再执行。
 func GenericAskMetaTrusted(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, true, extraEnv)
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, true, "", extraEnv)
 }
 
 // GenericAskMetaTrustedPhase 同 GenericAskMetaTrusted，并转发 Cursor 原生运行阶段。
-func GenericAskMetaTrustedPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, true, extraEnv)
+func GenericAskMetaTrustedPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession, model string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, true, model, extraEnv)
 }
 
 // IsCursorWorkspaceTrustRequired 判断 CLI 是否因工作区未信任而中止（无交互模式无法自行确认）。
@@ -46,8 +47,9 @@ func IsCursorWorkspaceTrustRequired(msg string) bool {
 }
 
 // CursorCLIArgs 构造 agent 打印模式参数。trust 为真时只追加 --trust，不使用 --yolo / -f。
-func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
-	args := make([]string, 0, 8)
+// model 非空时追加 --model（在 prompt 前）。
+func CursorCLIArgs(prompt, resume, mode string, trust bool, model string) []string {
+	args := make([]string, 0, 10)
 	if trust {
 		args = append(args, "--trust")
 	}
@@ -63,10 +65,13 @@ func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
 	if rs := strings.TrimSpace(resume); rs != "" {
 		args = append(args, "--resume", rs)
 	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "--model", m)
+	}
 	return append(args, prompt)
 }
 
-func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, trust bool, extraEnv []string) (string, int, error) {
+func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, trust bool, model string, extraEnv []string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -93,7 +98,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 
 	start := time.Now()
 	// 先真流式读 stream-json：中途 assistant 行立刻 onChunk，避免命令已展示而思考压到收尾。
-	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta, onPhase, extraEnv)
+	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust, model), onChunk, onMeta, onPhase, extraEnv)
 	if streamErr != nil && IsCursorWorkspaceTrustRequired(streamErr.Error()) {
 		return "", int(time.Since(start).Milliseconds()), streamErr
 	}
@@ -108,7 +113,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 	var lastErr error
 	var out string
 	for _, mode := range []string{"json", "text", "bare"} {
-		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust), extraEnv)
+		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust, model), extraEnv)
 		if lastErr != nil && IsCursorWorkspaceTrustRequired(lastErr.Error()) {
 			return "", int(time.Since(start).Milliseconds()), lastErr
 		}
