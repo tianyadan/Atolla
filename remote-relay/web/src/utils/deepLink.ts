@@ -11,7 +11,32 @@ export type ApprovalDeepLinkTarget = {
   requestId: string
 }
 
-export type AtollaDeepLinkTarget = AgentDeepLinkTarget | ApprovalDeepLinkTarget
+export type TaskQueueDeepLinkTarget = {
+  kind: 'taskQueue'
+  instanceId: string
+  agentId: string
+}
+
+export type TaskDetailDeepLinkTarget = {
+  kind: 'taskDetail'
+  instanceId: string
+  agentId: string
+  taskId: string
+}
+
+export type AgentsListDeepLinkTarget = {
+  kind: 'agents'
+  instanceId: string
+}
+
+export type AtollaDeepLinkTarget =
+  | AgentDeepLinkTarget
+  | ApprovalDeepLinkTarget
+  | TaskQueueDeepLinkTarget
+  | TaskDetailDeepLinkTarget
+  | AgentsListDeepLinkTarget
+
+export type DeepLinkContext = Pick<AgentDeepLinkTarget, 'instanceId' | 'agentId'>
 
 export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
@@ -27,7 +52,18 @@ function decodeSegment(raw: string | undefined): string | null {
   }
 }
 
-export function parseAtollaDeepLink(url: string): AtollaDeepLinkTarget | null {
+function queryValue(parsed: URL, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = decodeSegment(parsed.searchParams.get(key) ?? undefined)
+    if (value) return value
+  }
+  return null
+}
+
+export function parseAtollaDeepLink(
+  url: string,
+  fallback?: DeepLinkContext | null,
+): AtollaDeepLinkTarget | null {
   try {
     const parsed = new URL(url)
     if (parsed.protocol !== 'atolla:') return null
@@ -46,6 +82,30 @@ export function parseAtollaDeepLink(url: string): AtollaDeepLinkTarget | null {
         ? { kind: 'approval', instanceId, agentId, requestId }
         : null
     }
+    if (kind === 'task' && parts.length === 1 && parts[0] === 'detail') {
+      // Bark 文档常用 atolla://task/detail?id=123；通知应同时携带实例与员工，
+      // 手工测试省略上下文时回退到 App 最近一次对话。
+      const instanceId = queryValue(parsed, 'instance_id', 'instanceId') ?? fallback?.instanceId ?? null
+      const agentId = queryValue(parsed, 'agent_id', 'agentId') ?? fallback?.agentId ?? null
+      const taskId = queryValue(parsed, 'id', 'task_id', 'taskId')
+      return instanceId && agentId && taskId
+        ? { kind: 'taskDetail', instanceId, agentId, taskId }
+        : null
+    }
+    if (kind === 'task' && parts.length === 1 && parts[0] === 'queue') {
+      const instanceId = queryValue(parsed, 'instance_id', 'instanceId') ?? fallback?.instanceId ?? null
+      const agentId = queryValue(parsed, 'agent_id', 'agentId') ?? fallback?.agentId ?? null
+      return instanceId && agentId ? { kind: 'taskQueue', instanceId, agentId } : null
+    }
+    if (kind === 'agent' && parts.length === 3 && parts[2] === 'queue') {
+      const instanceId = decodeSegment(parts[0])
+      const agentId = decodeSegment(parts[1])
+      return instanceId && agentId ? { kind: 'taskQueue', instanceId, agentId } : null
+    }
+    if (kind === 'agents' && parts.length === 1) {
+      const instanceId = decodeSegment(parts[0])
+      return instanceId ? { kind: 'agents', instanceId } : null
+    }
     return null
   } catch {
     return null
@@ -53,10 +113,18 @@ export function parseAtollaDeepLink(url: string): AtollaDeepLinkTarget | null {
 }
 
 export function deepLinkTargetPath(target: AtollaDeepLinkTarget): string {
+  if (target.kind === 'agents') {
+    return deepLinkAgentsPath(target)
+  }
   const base = `/instances/${encodeURIComponent(target.instanceId)}/agents/${encodeURIComponent(target.agentId)}/chat`
-  return target.kind === 'approval'
-    ? `${base}?approval_request_id=${encodeURIComponent(target.requestId)}`
-    : base
+  if (target.kind === 'approval') {
+    return `${base}?approval_request_id=${encodeURIComponent(target.requestId)}`
+  }
+  if (target.kind === 'taskQueue') return `${base}?task_queue=1`
+  if (target.kind === 'taskDetail') {
+    return `${base}?task_queue=1&task_id=${encodeURIComponent(target.taskId)}`
+  }
+  return base
 }
 
 /** 对话页左上角返回目标：实例下的数字人列表 */
@@ -100,6 +168,10 @@ export function navigateToDeepLinkChat(
     return
   }
   clearPendingDeepLink()
+  if (target.kind === 'agents') {
+    navigate(deepLinkAgentsPath(target))
+    return
+  }
   navigate(deepLinkAgentsPath(target), { replace: true })
   navigate(deepLinkTargetPath(target))
 }
@@ -122,6 +194,9 @@ export function loadPendingDeepLink(
   if (!raw) return null
   try {
     const value = JSON.parse(raw) as Partial<AtollaDeepLinkTarget>
+    if (value.kind === 'agents' && typeof value.instanceId === 'string') {
+      return { kind: 'agents', instanceId: value.instanceId }
+    }
     if (value.kind === 'agent' && typeof value.instanceId === 'string' && typeof value.agentId === 'string') {
       return { kind: value.kind, instanceId: value.instanceId, agentId: value.agentId }
     }
@@ -136,6 +211,26 @@ export function loadPendingDeepLink(
         instanceId: value.instanceId,
         agentId: value.agentId,
         requestId: value.requestId,
+      }
+    }
+    if (
+      value.kind === 'taskQueue' &&
+      typeof value.instanceId === 'string' &&
+      typeof value.agentId === 'string'
+    ) {
+      return { kind: value.kind, instanceId: value.instanceId, agentId: value.agentId }
+    }
+    if (
+      value.kind === 'taskDetail' &&
+      typeof value.instanceId === 'string' &&
+      typeof value.agentId === 'string' &&
+      typeof value.taskId === 'string'
+    ) {
+      return {
+        kind: value.kind,
+        instanceId: value.instanceId,
+        agentId: value.agentId,
+        taskId: value.taskId,
       }
     }
   } catch {

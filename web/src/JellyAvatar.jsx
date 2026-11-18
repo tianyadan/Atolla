@@ -15,17 +15,23 @@ const FLOAT_MS = 3000
 const JUMP_MS = 600
 const ALERT_MS = 800
 const ERROR_MS = 889
+/** ponder：约 8fps（125ms/帧），介于 idle 触手摆动与 typing 跳动之间 */
+const PONDER_MS = 1000
+/** coding：约 8–10fps（100–125ms/帧），笔记本打字闪烁 */
+const CODING_MS = 1000
 const FRAME_MS_FLOAT = FLOAT_MS / JELLY_FRAMES
 const FRAME_MS_JUMP = JUMP_MS / JELLY_FRAMES
 const FRAME_MS_ALERT = ALERT_MS / JELLY_FRAMES
 const FRAME_MS_ERROR = ERROR_MS / JELLY_FRAMES
+const FRAME_MS_PONDER = PONDER_MS / JELLY_FRAMES
+const FRAME_MS_CODING = CODING_MS / JELLY_FRAMES
 
 /**
- * 可复用像素水母头像（v2：7 行动作精灵表）。
+ * 可复用像素水母头像（v3：9 行动作精灵表，含 ponder / coding）。
  * @param {{
  *   color?: string,
  *   size?: number,
- *   state?: 'idle'|'working'|'typing'|'waiting'|'error'|'sleep'|'eat'|'celebrate',
+ *   state?: 'idle'|'working'|'typing'|'waiting'|'error'|'sleep'|'eat'|'celebrate'|'ponder'|'coding',
  *   className?: string,
  *   title?: string,
  *   'aria-label'?: string,
@@ -63,7 +69,11 @@ export default function JellyAvatar({
         ? FRAME_MS_ERROR
         : state === 'working' || state === 'typing'
           ? FRAME_MS_JUMP
-          : FRAME_MS_FLOAT
+          : state === 'ponder'
+            ? FRAME_MS_PONDER
+            : state === 'coding'
+              ? FRAME_MS_CODING
+              : FRAME_MS_FLOAT
 
   // 帧循环；减少动效时定格第 0 帧
   useEffect(() => {

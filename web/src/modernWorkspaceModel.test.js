@@ -8,7 +8,6 @@ import {
   groupRecentConversations,
   highestAgentState,
   movePickerSelection,
-  normalizeUIStyle,
   sortConversationSummaries,
   uniqueLatestAgentConversations,
 } from './modernWorkspaceModel.js'
@@ -17,12 +16,6 @@ test('viewing an active busy conversation does not request a conversation switch
   assert.equal(conversationNeedsActivation({ active: true, agent_status: 'running' }), false)
   assert.equal(conversationNeedsActivation({ active: true, agent_status: 'idle' }), false)
   assert.equal(conversationNeedsActivation({ active: false, agent_status: 'running' }), true)
-})
-
-test('normalizeUIStyle keeps only supported values', () => {
-  assert.equal(normalizeUIStyle('modern'), 'modern')
-  assert.equal(normalizeUIStyle('classic'), 'classic')
-  assert.equal(normalizeUIStyle('broken'), 'classic')
 })
 
 test('conversation title and search have readable fallbacks', () => {

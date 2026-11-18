@@ -16,13 +16,37 @@ type stubRuntime struct {
 	approveAll *bool
 	decideID   string
 	decideBeh  string
+	jevosPkg   string
+	jevosChina bool
 }
 
-func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string, _ []ChatAtt) error {
+func (s *stubRuntime) AskManagedBackground(_ context.Context, agentID int64, question string, _ []ChatAtt, _ string) error {
 	s.asked = true
 	s.agent = agentID
 	s.q = question
 	return nil
+}
+
+func (s *stubRuntime) ListAgentTaskQueue(context.Context, int64) (any, error) {
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) EnqueueAgentTaskQueue(context.Context, int64, string, []ChatAtt) (any, error) {
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) InterruptAgentTaskQueue(context.Context, int64, string, []ChatAtt) (any, error) {
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) ContinueAndRunAgentTaskQueue(context.Context, int64) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+func (s *stubRuntime) CancelAgentTaskQueue(context.Context, int64, int64) error { return nil }
+func (s *stubRuntime) UpdateAgentTaskQueue(context.Context, int64, int64, string) error {
+	return nil
+}
+func (s *stubRuntime) ClearAgentTaskQueueDone(context.Context, int64) error { return nil }
+func (s *stubRuntime) AskSiriReceptionist(_ context.Context, question string) (any, error) {
+	s.q = question
+	return map[string]any{"answer": "reply", "conversation_id": int64(9), "reply_ms": 12}, nil
 }
 
 func (s *stubRuntime) SaveChatImageFromBytes(context.Context, []byte, string) (*ChatAtt, error) {
@@ -68,12 +92,31 @@ func (s *stubRuntime) UninstallAgentSkill(context.Context, int64, string) ([]sto
 	return nil, nil
 }
 
-func (s *stubRuntime) JevosSettingsGet(bool) (any, error)             { return map[string]any{}, nil }
-func (s *stubRuntime) JevosSettingsInstall(string) (any, error)        { return map[string]any{}, nil }
-func (s *stubRuntime) JevosSettingsSet(bool) (any, error)              { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsGet(bool) (any, error) { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsInstall(pkg string, chinaMirror bool) (any, error) {
+	s.jevosPkg = pkg
+	s.jevosChina = chinaMirror
+	return map[string]any{}, nil
+}
+func (s *stubRuntime) JevosSettingsSet(bool) (any, error)   { return map[string]any{}, nil }
+func (s *stubRuntime) JevosSettingsUninstall() (any, error) { return map[string]any{}, nil }
 func (s *stubRuntime) ListAgentLegacyMounts(context.Context, int64) ([]store.AgentLegacyMemoryMount, error) {
 	return nil, nil
 }
+func (s *stubRuntime) SaveNotifyPrefs(context.Context, store.NotifyPrefs) error { return nil }
+func (s *stubRuntime) GetNotifyPrefs(context.Context) (store.NotifyPrefs, error) {
+	return store.NotifyPrefs{}, nil
+}
+func (s *stubRuntime) SendNotifyBarkOTP(context.Context) (int, error)     { return 600, nil }
+func (s *stubRuntime) ConfirmNotifyBarkOTP(context.Context, string) error { return nil }
+
+func (s *stubRuntime) GetActiveTaskPlan(context.Context, int64) (any, error) { return nil, nil }
+func (s *stubRuntime) ConfirmTaskPlan(context.Context, int64, string, any) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+func (s *stubRuntime) RejectTaskPlan(context.Context, int64, string) error { return nil }
+func (s *stubRuntime) AbortTaskPlan(context.Context, int64, string) error  { return nil }
+func (s *stubRuntime) ResumeTaskPlan(context.Context, int64, string) error { return nil }
 
 func TestHandleAgentAskAccepts(t *testing.T) {
 	rt := &stubRuntime{}
@@ -98,6 +141,47 @@ func TestHandleAgentAskRequiresRuntime(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error without runtime")
+	}
+}
+
+func TestHandleReceptionistAsk(t *testing.T) {
+	rt := &stubRuntime{}
+	body, err := handleReceptionistAsk(&ExecContext{
+		Context: context.Background(),
+		Payload: map[string]interface{}{"question": "  今天有什么安排？  "},
+		Runtime: rt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := body.(map[string]any)
+	if rt.q != "今天有什么安排？" || result["answer"] != "reply" {
+		t.Fatalf("unexpected body=%v question=%q", body, rt.q)
+	}
+}
+
+func TestHandleReceptionistAskRequiresQuestion(t *testing.T) {
+	_, err := handleReceptionistAsk(&ExecContext{
+		Context: context.Background(),
+		Payload: map[string]interface{}{"question": "  "},
+		Runtime: &stubRuntime{},
+	})
+	if err == nil {
+		t.Fatal("expected question validation error")
+	}
+}
+
+func TestHandleJevosSettingsInstallPassesChinaMirror(t *testing.T) {
+	rt := &stubRuntime{}
+	_, err := handleJevosSettingsInstall(&ExecContext{
+		Payload: map[string]interface{}{"package_id": "macos-arm64", "china_mirror": true},
+		Runtime: rt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.jevosPkg != "macos-arm64" || !rt.jevosChina {
+		t.Fatalf("unexpected install options: pkg=%q china=%v", rt.jevosPkg, rt.jevosChina)
 	}
 }
 

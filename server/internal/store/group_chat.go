@@ -65,7 +65,7 @@ var (
 
 // EnsureGroupChatSchema 幂等创建群聊相关表。
 func (s *Store) EnsureGroupChatSchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS group_chats (
   id BIGINT NOT NULL AUTO_INCREMENT,
   name VARCHAR(255) NOT NULL,
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS group_chats (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS group_chat_members (
   group_id BIGINT NOT NULL,
   agent_id BIGINT NOT NULL,

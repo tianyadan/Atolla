@@ -5,7 +5,20 @@ import { JELLY_COLORS, assignJellyColor } from './jellyColor.js'
 
 const DEMO_AGENTS = JELLY_COLORS.map((color, i) => ({
   id: i + 1,
-  name: ({ orange: '橙汁同学', yellow: '柠檬 intern', blue: '蓝莓助手', green: '青苔运维', purple: '紫晶助理', red: '赤焰销售' })[color],
+  name: ({
+    orange: '橙汁同学',
+    yellow: '柠檬 intern',
+    blue: '蓝莓助手',
+    green: '青苔运维',
+    purple: '紫晶助理',
+    red: '赤焰销售',
+    cyan: '青空 intern',
+    teal: '海藻运维',
+    pink: '樱花助理',
+    lime: '青柠同学',
+    coral: '珊瑚销售',
+    sky: '晴空助手',
+  })[color],
   jelly_color: color,
   status: i === 4 ? 'running' : 'idle',
 }))
@@ -21,7 +34,7 @@ export default function JellyPreview() {
     <div style={{ padding: 24, background: '#0a0a0a', minHeight: '100vh', color: '#f5f5f5', fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
       <section className="modal-card ma-settings" style={{ maxWidth: 480, marginBottom: 24 }} data-shot="picker">
         <h2>自定义招聘</h2>
-        <JellyColorPicker value={color} onChange={setColor} />
+        <JellyColorPicker value={color} onChange={setColor} previewSize={72} />
         <label>
           名称
           <input value="新同事" readOnly />
@@ -32,9 +45,29 @@ export default function JellyPreview() {
             <option value="claude">Claude</option>
           </select>
         </label>
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <JellyAvatar color={color} size={72} state="idle" />
-          <span className="muted">预览 · {color}</span>
+      </section>
+
+      <section style={{ maxWidth: 520, marginBottom: 24 }} data-shot="coding-colors">
+        <h2 style={{ fontSize: 16, marginBottom: 12 }}>coding 写代码 · 十二色</h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
+          {JELLY_COLORS.map((c) => (
+            <div key={c} style={{ textAlign: 'center' }}>
+              <JellyAvatar color={c} size={48} state="coding" />
+              <div style={{ fontSize: 12, marginTop: 4, color: '#8a8a8a' }}>{c}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ maxWidth: 520, marginBottom: 24 }} data-shot="ponder-colors">
+        <h2 style={{ fontSize: 16, marginBottom: 12 }}>ponder 思考 · 十二色</h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
+          {JELLY_COLORS.map((c) => (
+            <div key={c} style={{ textAlign: 'center' }}>
+              <JellyAvatar color={c} size={48} state="ponder" />
+              <div style={{ fontSize: 12, marginTop: 4, color: '#8a8a8a' }}>{c}</div>
+            </div>
+          ))}
         </div>
       </section>
 

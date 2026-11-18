@@ -22,6 +22,24 @@ export function byLabel(by: string): string {
   return by || ''
 }
 
+/** 命令风险条文案：meaning / by / note 去重，避免 JEV 提示重复两遍 */
+export function formatCmdRiskCaption(parsed: ParsedCommand): string {
+  const meaning = String(parsed.meaning || '').trim()
+  const note = String(parsed.note || '').trim()
+  const by = byLabel(parsed.by).trim()
+  const base = meaning || `风险等级：${riskText(parsed.risk)}`
+  const parts: string[] = [base]
+
+  const alreadyHas = (s: string) =>
+    parts.some((p) => p === s || p.includes(s) || s.includes(p))
+
+  if (by && !alreadyHas(by)) parts.push(by)
+  // note 与 meaning 相同或互相包含时跳过（常见：两边都是 JEV/自动审核说明）
+  if (note && !alreadyHas(note)) parts.push(note)
+
+  return parts.join(' · ')
+}
+
 /**
  * Extract command display fields from mirror message.
  * Prefers payload (from Mac sync); falls back to JSON content.

@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { createAgent } from '../api'
-import { JellyAvatar } from '../jelly/JellyAvatar'
 import { JellyColorPicker } from '../jelly/JellyColorPicker'
 import { assignJellyColor, type JellyColor } from '../jelly/jellyColor'
 import { ENGINES } from '../utils/engine'
@@ -76,10 +75,13 @@ export function CreateAgentSheet({ open, instanceId, onClose, onCreated }: Props
         </header>
         <form className="settings-sheet-body" onSubmit={(e) => void onSubmit(e)}>
           {err ? <p className="error-banner">{err}</p> : null}
-          <div className="settings-jelly-preview">
-            <JellyAvatar color={jelly} size={56} state="idle" />
-          </div>
-          <JellyColorPicker value={jelly} onChange={setJelly} disabled={busy} label="水母颜色" />
+          <JellyColorPicker
+            value={jelly}
+            onChange={setJelly}
+            disabled={busy}
+            label="水母颜色"
+            previewSize={64}
+          />
           <label className="settings-label">
             名称
             <input

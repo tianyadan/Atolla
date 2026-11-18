@@ -1,37 +1,168 @@
 /**
- * 结束后用 DB 校准聊天时，若库被延迟 compact 清短，保留本地更长的 assistant。
- * 本地命令轨迹更完整时也优先本地，避免过程气泡被短页 DB 冲掉。
- * 若本地因「流式 + result 双推」把同一段拼了两遍，则回退 DB。
+ * 结束后用 DB 校准聊天时：
+ * - 按 id 合并，保证手机新消息与 DB 页能进入 PC 轨
+ * - 同 id 的 assistant：本地更长则保留本地（DB 被 compact 清短时）
+ * - 本地流式重复拼接时回退 DB
+ * - 无 id 的本地命令不追加（否则会顶到最终回复后面）
+ * - 保留尚未落库的乐观 user（pending / 无 id），避免轮询 force 校准把刚发的气泡冲掉
+ * - 仅保留未落库的流式 assistant 正文
  */
 export function coalesceChatLog(local = [], fromDb = []) {
-  const isRealAsst = (m) =>
-    m?.role === 'assistant'
-    && (m.content || '').trim()
-    && !(m.content || '').includes('上下文已由引擎压缩')
+  if (!local.length) return fromDb
+  if (!fromDb.length) return local
 
-  const lastLocal = [...local].reverse().find(isRealAsst)
-  const lastDb = [...fromDb].reverse().find(isRealAsst)
-  const localText = (lastLocal?.content || '').trim()
-  const dbText = (lastDb?.content || '').trim()
-  const localLen = localText.length
-  const dbLen = dbText.length
-  const localCmds = local.filter((m) => m?.role === 'command').length
-  const dbCmds = fromDb.filter((m) => m?.role === 'command').length
-
-  // 本地把同一段结论拼了两遍（或本地 = DB正文 + 再拼一遍）→ 信 DB
-  if (looksLikeDuplicatedAssistant(localText, dbText)) {
-    return fromDb
+  const byId = new Map()
+  for (const m of fromDb) {
+    if (m?.id == null) continue
+    byId.set(m.id, m)
   }
 
-  // 本地流式正文更长：说明 DB 被 compact 清掉或尚未写入完整回复
-  if (localLen > 0 && localLen > dbLen) {
-    return local
+  for (const m of local) {
+    if (m?.id == null) continue
+    const db = byId.get(m.id)
+    if (!db) {
+      // 当前页 DB 未带回的更早消息（本地曾 loadOlder）
+      byId.set(m.id, m)
+      continue
+    }
+    if (m.role === 'assistant') {
+      const localText = (m.content || '').trim()
+      const dbText = (db.content || '').trim()
+      const localClean = stripRepeatedAssistantTail(localText)
+      if (looksLikeDuplicatedAssistant(localText, dbText)) {
+        byId.set(m.id, dbText ? db : { ...m, content: localClean })
+      } else if (localClean.length > dbText.length) {
+        byId.set(m.id, {
+          ...db,
+          content: localClean,
+          replySec: m.replySec ?? db.replySec,
+          attachments: (m.attachments?.length ? m.attachments : db.attachments) || [],
+        })
+      } else if (m.attachments?.length && !(db.attachments?.length)) {
+        byId.set(m.id, { ...db, attachments: m.attachments })
+      }
+    }
   }
-  // 本地命令过程更完整（且回复不更短）：保留执行轨迹
-  if (localCmds > dbCmds && localLen >= dbLen) {
-    return local
+
+  const merged = [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id))
+
+  // 乐观发送的 user：DB 尚未带回时保留，避免「发出去看不见」
+  appendPendingLocalUsers(merged, local)
+
+  // 取本地最长的无 id assistant（本轮流式汇总）
+  let bestLocalAsst = null
+  for (const m of local) {
+    if (m?.id != null || m.role !== 'assistant') continue
+    const text = (m.content || '').trim()
+    if (!text) continue
+    if (!bestLocalAsst || text.length >= (bestLocalAsst.content || '').trim().length) {
+      bestLocalAsst = m
+    }
   }
-  return fromDb
+  if (!bestLocalAsst) return merged
+
+  const text = (bestLocalAsst.content || '').trim()
+  let matchedIdx = -1
+  for (let i = merged.length - 1; i >= 0; i--) {
+    if (merged[i].role !== 'assistant') continue
+    const dbText = (merged[i].content || '').trim()
+    if (!dbText) continue
+    const head = text.slice(0, Math.min(48, text.length))
+    if (text === dbText || text.includes(dbText) || dbText.includes(head)) {
+      matchedIdx = i
+      break
+    }
+  }
+
+  const cleanLocal = stripRepeatedAssistantTail(bestLocalAsst.content || '')
+
+  if (matchedIdx >= 0) {
+    const dbText = (merged[matchedIdx].content || '').trim()
+    if (looksLikeDuplicatedAssistant(text, dbText)) {
+      return merged
+    }
+    if (cleanLocal.trim().length > dbText.length) {
+      merged[matchedIdx] = {
+        ...merged[matchedIdx],
+        content: cleanLocal,
+        replySec: bestLocalAsst.replySec ?? merged[matchedIdx].replySec,
+        attachments: (bestLocalAsst.attachments?.length
+          ? bestLocalAsst.attachments
+          : merged[matchedIdx].attachments) || [],
+      }
+    }
+    return merged
+  }
+
+  // DB 页尚无对应正文：把流式回复接到末尾，避免「只有命令」
+  merged.push({
+    role: 'assistant',
+    content: cleanLocal,
+    time: bestLocalAsst.time,
+    replySec: bestLocalAsst.replySec,
+    attachments: bestLocalAsst.attachments || [],
+    uid: bestLocalAsst.uid,
+  })
+  return merged
+}
+
+/** 追加本地尚未在 DB 中出现的 user（乐观发送）；不追加无 id command */
+function appendPendingLocalUsers(merged, local) {
+  const dbUserContents = new Map()
+  for (const m of merged) {
+    if (m.role !== 'user') continue
+    const key = String(m.content || '')
+    dbUserContents.set(key, (dbUserContents.get(key) || 0) + 1)
+  }
+  const localCounts = new Map()
+  for (const m of local) {
+    if (m?.id != null || m.role !== 'user') continue
+    // pending 或无 id 的乐观气泡都保留
+    const key = String(m.content || '')
+    const seen = localCounts.get(key) || 0
+    localCounts.set(key, seen + 1)
+    const dbCount = dbUserContents.get(key) || 0
+    if (seen < dbCount) continue
+    const optimistic = {
+      role: 'user',
+      content: m.content,
+      attachments: m.attachments || [],
+      time: m.time,
+      pending: true,
+      uid: m.uid,
+    }
+
+    // 镜像分页只带最新 N 条：一次工具较多的回合里，用户消息可能已被挤出
+    // 当前页，而这轮 command / assistant 输出仍在。此时若直接 append，会在视觉上
+    // 形成「AI 先回复，用户消息最后出现」的倒序。用客户端发送时间将气泡插到第一条
+    // 同轮服务端输出之前；没有可靠时间戳时保持追加，避免重排历史记录。
+    const optimisticTime = Number(optimistic.time) || 0
+    const firstLaterOutput = optimisticTime > 0
+      ? merged.findIndex((row) =>
+        row.role !== 'user' && Number(row.time) >= optimisticTime,
+      )
+      : -1
+    if (firstLaterOutput >= 0) merged.splice(firstLaterOutput, 0, optimistic)
+    else merged.push(optimistic)
+  }
+}
+
+/**
+ * 剥掉「后半段与前文完全重复」的尾巴（例如「改动/建议提交」整节贴了两次）。
+ * 找不到稳定重复则原样返回。
+ */
+export function stripRepeatedAssistantTail(text) {
+  const s = String(text || '')
+  if (s.length < 80) return s
+  const max = Math.floor(s.length / 2)
+  for (let len = max; len >= 48; len -= 1) {
+    const tail = s.slice(s.length - len)
+    const earlierAt = s.indexOf(tail)
+    if (earlierAt >= 0 && earlierAt <= s.length - len - 1) {
+      return s.slice(0, s.length - len).replace(/\s+$/u, '')
+    }
+  }
+  return s
 }
 
 /** 检测流式重复拼接：同一长句块出现两次，或本地 = 结论 +（过程+结论/DB） */
@@ -39,7 +170,8 @@ export function looksLikeDuplicatedAssistant(localText, dbText = '') {
   const local = String(localText || '').trim()
   if (local.length < 60) return false
 
-  // 滑动窗口：前半段某 40+ 字块在后文再次出现
+  if (stripRepeatedAssistantTail(local) !== local) return true
+
   const win = Math.min(48, Math.floor(local.length / 3))
   if (win >= 32) {
     const limit = Math.floor(local.length / 2)
@@ -54,7 +186,6 @@ export function looksLikeDuplicatedAssistant(localText, dbText = '') {
     const first = local.indexOf(db)
     const last = local.lastIndexOf(db)
     if (first >= 0 && last > first) return true
-    // 本地以 DB 结尾，且开头那段又是 DB 的尾部（结论先推、再整段 result）
     if (local.endsWith(db)) {
       const head = local.slice(0, local.length - db.length).trim()
       if (head.length >= 20 && db.includes(head.slice(0, Math.min(head.length, 120)))) {
@@ -63,4 +194,17 @@ export function looksLikeDuplicatedAssistant(localText, dbText = '') {
     }
   }
   return false
+}
+
+/** 追加 chunk 前：若本段已在气泡中则跳过，避免引擎重放造成「改动」贴两次 */
+export function shouldAppendAssistantChunk(prevContent, piece) {
+  const cur = String(prevContent || '')
+  const p = String(piece || '')
+  if (!p) return false
+  if (!cur) return true
+  if (cur.endsWith(p)) return false
+  const trimmed = p.replace(/^\s+/u, '')
+  if (trimmed.length >= 32 && cur.includes(trimmed)) return false
+  if (p.length >= cur.length + 16 && (p.endsWith(cur) || p.includes(cur.trim()))) return false
+  return true
 }

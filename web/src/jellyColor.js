@@ -1,6 +1,19 @@
 /** 像素水母头像颜色：读写集中在此，与后端 jelly_color 对齐 */
 
-export const JELLY_COLORS = ['orange', 'yellow', 'blue', 'green', 'purple', 'red']
+export const JELLY_COLORS = [
+  'orange',
+  'yellow',
+  'blue',
+  'green',
+  'purple',
+  'red',
+  'cyan',
+  'teal',
+  'pink',
+  'lime',
+  'coral',
+  'sky',
+]
 
 /** API 字段名（snake_case，与后端一致） */
 export const JELLY_COLOR_FIELD = 'jelly_color'
@@ -17,16 +30,16 @@ export function normalizeJellyColor(value) {
 }
 
 /**
- * 与后端 AssignJellyColor 一致：数值 id 用 id % 6；
- * 非数值 id 用稳定哈希再 mod 6。
- * 顺序：0=orange, 1=yellow, 2=blue, 3=green, 4=purple, 5=red
+ * 与后端 AssignJellyColor 一致：数值 id 用 id % 12；
+ * 非数值 id 用稳定哈希再 mod 12。
+ * 顺序：0=orange … 5=red, 6=cyan, 7=teal, 8=pink, 9=lime, 10=coral, 11=sky
  * @param {string|number|null|undefined} id
  */
 export function assignJellyColor(id) {
   const n = Number(id)
   if (Number.isFinite(n) && Number.isInteger(n)) {
     // JS 对负数 % 可能为负；与后端正 id 一致时取非负余数
-    const idx = ((n % 6) + 6) % 6
+    const idx = ((n % 12) + 12) % 12
     return JELLY_COLORS[idx]
   }
   const s = String(id ?? '')
@@ -35,12 +48,12 @@ export function assignJellyColor(id) {
     h ^= s.charCodeAt(i)
     h = Math.imul(h, 16777619)
   }
-  return JELLY_COLORS[Math.abs(h) % 6]
+  return JELLY_COLORS[Math.abs(h) % 12]
 }
 
 /**
  * 从员工对象解析展示色。
- * 优先级：API jelly_color → id%6（或非数值哈希）回退。
+ * 优先级：API jelly_color → id%12（或非数值哈希）回退。
  * 接口缺字段时不报错。
  */
 export function resolveJellyColor(agent) {
@@ -86,4 +99,20 @@ export function jellyStateFromAgent(agent, opts = {}) {
     return 'working'
   }
   return 'idle'
+}
+
+/** 把统一 agent_phase 映射为水母动作；未知阶段保留调用方回退状态。 */
+export function jellyStateFromPhase(phase, fallback = 'working') {
+  switch (String(phase || '').toLowerCase()) {
+    case 'thinking': return 'ponder'
+    // Agent 处理工具和生成回复时统一展示敲电脑动画。
+    case 'tool_call': return 'coding'
+    case 'responding': return 'coding'
+    case 'working': return 'coding'
+    case 'interaction_query': return 'waiting'
+    case 'waiting': return 'waiting'
+    case 'error': return 'error'
+    case 'idle': return 'idle'
+    default: return fallback
+  }
 }

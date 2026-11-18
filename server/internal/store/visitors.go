@@ -22,24 +22,14 @@ type Visitor struct {
 // ensureReceptionistSchema 前台助理标记、访客表、会话 visitor_id。
 func (s *Store) ensureReceptionistSchema(ctx context.Context) error {
 	for _, col := range []struct{ table, name, ddl string }{
-		{"managed_agents", "is_receptionist", `ALTER TABLE managed_agents ADD COLUMN is_receptionist TINYINT NOT NULL DEFAULT 0 AFTER status`},
-		{"conversations", "visitor_id", `ALTER TABLE conversations ADD COLUMN visitor_id BIGINT NULL AFTER agent_id`},
+		{"managed_agents", "is_receptionist", `ALTER TABLE managed_agents ADD COLUMN is_receptionist TINYINT NOT NULL DEFAULT 0`},
+		{"conversations", "visitor_id", `ALTER TABLE conversations ADD COLUMN visitor_id BIGINT NULL`},
 	} {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-			col.table, col.name,
-		).Scan(&n); err != nil {
+		if err := s.addColumnIfMissing(ctx, col.table, col.name, col.ddl); err != nil {
 			return err
 		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
-				return err
-			}
-		}
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS visitors (
 		  id                      BIGINT       NOT NULL AUTO_INCREMENT,
 		  public_id               VARCHAR(64)  NOT NULL,
@@ -53,7 +43,7 @@ func (s *Store) ensureReceptionistSchema(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS visitor_ask_logs (
 		  id                   BIGINT        NOT NULL AUTO_INCREMENT,
 		  visitor_id           BIGINT        NOT NULL,
@@ -134,6 +124,30 @@ func (s *Store) GetVisitorByPublicID(ctx context.Context, publicID string) (*Vis
 		return nil, nil
 	}
 	return v, err
+}
+
+// GetOrCreateSystemVisitor returns a stable non-cookie visitor for trusted system entry points
+// such as Siri. The fixed public ID keeps one isolated Receptionist conversation across calls.
+func (s *Store) GetOrCreateSystemVisitor(ctx context.Context, publicID, name string) (*Visitor, error) {
+	publicID = strings.TrimSpace(publicID)
+	name = strings.TrimSpace(name)
+	if publicID == "" || name == "" {
+		return nil, sql.ErrNoRows
+	}
+	if len([]rune(publicID)) > 64 {
+		publicID = string([]rune(publicID)[:64])
+	}
+	if len([]rune(name)) > 32 {
+		name = string([]rune(name)[:32])
+	}
+	query := `INSERT IGNORE INTO visitors (public_id, name) VALUES (?,?)`
+	if s.IsSQLite() {
+		query = `INSERT OR IGNORE INTO visitors (public_id, name) VALUES (?,?)`
+	}
+	if _, err := s.db.ExecContext(ctx, query, publicID, name); err != nil {
+		return nil, err
+	}
+	return s.GetVisitorByPublicID(ctx, publicID)
 }
 
 func scanVisitor(row interface{ Scan(dest ...any) error }) (*Visitor, error) {

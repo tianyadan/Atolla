@@ -7,18 +7,9 @@ import (
 
 // EnsureJellyColorSchema 幂等添加 jelly_color，并为已有/空值员工按 id 回填稳定默认色。
 func (s *Store) EnsureJellyColorSchema(ctx context.Context) error {
-	var n int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'jelly_color'`,
-	).Scan(&n); err != nil {
+	if err := s.addColumnIfMissing(ctx, "managed_agents", "jelly_color",
+		`ALTER TABLE managed_agents ADD COLUMN jelly_color VARCHAR(16) NOT NULL DEFAULT ''`); err != nil {
 		return err
-	}
-	if n == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE managed_agents ADD COLUMN jelly_color VARCHAR(16) NOT NULL DEFAULT '' AFTER avatar_url`); err != nil {
-			return err
-		}
 	}
 	return s.backfillJellyColors(ctx)
 }

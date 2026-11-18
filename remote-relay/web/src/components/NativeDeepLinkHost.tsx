@@ -11,13 +11,26 @@ import {
   savePendingDeepLink,
   type AtollaDeepLinkTarget,
 } from '../utils/deepLink'
+import { loadLastChatSelection } from '../utils/chatResume'
 
 /** 冷启动 launch URL 只处理一次，避免 effect 重跑时再次 navigate 把「返回」打回对话页 */
 let launchUrlConsumed = false
+let lastOpenedUrl = ''
+let lastOpenedAt = 0
 
 /** 测试或热重载时可重置 launch 消费标记 */
 export function resetLaunchUrlConsumedForTests(): void {
   launchUrlConsumed = false
+  lastOpenedUrl = ''
+  lastOpenedAt = 0
+}
+
+/** 冷启动时系统可能同时投递 launch URL 和 appUrlOpen，短时间内只消费一次。 */
+export function shouldOpenUrl(url: string, now = Date.now()): boolean {
+  if (url === lastOpenedUrl && now - lastOpenedAt < 2_000) return false
+  lastOpenedUrl = url
+  lastOpenedAt = now
+  return true
 }
 
 /** 接收 Widget/灵动岛 URL；认证或解锁不足时先持久化目标再恢复。 */
@@ -52,7 +65,8 @@ export function NativeDeepLinkHost() {
 
     const openUrl = (url: string | undefined) => {
       if (cancelled || !url) return
-      const target = parseAtollaDeepLink(url)
+      if (!shouldOpenUrl(url)) return
+      const target = parseAtollaDeepLink(url, loadLastChatSelection())
       if (target) openTarget(target)
     }
 

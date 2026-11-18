@@ -2,6 +2,7 @@ package remotebridge
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -394,4 +395,15 @@ func (b *Bridge) handleCommand(ctx context.Context, client *RelayClient, cmd Dev
 	}
 	_ = client.SubmitCommandResult(ctx, cmd.ID, "done", body)
 	b.setOK()
+}
+
+// ExecuteAction reuses the same local action registry for a trusted LAN
+// request. It deliberately has no RelayClient, so LAN execution never writes
+// command results back to the cloud relay.
+func (b *Bridge) ExecuteAction(ctx context.Context, action string, payload map[string]any) (any, error) {
+	h, ok := Handlers[action]
+	if !ok {
+		return nil, fmt.Errorf("action not registered: %s", action)
+	}
+	return h(&ExecContext{Context: ctx, Store: b.Store, Payload: payload, Runtime: b.Runtime, Viewer: b, Config: b.Config})
 }

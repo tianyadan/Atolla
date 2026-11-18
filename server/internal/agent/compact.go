@@ -54,7 +54,7 @@ func RunEngineCompact(ctx context.Context, bin, engine, dir, sessionID string, t
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), engine)
 	cmd.Stdin = bytes.NewReader(nil)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

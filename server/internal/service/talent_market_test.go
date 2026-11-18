@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"atolla/server/internal/store"
 )
@@ -44,6 +47,52 @@ func TestTalentPresetsCount(t *testing.T) {
 	for _, p := range TalentPresets() {
 		if p.ID == "" || p.RulesPrompt == "" || len(p.SkillTags) == 0 {
 			t.Fatalf("incomplete preset %+v", p.ID)
+		}
+	}
+}
+
+// TestHireTalentDoesNotBlockOnBrowserUse 回归：带 browser 技能的岗位招聘不得同步等 EnsureBrowserUse。
+func TestHireTalentDoesNotBlockOnBrowserUse(t *testing.T) {
+	st, err := store.NewWithDriver(store.DriverSQLite, filepath.Join(t.TempDir(), "hire.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	s := &Service{Store: st}
+	ctx := context.Background()
+	cw := int64(262144)
+	color := "purple"
+
+	started := time.Now()
+	a, err := s.HireTalent(ctx, HireTalentInput{
+		TalentID:            "fullstack",
+		Name:                "苏晚舟-回归",
+		Engine:              "agent",
+		ContextWindowTokens: &cw,
+		JellyColor:          &color,
+	})
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("HireTalent: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("hire blocked too long: %v (likely sync EnsureBrowserUse)", elapsed)
+	}
+	if a == nil || a.ID <= 0 {
+		t.Fatalf("missing agent: %+v", a)
+	}
+	skills, err := st.ListAgentSkills(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("ListAgentSkills: %v", err)
+	}
+	got := map[string]bool{}
+	for _, sk := range skills {
+		if sk.Installed {
+			got[sk.ID] = true
+		}
+	}
+	for _, want := range []string{"atolla.database", "atolla.browser", "atolla.search"} {
+		if !got[want] {
+			t.Fatalf("skill %s not installed; got=%v", want, got)
 		}
 	}
 }

@@ -82,30 +82,37 @@ type VisitorAskLogFilter struct {
 // ensureVisitorAskLogAuditColumns 幂等补齐审计扩展列与索引。
 func (s *Store) ensureVisitorAskLogAuditColumns(ctx context.Context) error {
 	cols := []struct{ name, ddl string }{
-		{"user_message_id", `ALTER TABLE visitor_ask_logs ADD COLUMN user_message_id BIGINT NOT NULL DEFAULT 0 AFTER user_agent`},
-		{"assistant_message_id", `ALTER TABLE visitor_ask_logs ADD COLUMN assistant_message_id BIGINT NOT NULL DEFAULT 0 AFTER user_message_id`},
-		{"input_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN input_tokens BIGINT NOT NULL DEFAULT 0 AFTER assistant_message_id`},
-		{"output_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN output_tokens BIGINT NOT NULL DEFAULT 0 AFTER input_tokens`},
-		{"cached_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN cached_tokens BIGINT NOT NULL DEFAULT 0 AFTER output_tokens`},
-		{"total_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN total_tokens BIGINT NOT NULL DEFAULT 0 AFTER cached_tokens`},
-		{"duration_ms", `ALTER TABLE visitor_ask_logs ADD COLUMN duration_ms INT NOT NULL DEFAULT 0 AFTER total_tokens`},
-		{"status", `ALTER TABLE visitor_ask_logs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'processing' AFTER duration_ms`},
-		{"error_message", `ALTER TABLE visitor_ask_logs ADD COLUMN error_message TEXT NULL AFTER status`},
-		{"finished_at", `ALTER TABLE visitor_ask_logs ADD COLUMN finished_at DATETIME NULL AFTER error_message`},
+		{"user_message_id", `ALTER TABLE visitor_ask_logs ADD COLUMN user_message_id BIGINT NOT NULL DEFAULT 0`},
+		{"assistant_message_id", `ALTER TABLE visitor_ask_logs ADD COLUMN assistant_message_id BIGINT NOT NULL DEFAULT 0`},
+		{"input_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN input_tokens BIGINT NOT NULL DEFAULT 0`},
+		{"output_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN output_tokens BIGINT NOT NULL DEFAULT 0`},
+		{"cached_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN cached_tokens BIGINT NOT NULL DEFAULT 0`},
+		{"total_tokens", `ALTER TABLE visitor_ask_logs ADD COLUMN total_tokens BIGINT NOT NULL DEFAULT 0`},
+		{"duration_ms", `ALTER TABLE visitor_ask_logs ADD COLUMN duration_ms INT NOT NULL DEFAULT 0`},
+		{"status", `ALTER TABLE visitor_ask_logs ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'processing'`},
+		{"error_message", `ALTER TABLE visitor_ask_logs ADD COLUMN error_message TEXT NULL`},
+		{"finished_at", `ALTER TABLE visitor_ask_logs ADD COLUMN finished_at DATETIME NULL`},
 	}
 	for _, col := range cols {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'visitor_ask_logs' AND COLUMN_NAME = ?`, col.name,
-		).Scan(&n); err != nil {
+		if err := s.addColumnIfMissing(ctx, "visitor_ask_logs", col.name, col.ddl); err != nil {
 			return err
 		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
+	}
+	// 索引：MySQL 用 ADD KEY；SQLite 用 CREATE INDEX IF NOT EXISTS
+	if s.IsSQLite() {
+		idxs := []string{
+			`CREATE INDEX IF NOT EXISTS idx_ask_user_message ON visitor_ask_logs (user_message_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_ask_assistant_message ON visitor_ask_logs (assistant_message_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_ask_conversation_time ON visitor_ask_logs (conversation_id, created_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_ask_visitor_time ON visitor_ask_logs (visitor_id, created_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_ask_status_time ON visitor_ask_logs (status, created_at)`,
+		}
+		for _, q := range idxs {
+			if _, err := s.db.ExecContext(ctx, q); err != nil {
 				return err
 			}
 		}
+		return nil
 	}
 	indexes := []struct{ name, ddl string }{
 		{"idx_ask_user_message", `ALTER TABLE visitor_ask_logs ADD KEY idx_ask_user_message (user_message_id)`},

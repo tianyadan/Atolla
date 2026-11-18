@@ -5,16 +5,20 @@ import (
 	"strings"
 )
 
-// JellyColors 像素小水母可选颜色（同一造型换色）。
-var JellyColors = []string{"orange", "yellow", "blue", "green", "purple", "red"}
+// JellyColors 像素小水母可选颜色（同一造型换色；暗色 UI 高对比，无黑/近黑）。
+var JellyColors = []string{
+	"orange", "yellow", "blue", "green", "purple", "red",
+	"cyan", "teal", "pink", "lime", "coral", "sky",
+}
 
 // ErrInvalidJellyColor 非法 jelly_color。
-var ErrInvalidJellyColor = fmt.Errorf("jelly_color must be orange|yellow|blue|green|purple|red")
+var ErrInvalidJellyColor = fmt.Errorf("jelly_color must be orange|yellow|blue|green|purple|red|cyan|teal|pink|lime|coral|sky")
 
 // ValidJellyColor 校验颜色取值（大小写不敏感，返回前建议 Normalize）。
 func ValidJellyColor(c string) bool {
 	switch strings.ToLower(strings.TrimSpace(c)) {
-	case "orange", "yellow", "blue", "green", "purple", "red":
+	case "orange", "yellow", "blue", "green", "purple", "red",
+		"cyan", "teal", "pink", "lime", "coral", "sky":
 		return true
 	default:
 		return false
@@ -30,7 +34,7 @@ func NormalizeJellyColor(c string) string {
 	return c
 }
 
-// AssignJellyColor 按员工 id 稳定轮转分配颜色，便于同组分散。
+// AssignJellyColor 按员工 id 稳定轮转分配颜色，便于同组分散（id % 12）。
 func AssignJellyColor(id int64) string {
 	if id < 0 {
 		id = -id

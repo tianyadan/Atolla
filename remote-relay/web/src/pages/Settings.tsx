@@ -1,161 +1,166 @@
-import { Capacitor } from '@capacitor/core'
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import {
-  clearToken,
-  fetchReceiveEmail,
-  fetchVersion,
-  saveReceiveEmail,
-} from '../api'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { clearToken, fetchReceiveEmail, fetchVersion, getToken } from '../api'
 import { PageShell } from '../components/PageShell'
-import { getApiBase, setApiBase } from '../utils/apiBase'
+import {
+  SettingsGroup,
+  SettingsPageBody,
+  SettingsRow,
+} from '../components/settings/SettingsList'
+import {
+  SettingsIconBell,
+  SettingsIconDoc,
+  SettingsIconGlobe,
+  SettingsIconInfo,
+  SettingsIconLayers,
+  SettingsIconMail,
+  SettingsIconNetwork,
+} from '../components/settings/SettingsIcons'
+import { useLocale } from '../i18n/useLocale'
+import { getLanConnection, getLanRouteState, type LanRouteState } from '../utils/lanConnection'
+import { formatConnectionRoute } from '../utils/connectionDisplay'
+import {
+  currentLocaleLabel,
+  formatEmailSummary,
+} from '../utils/settingsDisplay'
+import { clearSettingsBack, peekSettingsBack } from '../utils/settingsNav'
+import { clearConnectionSession, getConnectionSession } from '../utils/connectionSession'
 
 /**
- * 全局 / 实例大门设置：版本、中继地址、接收邮箱、更新记录。
- * 通知与 JEV 已迁到「进入实例 → 功能 → 设置」。
+ * Global Settings — iOS-style menu. Detail forms live on secondary routes.
+ * Back target remembered via settingsNav (drawer ↔ settings ↔ instances).
  */
 export function SettingsPage() {
   const navigate = useNavigate()
-  const [version, setVersion] = useState<string>('…')
-  const [error, setError] = useState<string | null>(null)
-  const [apiBaseDraft, setApiBaseDraft] = useState(() => getApiBase())
-  const [apiSaved, setApiSaved] = useState(false)
-  const [receiveEmail, setReceiveEmail] = useState('')
-  const [receiveMasked, setReceiveMasked] = useState('')
-  const [receiveBusy, setReceiveBusy] = useState(false)
-  const [receiveMsg, setReceiveMsg] = useState<string | null>(null)
-  const showApiBase = Capacitor.isNativePlatform() || !!getApiBase() || !!import.meta.env.VITE_API_BASE
+  const { locale, t } = useLocale()
+  const [version, setVersion] = useState('…')
+  const [emailMasked, setEmailMasked] = useState('')
+  const [email, setEmail] = useState('')
+  const [connectionRoute, setConnectionRoute] = useState<LanRouteState>(() => {
+    const connection = getLanConnection()
+    return getLanRouteState(connection.instanceId || '')
+  })
+  const backTo = useMemo(() => peekSettingsBack('/instances'), [])
+  // LAN-only has no remote site session. Do not request or expose controls
+  // which depend on remote relay APIs; a valid local pairing is not an error.
+  const lanOnly = !!getConnectionSession() && !getToken()
 
   useEffect(() => {
+    // Refresh summaries when returning from secondary pages
+    const connection = getLanConnection()
+    setConnectionRoute(getLanRouteState(connection.instanceId || ''))
+    if (lanOnly) {
+      setVersion('—')
+      setEmail('')
+      setEmailMasked('')
+      return
+    }
     void (async () => {
-      try {
-        const v = await fetchVersion()
-        setVersion(v.startsWith('v') ? v : `v${v}`)
-        const re = await fetchReceiveEmail()
-        setReceiveEmail(re.email || '')
-        setReceiveMasked(re.email_masked || '')
-      } catch (err) {
-        const status = (err as { status?: number })?.status
-        if (status === 401) {
-          clearToken()
-          navigate('/login', { replace: true })
-          return
-        }
-        setError(err instanceof Error ? err.message : '加载失败')
+      const [versionResult, emailResult] = await Promise.allSettled([fetchVersion(), fetchReceiveEmail()])
+      const rejected = [versionResult, emailResult].find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      const status = (rejected?.reason as { status?: number } | undefined)?.status
+      if (status === 401) {
+        clearToken()
+        clearSettingsBack()
+        navigate('/login', { replace: true })
+        return
+      }
+      if (versionResult.status === 'fulfilled') {
+        setVersion(versionResult.value.startsWith('v') ? versionResult.value : `v${versionResult.value}`)
+      } else {
         setVersion('—')
       }
+      if (emailResult.status === 'fulfilled') {
+        setEmail(emailResult.value.email || '')
+        setEmailMasked(emailResult.value.email_masked || '')
+      } else {
+        setEmail('')
+        setEmailMasked('')
+      }
     })()
-  }, [navigate])
+  }, [lanOnly, navigate])
 
-  /** 保存中继地址 */
-  function saveApiBase() {
-    setApiBase(apiBaseDraft)
-    setApiSaved(true)
-    window.setTimeout(() => setApiSaved(false), 1600)
-  }
-
-  /** 保存验证码登录收件邮箱 */
-  async function onSaveReceiveEmail() {
-    if (receiveBusy) return
-    setReceiveBusy(true)
-    setReceiveMsg(null)
-    setError(null)
-    try {
-      const out = await saveReceiveEmail(receiveEmail.trim())
-      setReceiveEmail(out.email || '')
-      setReceiveMasked(out.email_masked || '')
-      setReceiveMsg(out.set ? '接收邮箱已保存' : '已清除接收邮箱')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '保存失败')
-    } finally {
-      setReceiveBusy(false)
-    }
+  /**
+   * 主动退出必须同时清除远程 JWT 和局域网会话。
+   *
+   * QR 配对后的 LAN session 也能通过 RequireAuth；此前只调用 clearToken()
+   * 会让路由守卫继续判定为已登录，并自动恢复到最近的数字人对话。
+   * 保留配对凭据本身，用户下次可在设置中复用或重新扫码，不等同于遗忘设备。
+   */
+  function onLogout() {
+    clearToken()
+    clearConnectionSession()
+    clearSettingsBack()
+    navigate('/login', { replace: true })
   }
 
   return (
-    <PageShell title="设置" backTo="/instances">
-      {error ? <p className="error-banner">{error}</p> : null}
-      {receiveMsg ? <p className="muted">{receiveMsg}</p> : null}
-
-      <h2 className="settings-section-title">应用</h2>
-      <div className="settings-block">
-        <div className="settings-row">
-          <span className="settings-label">中继版本</span>
-          <span className="settings-value">{version}</span>
-        </div>
-        <div className="settings-row">
-          <span className="settings-label">App 界面</span>
-          <span className="settings-value">v0.0.25</span>
-        </div>
-      </div>
-
-      <h2 className="settings-section-title">验证码登录</h2>
-      <p className="settings-section-hint">
-        接收邮箱用于「验证码登录」。还需在 Mac「远程中继」配置并校验发送邮箱 SMTP。
-        {receiveMasked ? ` 当前：${receiveMasked}` : ''}
-      </p>
-      <div className="settings-block">
-        <label className="field" style={{ display: 'block', padding: '0.75rem 0' }}>
-          <span className="settings-label">接收邮箱</span>
-          <input
-            type="email"
-            inputMode="email"
-            autoCapitalize="off"
-            autoCorrect="off"
-            autoComplete="email"
-            placeholder="you@example.com"
-            value={receiveEmail}
-            onChange={(e) => setReceiveEmail(e.target.value)}
+    <PageShell title={t('settings.title')} backTo={backTo}>
+      <SettingsPageBody>
+        <SettingsGroup title={t('settings.section.app')}>
+          {!lanOnly ? (
+            <SettingsRow
+              icon={<SettingsIconLayers />}
+              title={t('settings.relayVersion')}
+              value={version}
+              chevron={false}
+              readOnly
+            />
+          ) : null}
+          <SettingsRow
+            icon={<SettingsIconGlobe />}
+            title={t('settings.language')}
+            value={currentLocaleLabel(locale)}
+            onClick={() => navigate('/settings/language')}
           />
-        </label>
-        <button
-          type="button"
-          className="btn primary"
-          disabled={receiveBusy}
-          onClick={() => void onSaveReceiveEmail()}
-        >
-          {receiveBusy ? '保存中…' : '保存接收邮箱'}
-        </button>
-      </div>
+        </SettingsGroup>
 
-      {showApiBase ? (
-        <>
-          <h2 className="settings-section-title">中继服务</h2>
-          <p className="settings-section-hint">
-            App 壳内无浏览器同源代理，请填写可访问的中继根地址（含 https://，不要末尾斜杠）。
-          </p>
-          <div className="settings-block">
-            <label className="field" style={{ display: 'block', padding: '0.75rem 0' }}>
-              <span className="settings-label">API 地址</span>
-              <input
-                type="url"
-                inputMode="url"
-                autoCapitalize="off"
-                autoCorrect="off"
-                placeholder="https://your-relay.example.com"
-                value={apiBaseDraft}
-                onChange={(e) => setApiBaseDraft(e.target.value)}
-              />
-            </label>
-            <button type="button" className="btn primary" onClick={saveApiBase}>
-              {apiSaved ? '已保存' : '保存'}
-            </button>
-          </div>
-        </>
-      ) : null}
+        <SettingsGroup title={t('settings.section.connection')}>
+          {!lanOnly ? (
+            <SettingsRow
+              icon={<SettingsIconMail />}
+              title={t('settings.otpLogin')}
+              value={formatEmailSummary(emailMasked, email)}
+              onClick={() => navigate('/settings/otp')}
+            />
+          ) : null}
+          <SettingsRow
+            icon={<SettingsIconNetwork />}
+            title={t('settings.relayAndConnection')}
+            value={formatConnectionRoute(connectionRoute, locale).label}
+            onClick={() => navigate('/settings/relay')}
+          />
+        </SettingsGroup>
 
-      <h2 className="settings-section-title">其它</h2>
-      <p className="settings-section-hint">
-        通知、JEV 等与电脑数字人相关的选项，请进入某台电脑后，在「功能 → 设置」中配置。
-      </p>
-      <ul className="list settings-menu">
-        <li className="list-item">
-          <Link to="/settings/changelog" className="list-link">
-            <div className="list-title">更新记录</div>
-            <div className="list-sub">查看各版本变更</div>
-          </Link>
-        </li>
-      </ul>
+        <SettingsGroup title={t('settings.section.preferences')}>
+          <SettingsRow
+            icon={<SettingsIconBell />}
+            title={t('settings.preferencesNotifyJev')}
+            onClick={() => navigate('/settings/preferences')}
+          />
+        </SettingsGroup>
+
+        <SettingsGroup title={t('settings.section.about')}>
+          <SettingsRow
+            icon={<SettingsIconDoc />}
+            title={t('settings.changelog')}
+            onClick={() => navigate('/settings/changelog')}
+          />
+          <SettingsRow
+            icon={<SettingsIconInfo />}
+            title={t('settings.aboutAtolla')}
+            onClick={() => navigate('/settings/about')}
+          />
+        </SettingsGroup>
+
+        <div className="ios-settings-logout-box">
+          <button type="button" className="ios-settings-logout-btn" onClick={onLogout}>
+            {t('settings.logout')}
+          </button>
+        </div>
+      </SettingsPageBody>
     </PageShell>
   )
 }

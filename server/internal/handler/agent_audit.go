@@ -110,3 +110,18 @@ func (h *Handler) AdminAgentAuditErrors(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
+
+// AdminAgentAuditLatest 返回指定数字员工最近一轮运行明细。
+func (h *Handler) AdminAgentAuditLatest(c *gin.Context) {
+	agentID, _ := strconv.ParseInt(c.Query("agent_id"), 10, 64)
+	if agentID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id required"})
+		return
+	}
+	item, err := h.svc.Store.LatestAgentAskRuntimeDetail(c.Request.Context(), agentID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"item": item})
+}

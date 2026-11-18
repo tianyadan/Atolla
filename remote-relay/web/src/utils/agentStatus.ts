@@ -137,19 +137,28 @@ export function agentContextUsage(
   return { used, window: win, estimated, source, updatedAt, anomaly, pct }
 }
 
-/** Ring fill ratio 0–1 (PC ContextRing caps stroke at 100%) */
+/** 是否有可展示的上下文占用（探测不到则不画圆环，勿显示 — / !） */
+export function contextUsageKnown(usage: AgentContextUsage): boolean {
+  if (usage.window <= 0) return false
+  const src = String(usage.source || '').trim().toLowerCase()
+  if (src === 'unavailable') return false
+  // 无来源且无占用：多为未探测/仅配置默认窗，不展示
+  if (!src && usage.used <= 0) return false
+  return true
+}
+
+/** Ring fill ratio 0–1（环长封顶 100%；超窗仍按满环） */
 export function contextRingFillRatio(usage: AgentContextUsage): number {
   return Math.min(1, Math.max(0, usage.pct / 100))
 }
 
 /**
- * Compact label inside the ring — never show 191-style overflow.
- * PC only puts percent in title; we show capped value / "!" when anomalous.
+ * 环内数字：始终封顶 0–100；探测失败由 ContextRing 整组件隐藏，不再显示 ! / —。
  */
 export function contextRingLabel(usage: AgentContextUsage): string {
-  if (usage.window <= 0) return '—'
-  if (usage.pct > 100 || usage.anomaly) return '!'
-  return String(Math.round(usage.pct))
+  if (!contextUsageKnown(usage)) return ''
+  const n = Math.round(Math.min(100, Math.max(0, usage.pct)))
+  return String(n)
 }
 
 /** Count busy agents (direct running), PC sidebar badge semantics */
@@ -211,11 +220,24 @@ export function listUnreadAgents(
     .sort((a, b) => agentTaskUnreadAtMs(b.payload) - agentTaskUnreadAtMs(a.payload))
 }
 
-/** Read run start unix seconds from mirror payload */
-export function agentRunStartedAt(payload: Record<string, unknown> | undefined): number | null {
+/** Read run start unix seconds from mirror payload; repair legacy local time parsed as UTC. */
+export function agentRunStartedAt(
+  payload: Record<string, unknown> | undefined,
+  nowSec = Math.floor(Date.now() / 1000),
+  timezoneOffsetMinutes?: number,
+): number | null {
   const n = Number(payload?.run_started_at)
   if (!Number.isFinite(n) || n <= 0) return null
-  return Math.floor(n)
+  let startedAt = Math.floor(n >= 1e12 ? n / 1000 : n)
+  if (startedAt > nowSec + 5 * 60) {
+    const offset = timezoneOffsetMinutes ?? new Date(startedAt * 1000).getTimezoneOffset()
+    const corrected = startedAt + offset * 60
+    // 旧 SQLite 曾把本地墙上时间当成 UTC，优先采用更接近当前时刻的纠偏值。
+    if (corrected > 0 && Math.abs(nowSec - corrected) < Math.abs(nowSec - startedAt)) {
+      startedAt = corrected
+    }
+  }
+  return startedAt
 }
 
 /** Format busy elapsed time from run_started_at (unix sec) → "3分12秒" */

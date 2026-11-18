@@ -29,6 +29,22 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 			folderName[f.ID] = f.Name
 		}
 	}
+	// 活跃任务规划（waiting/running/paused）：按 agent 挂到 payload.task_plan。
+	planByAgent := map[string]map[string]any{}
+	if tasks, terr := ec.Store.AgentTasks(ec.Context, "managed", ""); terr == nil {
+		for _, t := range tasks {
+			id := strings.TrimSpace(t.AgentID)
+			if id == "" || planByAgent[id] != nil {
+				continue
+			}
+			st := strings.ToLower(strings.TrimSpace(t.Status))
+			if st != "running" && st != "waiting" && st != "paused" {
+				continue
+			}
+			planByAgent[id] = buildTaskPlanMirror(t)
+		}
+	}
+
 	// Empty list still posts so relay can prune deleted agents from the mirror.
 	rows := make([]map[string]any, 0, len(agents))
 	for _, a := range agents {
@@ -36,28 +52,41 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 		if a.FolderID > 0 {
 			fn = folderName[a.FolderID]
 		}
-		// 与 PC /admin/agents/:id/context 同源：会话 meta + PercentOf / InferEstimated
+		// 与 PC /admin/agents/:id/context 同源；无可用占用时 window=0，App/Web 隐藏圆环（不推默认窗导致假 0%/!）。
 		usedTokens := int64(0)
-		windowTokens := a.ContextWindowTokens
+		windowTokens := int64(0)
 		ctxSource := ""
 		ctxUpdated := int64(0)
 		anomaly := ""
 		if a.ConversationID > 0 {
 			if meta, merr := ec.Store.GetConversationEngineMeta(ec.Context, a.ConversationID); merr == nil {
 				usedTokens = meta.UsedTokens
-				if meta.WindowTokens > 0 {
-					windowTokens = meta.WindowTokens
-				}
-				ctxSource = meta.ContextSource
+				windowTokens = meta.WindowTokens
+				ctxSource = strings.TrimSpace(meta.ContextSource)
 				ctxUpdated = meta.ContextUpdatedAt
 			}
 		}
+		if strings.EqualFold(ctxSource, "unavailable") {
+			usedTokens, windowTokens, ctxSource, anomaly = 0, 0, "unavailable", ""
+		} else if usedTokens > 0 || (ctxSource != "" && !strings.EqualFold(ctxSource, "unavailable")) {
+			// 有占用或已知来源时才补员工配置窗口作分母
+			if windowTokens <= 0 {
+				windowTokens = a.ContextWindowTokens
+			}
+			if windowTokens > 0 && usedTokens > windowTokens {
+				anomaly = fmt.Sprintf("current_context_exceeds_window: used=%d window=%d", usedTokens, windowTokens)
+				usedTokens = windowTokens
+			}
+			if ctxSource == "" && usedTokens > 0 {
+				ctxSource = "cached"
+			}
+		} else {
+			usedTokens, windowTokens, anomaly = 0, 0, ""
+		}
 		estimated := agent.InferEstimated(a.Engine, ctxSource)
 		usedPercent := agent.PercentOf(usedTokens, windowTokens)
-		if usedPercent > 100 {
-			anomaly = fmt.Sprintf("current_context_exceeds_window: used=%d window=%d", usedTokens, windowTokens)
-		}
-		payload := buildAgentMirrorPayload(a, fn, agentMirrorUsage{
+		live, _ := GetAgentLive(a.ID)
+		payload := buildAgentMirrorPayloadEx(a, fn, agentMirrorUsage{
 			UsedTokens:       usedTokens,
 			WindowTokens:     windowTokens,
 			UsedPercent:      usedPercent,
@@ -65,7 +94,7 @@ func handleSyncAgents(ec *ExecContext) (any, error) {
 			ContextSource:    ctxSource,
 			ContextUpdatedAt: ctxUpdated,
 			Anomaly:          anomaly,
-		})
+		}, live, planByAgent[strconv.FormatInt(a.ID, 10)])
 		rows = append(rows, map[string]any{
 			"agent_id":     strconv.FormatInt(a.ID, 10),
 			"display_name": a.Name,
@@ -99,11 +128,7 @@ func handleSyncTasks(ec *ExecContext) (any, error) {
 			"agent_id": agentID,
 			"task_id":  t.TaskID,
 			"status":   t.Status,
-			"payload": map[string]any{
-				"task_name": t.TaskName,
-				"progress":  t.Progress,
-				"message":   t.Message,
-			},
+			"payload":  buildTaskPlanMirror(t),
 		})
 	}
 	if err := ec.Client.PostTasksSnapshot(ec.Context, rows); err != nil {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useLocale } from './i18n/useLocale.js'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
 import DatabaseSourcesPanel from './DatabaseSourcesPanel.jsx'
 import ServerSourcesPanel from './ServerSourcesPanel.jsx'
@@ -13,13 +14,70 @@ const ICON_GLYPH = {
   custom: '◇',
 }
 
-const RISK_ZH = { low: '低风险', mid: '中风险', high: '高风险' }
-const CAT_ZH = { engine: '引擎', data: '数据', ops: '运维', custom: '自定义', general: '通用' }
+const CAT_KEYS = ['engine', 'data', 'ops', 'custom', 'general']
 
 const BUILTIN_ICON_URL = {
   database: '/skill-icons/database.svg',
   server: '/skill-icons/server.svg',
   browser: '/skill-icons/browser.svg',
+  search: '/skill-icons/search.svg',
+}
+
+/** Built-in skill card tags (locale via t keys) */
+const SKILL_TAG_KEYS = {
+  'atolla.database': ['agentSettings.tag.data', 'SQL', 'MySQL', 'PostgreSQL'],
+  'atolla.browser': ['agentSettings.tag.browser', 'agentSettings.tag.automation', 'agentSettings.tag.webOps'],
+  'atolla.search': ['agentSettings.tag.search', 'RAG', 'agentSettings.tag.docs'],
+  'atolla.server_control': ['SSH', 'agentSettings.cat.ops', 'agentSettings.tag.deploy', 'agentSettings.tag.files'],
+}
+
+/** Resolve a tag token: i18n key or literal */
+function resolveTag(token, t) {
+  if (typeof token === 'string' && token.startsWith('agentSettings.')) return t(token)
+  return token
+}
+
+/** Build up to 4 display tags for a skill card */
+function skillTags(sk, t) {
+  if (SKILL_TAG_KEYS[sk?.id]) return SKILL_TAG_KEYS[sk.id].map((tok) => resolveTag(tok, t))
+  const tags = []
+  if (sk?.category && CAT_KEYS.includes(sk.category)) {
+    tags.push(t(`agentSettings.cat.${sk.category}`))
+  }
+  for (const c of sk?.capabilities || []) {
+    const label = typeof c === 'string' ? c : (c?.label || c?.id)
+    if (label && !tags.includes(label) && tags.length < 4) tags.push(label)
+  }
+  return tags.slice(0, 4)
+}
+
+function IconSearch({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M16.5 16.5L21 21" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconStack({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 3l9 4.5-9 4.5L3 7.5 12 3z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M3 12l9 4.5 9-4.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M3 16.5L12 21l9-4.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function IconDownload({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 4v11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7.5 11.5L12 16l4.5-4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 19h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 /** 技能图标：内置 SVG / 自定义 URL / 字形兜底 */
@@ -51,6 +109,7 @@ export default function AgentSkillsPanel({
   onTabChange,
   disabled = false,
 }) {
+  const { t } = useLocale()
   const [skills, setSkills] = useState([])
   const [store, setStore] = useState([])
   const [q, setQ] = useState('')
@@ -65,7 +124,7 @@ export default function AgentSkillsPanel({
   const [installHint, setInstallHint] = useState('')
   const [pub, setPub] = useState({
     name: '', summary: '', description: '', icon_key: 'custom', risk: 'mid',
-    rules_text: 'allow: 按描述执行\ndeny: 不得越权',
+    rules_text: t('agentSettings.defaultRules'),
   })
 
   const handleRes = useCallback((res, headers) => {
@@ -85,15 +144,15 @@ export default function AgentSkillsPanel({
       if (!res) return
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setErr(data.error || '加载技能失败')
+        setErr(data.error || t('agentSettings.err.loadSkills'))
         return
       }
       setSkills(data.skills || [])
       setErr('')
     } catch (e) {
-      setErr(e.message || '加载技能失败')
+      setErr(e.message || t('agentSettings.err.loadSkills'))
     }
-  }, [agentId, authHeaders, handleRes])
+  }, [agentId, authHeaders, handleRes, t])
 
   const loadStore = useCallback(async () => {
     const headers = resolveHeaders(authHeaders)
@@ -106,15 +165,15 @@ export default function AgentSkillsPanel({
       if (!res) return
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setErr(data.error || '加载商店失败')
+        setErr(data.error || t('agentSettings.err.loadStore'))
         return
       }
       setStore(data.skills || [])
       setErr('')
     } catch (e) {
-      setErr(e.message || '加载商店失败')
+      setErr(e.message || t('agentSettings.err.loadStore'))
     }
-  }, [authHeaders, category, handleRes, q])
+  }, [authHeaders, category, handleRes, q, t])
 
   useEffect(() => {
     loadAgentSkills()
@@ -155,7 +214,7 @@ export default function AgentSkillsPanel({
     setInstallHint('')
     try {
       if (skillId === 'atolla.browser') {
-        setInstallHint(browserUse?.ok ? 'browser-use 已就绪，正在安装技能…' : '正在检测并安装 browser-use（可能需要一两分钟）…')
+        setInstallHint(browserUse?.ok ? t('agentSettings.hint.browserReady') : t('agentSettings.hint.browserInstalling'))
       }
       const headers = resolveHeaders(authHeaders, { 'Content-Type': 'application/json' })
       const res = handleRes(await fetch(`${API}/admin/agents/${agentId}/skills/install`, {
@@ -166,7 +225,7 @@ export default function AgentSkillsPanel({
       if (!res) return
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setErr(data.error || '安装失败')
+        setErr(data.error || t('agentSettings.err.install'))
         return
       }
       setSkills(data.skills || [])
@@ -189,7 +248,7 @@ export default function AgentSkillsPanel({
       if (!res) return
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setErr(data.error || '卸载失败')
+        setErr(data.error || t('agentSettings.err.uninstall'))
         return
       }
       setSkills(data.skills || [])
@@ -211,7 +270,7 @@ export default function AgentSkillsPanel({
       if (!res) return
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setErr(data.error || '更新失败')
+        setErr(data.error || t('agentSettings.err.update'))
         return
       }
       setSkills(data.skills || [])
@@ -242,17 +301,17 @@ export default function AgentSkillsPanel({
           risk: pub.risk,
           category: 'custom',
           rules,
-          capabilities: [{ id: 'prompt.only', label: '提示约束', default_on: true }],
+          capabilities: [{ id: 'prompt.only', label: t('agentSettings.cap.promptOnly'), default_on: true }],
         }),
       }), headers)
       if (!res) return
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setErr(data.error || '发布失败')
+        setErr(data.error || t('agentSettings.err.publish'))
         return
       }
       setPublishOpen(false)
-      setPub({ name: '', summary: '', description: '', icon_key: 'custom', risk: 'mid', rules_text: 'allow: 按描述执行\ndeny: 不得越权' })
+      setPub({ name: '', summary: '', description: '', icon_key: 'custom', risk: 'mid', rules_text: t('agentSettings.defaultRules') })
       await loadStore()
     } finally {
       setBusy(false)
@@ -267,11 +326,10 @@ export default function AgentSkillsPanel({
     <div className="sk-panel">
       <div className="sk-tabs" role="tablist">
         <button type="button" className={activeTab === 'installed' ? 'active' : ''} disabled={disabled} onClick={() => onTabChange?.('installed')}>
-          已安装技能
-          {installedList.length > 0 && <span className="sk-tab-count">{installedList.length}</span>}
+          {t('agentSettings.skillsInstalled', { n: installedList.length })}
         </button>
         <button type="button" className={activeTab === 'store' ? 'active' : ''} disabled={disabled} onClick={() => onTabChange?.('store')}>
-          技能商店
+          {t('agentSettings.skillsStore')}
         </button>
       </div>
 
@@ -281,35 +339,41 @@ export default function AgentSkillsPanel({
       {activeTab === 'installed' && (
         <div className="sk-list">
           {installedList.length === 0 ? (
-            <p className="muted sk-empty">尚未安装技能。去「技能商店」浏览并安装到此数字人。</p>
+            <p className="muted sk-empty">{t('agentSettings.skillsEmpty')}</p>
           ) : (
             installedList.map((sk) => (
-              <article key={sk.id} className={`sk-card ${sk.enabled ? '' : 'sk-card-off'}`}>
-                <button type="button" className="sk-card-main" onClick={() => openDetail(sk)}>
-                  <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} />
-                  <div className="sk-card-body">
-                    <div className="sk-card-title-row">
-                      <strong>{sk.name}</strong>
-                      <span className={`sk-risk sk-risk-${sk.risk || 'mid'}`}>{RISK_ZH[sk.risk] || sk.risk}</span>
+              <article key={sk.id} className={`sk-card sk-store-card ${sk.enabled ? '' : 'sk-card-off'}`}>
+                <button type="button" className="sk-store-card-hit" onClick={() => openDetail(sk)}>
+                  <div className="sk-store-card-top">
+                    <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} size={44} />
+                    <div className="sk-store-card-badges">
+                      <span className={`sk-risk sk-risk-${sk.risk || 'mid'}`}>{t(`agentSettings.risk.${sk.risk || 'mid'}`)}</span>
                       {sk.id === 'atolla.browser' && (
-                        <span className={`dbs-dot ${browserUse?.ok ? 'ok' : 'miss'}`} title={browserUse?.ok ? (browserUse.version || 'browser-use 已安装') : 'browser-use 未就绪'} />
+                        <span className={`dbs-dot ${browserUse?.ok ? 'ok' : 'miss'}`} title={browserUse?.ok ? (browserUse.version || t('agentSettings.hint.browserOk')) : t('agentSettings.hint.browserMiss')} />
                       )}
                     </div>
-                    <p>{sk.summary}</p>
-                    {!sk.enabled && <span className="sk-badge-off">已停用</span>}
+                  </div>
+                  <h4 className="sk-store-card-title">{sk.name}</h4>
+                  <p className="sk-store-card-desc">{sk.summary}</p>
+                  {!sk.enabled && <span className="sk-badge-off">{t('agentSettings.disabled')}</span>}
+                  <div className="sk-tags">
+                    {skillTags(sk, t).map((tag) => <span key={tag} className="sk-tag">{tag}</span>)}
                   </div>
                 </button>
-                <div className="sk-card-actions">
-                  {sk.id === 'atolla.database' && (
-                    <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setDbConfigOpen(true)}>配置数据源</button>
-                  )}
-                  {sk.id === 'atolla.server_control' && (
-                    <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setServerConfigOpen(true)}>配置服务器</button>
-                  )}
-                  <button type="button" className="ghost" disabled={busy || disabled} onClick={() => patchSkill(sk.id, { enabled: !sk.enabled })}>
-                    {sk.enabled ? '停用' : '启用'}
-                  </button>
-                  <button type="button" className="ghost danger" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>卸载</button>
+                <div className="sk-store-card-foot">
+                  <span className="sk-author">{sk.author || 'Atolla'} <em>v{sk.version || '1.0.0'}</em></span>
+                  <div className="sk-card-actions">
+                    {sk.id === 'atolla.database' && (
+                      <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setDbConfigOpen(true)}>{t('agentSettings.configDb')}</button>
+                    )}
+                    {sk.id === 'atolla.server_control' && (
+                      <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setServerConfigOpen(true)}>{t('agentSettings.configServer')}</button>
+                    )}
+                    <button type="button" className="ghost" disabled={busy || disabled} onClick={() => patchSkill(sk.id, { enabled: !sk.enabled })}>
+                      {sk.enabled ? t('agentSettings.disable') : t('agentSettings.enable')}
+                    </button>
+                    <button type="button" className="ghost danger" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>{t('agentSettings.uninstall')}</button>
+                  </div>
                 </div>
               </article>
             ))
@@ -321,8 +385,8 @@ export default function AgentSkillsPanel({
         <div className="modal-mask sk-detail-mask" onClick={() => setDbConfigOpen(false)}>
           <div className="modal-card sk-detail dbs-modal" onClick={(e) => e.stopPropagation()}>
             <div className="dbs-modal-head">
-              <h3>数据库访问 · 数据源</h3>
-              <button type="button" className="ghost" onClick={() => setDbConfigOpen(false)}>关闭</button>
+              <h3>{t('agentSettings.dbSourcesTitle')}</h3>
+              <button type="button" className="ghost" onClick={() => setDbConfigOpen(false)}>{t('agentSettings.close')}</button>
             </div>
             <DatabaseSourcesPanel
               agentId={agentId}
@@ -338,8 +402,8 @@ export default function AgentSkillsPanel({
         <div className="modal-mask sk-detail-mask" onClick={() => setServerConfigOpen(false)}>
           <div className="modal-card sk-detail dbs-modal" onClick={(e) => e.stopPropagation()}>
             <div className="dbs-modal-head">
-              <h3>服务器控制 · 服务器</h3>
-              <button type="button" className="ghost" onClick={() => setServerConfigOpen(false)}>关闭</button>
+              <h3>{t('agentSettings.serverSourcesTitle')}</h3>
+              <button type="button" className="ghost" onClick={() => setServerConfigOpen(false)}>{t('agentSettings.close')}</button>
             </div>
             <ServerSourcesPanel
               agentId={agentId}
@@ -353,53 +417,76 @@ export default function AgentSkillsPanel({
 
       {activeTab === 'store' && (
         <div className="sk-store">
-          <div className="sk-store-bar">
-            <input
-              placeholder="搜索技能…"
-              value={q}
-              disabled={disabled}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadStore() } }}
-            />
-            <select value={category} disabled={disabled} onChange={(e) => setCategory(e.target.value)}>
-              <option value="">全部分类</option>
-              <option value="engine">引擎</option>
-              <option value="data">数据</option>
-              <option value="ops">运维</option>
-              <option value="custom">自定义</option>
-            </select>
-            <button type="button" className="ghost" disabled={busy || disabled} onClick={loadStore}>搜索</button>
-            <button type="button" className="ghost" disabled={busy || disabled} onClick={() => setPublishOpen(true)}>发布自定义</button>
+          <div className="sk-store-toolbar">
+            <label className="sk-search-wrap">
+              <button
+                type="button"
+                className="sk-search-ico"
+                disabled={busy || disabled}
+                aria-label={t('agentSettings.skillsSearchPh')}
+                onClick={loadStore}
+              >
+                <IconSearch size={14} />
+              </button>
+              <input
+                placeholder={t('agentSettings.skillsSearchPh')}
+                value={q}
+                disabled={disabled}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); loadStore() } }}
+              />
+            </label>
+            <label className="sk-cat-select">
+              <span className="sk-cat-ico"><IconStack size={13} /></span>
+              <select value={category} disabled={disabled} onChange={(e) => setCategory(e.target.value)}>
+                <option value="">{t('agentSettings.skillsAllCats')}</option>
+                <option value="engine">{t('agentSettings.cat.engine')}</option>
+                <option value="data">{t('agentSettings.cat.data')}</option>
+                <option value="ops">{t('agentSettings.cat.ops')}</option>
+                <option value="custom">{t('agentSettings.cat.custom')}</option>
+              </select>
+            </label>
+            <button type="button" className="sk-btn-publish" disabled={busy || disabled} onClick={() => setPublishOpen(true)}>
+              {t('agentSettings.skillsPublish')}
+            </button>
           </div>
           <div className="sk-grid">
-            {store.map((sk) => {
+            {store.length === 0 ? (
+              <p className="muted sk-empty">{t('agentSettings.skillsNoMatch')}</p>
+            ) : store.map((sk) => {
               const inst = installedMap[sk.id]
               return (
                 <article key={sk.id} className="sk-store-card">
-                  <button type="button" className="sk-card-main" onClick={() => openDetail({ ...sk, installed: !!inst, enabled: inst?.enabled, capabilities: inst?.capabilities || [] })}>
-                    <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} size={48} />
-                    <div className="sk-card-body">
-                      <div className="sk-card-title-row">
-                        <strong>{sk.name}</strong>
-                        <span className={`sk-risk sk-risk-${sk.risk || 'mid'}`}>{RISK_ZH[sk.risk] || '中风险'}</span>
+                  <button
+                    type="button"
+                    className="sk-store-card-hit"
+                    onClick={() => openDetail({ ...sk, installed: !!inst, enabled: inst?.enabled, capabilities: inst?.capabilities || [] })}
+                  >
+                    <div className="sk-store-card-top">
+                      <SkillIcon iconKey={sk.icon_key} iconUrl={sk.icon_url} size={44} />
+                      <div className="sk-store-card-badges">
+                        <span className={`sk-risk sk-risk-${sk.risk || 'mid'}`}>{t(`agentSettings.risk.${sk.risk || 'mid'}`)}</span>
                         {sk.id === 'atolla.browser' && (
-                          <span className={`dbs-dot ${browserUse?.ok ? 'ok' : 'miss'}`} title={browserUse?.ok ? 'browser-use 已安装' : '安装技能时将自动下载 browser-use'} />
+                          <span className={`dbs-dot ${browserUse?.ok ? 'ok' : 'miss'}`} title={browserUse?.ok ? t('agentSettings.hint.browserOk') : t('agentSettings.hint.browserAuto')} />
                         )}
                       </div>
-                      <p>{sk.summary}</p>
-                      <div className="sk-meta">
-                        <span>{CAT_ZH[sk.category] || sk.category}</span>
-                        <span>{sk.author || 'Atolla'}</span>
-                        <span>v{sk.version}</span>
-                      </div>
+                    </div>
+                    <h4 className="sk-store-card-title">{sk.name}</h4>
+                    <p className="sk-store-card-desc">{sk.summary}</p>
+                    <div className="sk-tags">
+                      {skillTags(sk, t).map((tag) => <span key={tag} className="sk-tag">{tag}</span>)}
                     </div>
                   </button>
-                  <div className="sk-card-actions">
+                  <div className="sk-store-card-foot">
+                    <span className="sk-author">{sk.author || 'Atolla'} <em>v{sk.version || '1.0.0'}</em></span>
                     {inst ? (
-                      <button type="button" className="ghost" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>已安装 · 卸载</button>
+                      <button type="button" className="sk-install-btn is-installed" disabled={busy || disabled} onClick={() => uninstall(sk.id)}>
+                        {t('agentSettings.skillsInstalledUninstall')}
+                      </button>
                     ) : (
-                      <button type="button" disabled={busy || disabled} onClick={() => install(sk.id, defaultCaps(sk.capabilities))}>
-                        安装到此数字人
+                      <button type="button" className="sk-install-btn" disabled={busy || disabled} onClick={() => install(sk.id, defaultCaps(sk.capabilities))}>
+                        <IconDownload size={13} />
+                        {t('agentSettings.skillsInstall')}
                       </button>
                     )}
                   </div>
@@ -419,24 +506,24 @@ export default function AgentSkillsPanel({
                 <h3>{detail.name}</h3>
                 <p className="muted">{detail.summary}</p>
                 <div className="sk-meta">
-                  <span className={`sk-risk sk-risk-${detail.risk || 'mid'}`}>{RISK_ZH[detail.risk] || '中风险'}</span>
+                  <span className={`sk-risk sk-risk-${detail.risk || 'mid'}`}>{t(`agentSettings.risk.${detail.risk || 'mid'}`)}</span>
                   <span>{detail.author || 'Atolla'}</span>
                   <span>v{detail.version}</span>
                 </div>
               </div>
             </div>
-            <h4>功能规则</h4>
+            <h4>{t('agentSettings.skillsRules')}</h4>
             <ul className="sk-rules">
               {(detail.rules || []).map((r, i) => (
                 <li key={i} className={`sk-rule sk-rule-${r.type}`}>
-                  <span>{ruleLabel(r.type)}</span>
+                  <span>{t(`agentSettings.rule.${r.type === 'allow' || r.type === 'deny' ? r.type : 'note'}`)}</span>
                   {r.text}
                 </li>
               ))}
             </ul>
             {!!(detail.all_capabilities || detail.capabilities)?.length && (
               <>
-                <h4>能力</h4>
+                <h4>{t('agentSettings.skillsCaps')}</h4>
                 <div className="sk-caps">
                   {(detail.all_capabilities || []).length > 0
                     ? detail.all_capabilities.map((c) => (
@@ -450,12 +537,12 @@ export default function AgentSkillsPanel({
             )}
             <p className="sk-desc">{detail.description}</p>
             <div className="modal-actions">
-              <button type="button" className="ghost" onClick={() => setDetail(null)}>关闭</button>
+              <button type="button" className="ghost" onClick={() => setDetail(null)}>{t('agentSettings.close')}</button>
               {detail.installed ? (
-                <button type="button" className="ghost danger" disabled={busy || disabled} onClick={() => uninstall(detail.id)}>卸载</button>
+                <button type="button" className="ghost danger" disabled={busy || disabled} onClick={() => uninstall(detail.id)}>{t('agentSettings.uninstall')}</button>
               ) : (
                 <button type="button" disabled={busy || disabled} onClick={() => install(detail.id, defaultCaps(detail.capabilities || detail.all_capabilities))}>
-                  安装到此数字人
+                  {t('agentSettings.skillsInstall')}
                 </button>
               )}
             </div>
@@ -466,43 +553,43 @@ export default function AgentSkillsPanel({
       {publishOpen && (
         <div className="modal-mask sk-detail-mask" onClick={() => !busy && setPublishOpen(false)}>
           <form className="modal-card sk-publish" onClick={(e) => e.stopPropagation()} onSubmit={publishCustom}>
-            <h3>发布自定义技能</h3>
-            <p className="muted">声明式技能：写入商店后可安装到任意数字人，规则会注入系统提示。</p>
+            <h3>{t('agentSettings.skillsPublishTitle')}</h3>
+            <p className="muted">{t('agentSettings.skillsPublishHint')}</p>
             <label>
-              名称
+              {t('agentSettings.name')}
               <input required value={pub.name} disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} />
             </label>
             <label>
-              简介
+              {t('agentSettings.skillsSummary')}
               <input required value={pub.summary} disabled={busy} onChange={(e) => setPub({ ...pub, summary: e.target.value })} />
             </label>
             <label>
-              详细说明
+              {t('agentSettings.skillsDesc')}
               <textarea rows={3} value={pub.description} disabled={busy} onChange={(e) => setPub({ ...pub, description: e.target.value })} />
             </label>
             <label>
-              规则（每行：allow:/deny:/note:）
+              {t('agentSettings.skillsRulesPh')}
               <textarea rows={4} value={pub.rules_text} disabled={busy} onChange={(e) => setPub({ ...pub, rules_text: e.target.value })} />
             </label>
             <div className="sk-publish-row">
               <label>
-                图标
+                {t('agentSettings.skillsIcon')}
                 <select value={pub.icon_key} disabled={busy} onChange={(e) => setPub({ ...pub, icon_key: e.target.value })}>
                   {Object.keys(ICON_GLYPH).map((k) => <option key={k} value={k}>{k}</option>)}
                 </select>
               </label>
               <label>
-                风险
+                {t('agentSettings.skillsRisk')}
                 <select value={pub.risk} disabled={busy} onChange={(e) => setPub({ ...pub, risk: e.target.value })}>
-                  <option value="low">低</option>
-                  <option value="mid">中</option>
-                  <option value="high">高</option>
+                  <option value="low">{t('agentSettings.riskShort.low')}</option>
+                  <option value="mid">{t('agentSettings.riskShort.mid')}</option>
+                  <option value="high">{t('agentSettings.riskShort.high')}</option>
                 </select>
               </label>
             </div>
             <div className="modal-actions">
-              <button type="button" className="ghost" disabled={busy} onClick={() => setPublishOpen(false)}>取消</button>
-              <button type="submit" disabled={busy}>{busy ? '发布中…' : '发布到本机商店'}</button>
+              <button type="button" className="ghost" disabled={busy} onClick={() => setPublishOpen(false)}>{t('agentSettings.cancel')}</button>
+              <button type="submit" disabled={busy}>{busy ? t('agentSettings.skillsPublishing') : t('agentSettings.skillsPublishSubmit')}</button>
             </div>
           </form>
         </div>
@@ -517,8 +604,3 @@ function defaultCaps(caps) {
   return caps.filter((c) => c.default_on !== false).map((c) => c.id)
 }
 
-function ruleLabel(type) {
-  if (type === 'allow') return '允许'
-  if (type === 'deny') return '禁止'
-  return '说明'
-}

@@ -36,6 +36,11 @@ import {
   normalizeMessagesLimit,
 } from '../mirror.js'
 import { routeParam } from '../params.js'
+import {
+  agentStatusProvider,
+  listSiriAgents,
+  SIRI_INSTANCE_ONLINE_THRESHOLD_MS,
+} from '../siri.js'
 
 const notifyPrefsBodySchema = z.object({
   task_done: z.boolean(),
@@ -63,6 +68,21 @@ const receiveEmailBodySchema = z.object({
 
 const askBodySchema = z.object({
   question: z.string().optional().default(''),
+  mode: z.enum(['direct', 'enqueue', 'interrupt']).optional(),
+  attachments: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        url: z.string().optional(),
+        mime: z.string().optional(),
+        name: z.string().optional(),
+      }),
+    )
+    .optional(),
+})
+
+const taskQueueQuestionBodySchema = z.object({
+  question: z.string().optional().default(''),
   attachments: z
     .array(
       z.object({
@@ -84,14 +104,42 @@ const settingsUpdateBodySchema = z.object({
   rules_prompt: z.string(),
   /** Optional pixel jelly color; omit to leave unchanged on Mac */
   jelly_color: z
-    .enum(['orange', 'yellow', 'blue', 'green', 'purple', 'red'])
+    .enum([
+      'orange',
+      'yellow',
+      'blue',
+      'green',
+      'purple',
+      'red',
+      'cyan',
+      'teal',
+      'pink',
+      'lime',
+      'coral',
+      'sky',
+    ])
     .optional(),
 })
 
 const agentCreateBodySchema = z.object({
   name: z.string().min(1).max(80),
   engine: z.enum(['claude', 'codex', 'agent']),
-  jelly_color: z.enum(['orange', 'yellow', 'blue', 'green', 'purple', 'red']).optional(),
+  jelly_color: z
+    .enum([
+      'orange',
+      'yellow',
+      'blue',
+      'green',
+      'purple',
+      'red',
+      'cyan',
+      'teal',
+      'pink',
+      'lime',
+      'coral',
+      'sky',
+    ])
+    .optional(),
 })
 
 const skillInstallBodySchema = z.object({
@@ -111,6 +159,22 @@ const decideBodySchema = z.object({
   request_id: z.string().min(1),
   behavior: z.enum(['allow', 'deny', 'allow_session']),
 })
+
+const siriAgentsQuerySchema = z.object({
+  group: z.string().max(100).optional(),
+  working: z.enum(['true', 'false', '1', '0']).optional(),
+})
+
+const siriReceptionistAskBodySchema = z.object({
+  question: z.string().trim().min(1).max(4_000),
+})
+
+/** Keep Siri within its background execution window; configurable for integration tests. */
+function siriReceptionistWaitMs(): number {
+  const configured = Number.parseInt(process.env.RELAY_SIRI_RECEPTIONIST_WAIT_MS || '', 10)
+  if (!Number.isFinite(configured) || configured <= 0) return 20_000
+  return Math.min(configured, 60_000)
+}
 
 /** Extract bearer token from Authorization header */
 function readBearerToken(req: Request): string | null {
@@ -358,6 +422,53 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     res.json({ agents: result.agents })
   })
 
+  /** Siri: compact agent entities with optional group / working filters. */
+  router.get('/instances/:id/siri/agents', guard, needUnlock, (req: Request, res: Response) => {
+    const instanceId = routeParam(req.params.id)
+    if (!instanceId) {
+      res.status(400).json({ error: 'Invalid instance id' })
+      return
+    }
+    const parsed = siriAgentsQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Invalid Siri agents query' })
+      return
+    }
+    const working = parsed.data.working == null
+      ? undefined
+      : parsed.data.working === 'true' || parsed.data.working === '1'
+    const result = listSiriAgents(db, instanceId, {
+      group: parsed.data.group,
+      working,
+    })
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error })
+      return
+    }
+    res.json({ agents: result.agents })
+  })
+
+  /** Siri: stable rules-based agent status contract. */
+  router.get(
+    '/instances/:id/siri/agents/:agentId/status',
+    guard,
+    needUnlock,
+    (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const result = agentStatusProvider.getStatus(db, instanceId, agentId)
+      if (!result.ok) {
+        res.status(result.status).json({ error: result.error })
+        return
+      }
+      res.json(result.status)
+    },
+  )
+
   router.get('/instances/:id/agents/:agentId/tasks', guard, needUnlock, (req: Request, res: Response) => {
     const instanceId = routeParam(req.params.id)
     const agentId = routeParam(req.params.agentId)
@@ -465,6 +576,8 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         question,
       }
       if (attachments.length) payload.attachments = attachments
+      const mode = (parsed.data.mode || '').trim()
+      if (mode) payload.mode = mode
       const result = enqueueCommand(db, instanceId, 'agent.ask', payload)
       if (!result.ok) {
         res.status(result.status).json({ error: result.error })
@@ -523,6 +636,44 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
       res.json({ command: result.command })
     },
   )
+
+  /** Task plan active / confirm / reject / abort / resume（等 Mac RPC） */
+  router.get(
+    '/instances/:id/agents/:agentId/task-plan/active',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_plan.active', { agent_id: agentId })
+    },
+  )
+  for (const action of ['confirm', 'reject', 'abort', 'resume'] as const) {
+    router.post(
+      `/instances/:id/agents/:agentId/task-plan/:planId/${action}`,
+      guard,
+      needUnlock,
+      async (req: Request, res: Response) => {
+        const instanceId = routeParam(req.params.id)
+        const agentId = routeParam(req.params.agentId)
+        const planId = routeParam(req.params.planId)
+        if (!instanceId || !agentId || !planId) {
+          res.status(400).json({ error: 'Invalid instance, agent or plan id' })
+          return
+        }
+        const body = (req.body ?? {}) as Record<string, unknown>
+        await respondRpc(res, instanceId, `agent.task_plan.${action}`, {
+          agent_id: agentId,
+          plan_id: planId,
+          steps: body.steps,
+        })
+      },
+    )
+  }
 
   /** Enqueue agent.set_auto_review */
   router.post(
@@ -768,6 +919,215 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     res.json(result.body ?? {})
   }
 
+  /** Siri Receptionist: wait briefly for a full answer, then degrade to accepted/pending. */
+  router.post(
+    '/instances/:id/siri/receptionist/ask',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const parsed = siriReceptionistAskBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid Receptionist question' })
+        return
+      }
+      const instance = getInstanceRow(db, instanceId)
+      if (
+        !instance?.last_heartbeat_at
+        || Date.now() - instance.last_heartbeat_at >= SIRI_INSTANCE_ONLINE_THRESHOLD_MS
+      ) {
+        res.status(503).json({
+          error: 'Mac offline',
+          code: 'MAC_OFFLINE',
+        })
+        return
+      }
+      const result = await enqueueAndWait(
+        db,
+        instanceId,
+        'receptionist.ask',
+        { question: parsed.data.question },
+        siriReceptionistWaitMs(),
+      )
+      if (!result.ok) {
+        if (result.httpStatus === 504) {
+          res.status(202).json({
+            submitted: true,
+            pending: true,
+            answer: '',
+            conversation_id: 0,
+            reply_ms: 0,
+            speech_text: '问题已提交，回答时间较长，请稍后打开 Atolla 查看。',
+          })
+          return
+        }
+        res.status(result.httpStatus).json({ error: result.error })
+        return
+      }
+      res.json(result.body ?? {})
+    },
+  )
+
+  /** 任务队列：列表（等 Mac 结果） */
+  router.get(
+    '/instances/:id/agents/:agentId/task-queue',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.list', { agent_id: agentId })
+    },
+  )
+
+  /** 任务队列：入队 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = taskQueueQuestionBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid task-queue payload' })
+        return
+      }
+      const question = (parsed.data.question || '').trim()
+      const attachments = (parsed.data.attachments || []).filter(
+        (a) => (a.url && a.url.trim()) || (a.id && a.id.trim()),
+      )
+      if (!question && attachments.length === 0) {
+        res.status(400).json({ error: 'question or attachments required' })
+        return
+      }
+      const payload: Record<string, unknown> = { agent_id: agentId, question }
+      if (attachments.length) payload.attachments = attachments
+      await respondRpc(res, instanceId, 'agent.task_queue.enqueue', payload)
+    },
+  )
+
+  /** 任务队列：打断优先（fire-and-forget 亦可；等待确认 accepted） */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/interrupt',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      const parsed = taskQueueQuestionBodySchema.safeParse(req.body ?? {})
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Invalid interrupt payload' })
+        return
+      }
+      const question = (parsed.data.question || '').trim()
+      const attachments = (parsed.data.attachments || []).filter(
+        (a) => (a.url && a.url.trim()) || (a.id && a.id.trim()),
+      )
+      if (!question && attachments.length === 0) {
+        res.status(400).json({ error: 'question or attachments required' })
+        return
+      }
+      const payload: Record<string, unknown> = { agent_id: agentId, question }
+      if (attachments.length) payload.attachments = attachments
+      await respondRpc(res, instanceId, 'agent.task_queue.interrupt', payload, 60_000)
+    },
+  )
+
+  /** 任务队列：继续 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/continue',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.continue', { agent_id: agentId })
+    },
+  )
+
+  /** 任务队列：取消一项 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/:taskId/cancel',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      const taskId = routeParam(req.params.taskId)
+      if (!instanceId || !agentId || !taskId) {
+        res.status(400).json({ error: 'Invalid instance, agent or task id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.cancel', {
+        agent_id: agentId,
+        task_id: taskId,
+      })
+    },
+  )
+
+  /** 任务队列：改写未执行文案 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/:taskId/update',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      const taskId = routeParam(req.params.taskId)
+      if (!instanceId || !agentId || !taskId) {
+        res.status(400).json({ error: 'Invalid instance, agent or task id' })
+        return
+      }
+      const question = typeof req.body?.question === 'string' ? req.body.question.trim() : ''
+      if (!question) {
+        res.status(400).json({ error: 'question required' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.update', {
+        agent_id: agentId,
+        task_id: taskId,
+        question,
+      })
+    },
+  )
+
+  /** 任务队列：清除已完成 */
+  router.post(
+    '/instances/:id/agents/:agentId/task-queue/clear-done',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      const agentId = routeParam(req.params.agentId)
+      if (!instanceId || !agentId) {
+        res.status(400).json({ error: 'Invalid instance or agent id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'agent.task_queue.clear_done', { agent_id: agentId })
+    },
+  )
+
   /** Mobile settings: load agent rules / engine (read-only engine) */
   router.get(
     '/instances/:id/agents/:agentId/settings',
@@ -975,6 +1335,41 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
     },
   )
 
+  /** Bark 发送开启通知用的 6 位验证码 */
+  router.post(
+    '/instances/:id/notify-prefs/verify/send',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'notify.bark.verify.send', {})
+    },
+  )
+
+  /** 校验 Bark 验证码并标记已验证 */
+  router.post(
+    '/instances/:id/notify-prefs/verify/confirm',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      const code = String((req.body as { code?: string } | undefined)?.code || '').trim()
+      if (!/^\d{6}$/.test(code)) {
+        res.status(400).json({ error: '请输入 6 位验证码' })
+        return
+      }
+      await respondRpc(res, instanceId, 'notify.bark.verify.confirm', { code })
+    },
+  )
+
   /** 读取本机 Claude / Codex / Cursor 订阅额度（Mac 聚合，默认缓存） */
   router.get(
     '/instances/:id/engines/usage',
@@ -1020,12 +1415,19 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
         res.status(400).json({ error: 'Invalid instance id' })
         return
       }
-      const packageId = String((req.body as { package_id?: string })?.package_id || '').trim()
+      const body = req.body as { package_id?: string; china_mirror?: boolean }
+      const packageId = String(body?.package_id || '').trim()
       if (!packageId) {
         res.status(400).json({ error: 'package_id required' })
         return
       }
-      await respondRpc(res, instanceId, 'jevos.settings.install', { package_id: packageId }, 2_700_000)
+      await respondRpc(
+        res,
+        instanceId,
+        'jevos.settings.install',
+        { package_id: packageId, china_mirror: body?.china_mirror === true },
+        31 * 60_000,
+      )
     },
   )
 
@@ -1042,6 +1444,21 @@ export function createSiteRouter(db: RelayDatabase, unlockFailLock: FailLockLimi
       }
       const enabled = !!(req.body as { enabled?: boolean })?.enabled
       await respondRpc(res, instanceId, 'jevos.settings.set', { enabled }, 120_000)
+    },
+  )
+
+  /** 卸载平台安装的 JEV（电脑端归档安装目录） */
+  router.post(
+    '/instances/:id/jevos/settings/uninstall',
+    guard,
+    needUnlock,
+    async (req: Request, res: Response) => {
+      const instanceId = routeParam(req.params.id)
+      if (!instanceId) {
+        res.status(400).json({ error: 'Invalid instance id' })
+        return
+      }
+      await respondRpc(res, instanceId, 'jevos.settings.uninstall', {}, 120_000)
     },
   )
 

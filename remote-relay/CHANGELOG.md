@@ -2,6 +2,21 @@
 
 本文件仅记录 **remote-relay**（移动端 + API 中继），与 Atolla 本体管理台版本无关。
 
+## v0.0.27 — 2026-11-07
+
+- iOS 桌面小组件「CLI 用量」：中号展示 Codex / Cursor / Claude 的 5h（或 Auto）与月/周**剩余**百分比
+- App 打开对话拉取 `engines/usage` 后写入 App Group 快照；小组件约每 20 分钟可用镜像凭据自行刷新中继
+- 新增 `AtollaUsage` Capacitor 插件与 `group.com.atolla.mobile` entitlements（需在 Apple Developer 勾选同一 App Group）
+
+## v0.0.26 — 2026-10-28
+
+- 任务队列：忙碌发送弹出横排「打断优先 / 加入任务队列」+ 5s 进度条，超时默认打断（可取消回填输入框）
+- 对话顶栏队列角标（Q）；半屏列表查看排队/暂停/执行中，支持取消项、「继续队列」、清除已完成
+- 未执行项（queued/paused）可在列表内修改文案；执行中节点为橙色呼吸灯，与排队紫灯区分
+- `agent.ask` 支持 `mode=interrupt|enqueue`；新增 `agent.task_queue.*`（含 update）中继命令
+- 旧客户端无 mode 时，忙碌仍默认入队，避免误打断 PC 任务栈
+- 界面中英 i18n 补充 `tq.*` 文案；入队成功提示「已加入任务队列」
+
 ## v0.0.24 — 2026-10-23
 
 - iOS 灵动岛新增报错、待审批、运行中、已完成四种状态，固定优先级：报错 > 命令审批 > 运行中 > 已完成

@@ -30,12 +30,12 @@ func RunCodexCompact(ctx context.Context, bin, dir, sessionID string, timeout ti
 	if strings.TrimSpace(bin) == "" {
 		bin = DefaultBin("codex")
 	}
-	cmd := exec.CommandContext(cctx, bin, "app-server", "--stdio")
+	cmd := exec.CommandContext(cctx, bin, "app-server", "-c", "check_for_update_on_startup=false", "--stdio")
 	AttachKillable(cmd)
 	if strings.TrimSpace(dir) != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "codex")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("codex compact stdin: %w", err)

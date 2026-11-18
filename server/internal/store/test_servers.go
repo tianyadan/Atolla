@@ -111,9 +111,14 @@ func (s *Store) ListTestServerAllowedIPs(ctx context.Context) ([]TestServerAllow
 }
 
 func (s *Store) UpsertTestServerAllowedIP(ctx context.Context, ip, note string) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO test_server_allowed_ips (ip, note, enabled) VALUES (?,?,1)
-		ON DUPLICATE KEY UPDATE note=VALUES(note), enabled=1`, ip, note)
+	q := s.insertOnConflictUpdate(
+		`test_server_allowed_ips (ip, note, enabled)`,
+		`(?,?,1)`,
+		`ip`,
+		`note=VALUES(note), enabled=1`,
+		`note=excluded.note, enabled=1`,
+	)
+	res, err := s.db.ExecContext(ctx, q, ip, note)
 	if err != nil {
 		return 0, err
 	}

@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { isJellyColor, normalizeJellyColor, type JellyAvatarState } from './jellyColor'
+import { isJellyColor, normalizeJellyColor } from './jellyColor'
 import {
   JELLY_ACTION_ROWS,
   JELLY_CELL,
@@ -8,27 +8,34 @@ import {
   jellySpriteUrl,
   pickSpriteScale,
   prefersReducedMotion,
+  type JellyActionState,
 } from './jellySprite'
 
 const FLOAT_MS = 3000
 const JUMP_MS = 600
 const ALERT_MS = 800
 const ERROR_MS = 889
+/** ponder：约 8fps */
+const PONDER_MS = 1000
+/** coding：约 8–10fps */
+const CODING_MS = 1000
 const FRAME_MS_FLOAT = FLOAT_MS / JELLY_FRAMES
 const FRAME_MS_JUMP = JUMP_MS / JELLY_FRAMES
 const FRAME_MS_ALERT = ALERT_MS / JELLY_FRAMES
 const FRAME_MS_ERROR = ERROR_MS / JELLY_FRAMES
+const FRAME_MS_PONDER = PONDER_MS / JELLY_FRAMES
+const FRAME_MS_CODING = CODING_MS / JELLY_FRAMES
 
 type Props = {
   color?: string
   size?: number
-  state?: JellyAvatarState
+  state?: JellyActionState
   className?: string
   title?: string
   'aria-label'?: string
 }
 
-/** 可复用像素水母头像（v2：7 行动作精灵表，与 PC 一致） */
+/** 可复用像素水母头像（v3：9 行动作精灵表，含 ponder / coding） */
 export function JellyAvatar({
   color = 'blue',
   size = 32,
@@ -61,7 +68,11 @@ export function JellyAvatar({
         ? FRAME_MS_ERROR
         : state === 'working' || state === 'typing'
           ? FRAME_MS_JUMP
-          : FRAME_MS_FLOAT
+          : state === 'ponder'
+            ? FRAME_MS_PONDER
+            : state === 'coding'
+              ? FRAME_MS_CODING
+              : FRAME_MS_FLOAT
 
   useEffect(() => {
     if (reduced) {

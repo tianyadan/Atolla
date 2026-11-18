@@ -1,3 +1,5 @@
+import { syncNativeRelayAPIBase } from '../nativeCredentials'
+
 /** localStorage：App 壳内中继 API 根地址（如 https://relay.example.com） */
 export const API_BASE_KEY = 'relay_api_base'
 
@@ -35,6 +37,7 @@ export function setApiBase(url: string): void {
   } catch {
     /* ignore */
   }
+  void syncNativeRelayAPIBase(next)
 }
 
 /** 把相对 /api 路径拼成可请求的绝对 URL */

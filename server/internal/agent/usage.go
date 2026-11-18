@@ -74,10 +74,10 @@ func ParseClaudeStreamMeta(line []byte) (RunMeta, bool) {
 			}
 		}
 	}
-	// stream usage = 本轮估算，真值需 /context probe。
-	m.UsedTokens = m.InputTokens + m.CacheRead
+	// stream usage = 本轮估算，真值需 /context probe；此处先算原始合计，窗口校正在 NormalizeRunMetaContext。
+	m.UsedTokens, _ = EstimateTurnOccupancy(m.InputTokens, m.CacheRead, m.ContextWindow)
 	if m.UsedTokens == 0 && m.OutputTokens > 0 {
-		m.UsedTokens = m.InputTokens + m.OutputTokens
+		m.UsedTokens, _ = EstimateTurnOccupancy(m.InputTokens+m.OutputTokens, 0, m.ContextWindow)
 	}
 	if ok && (m.InputTokens > 0 || m.OutputTokens > 0 || m.UsedTokens > 0) {
 		m.Estimated = true

@@ -2,6 +2,36 @@
 
 type IconProps = { size?: number }
 
+/** 更多功能入口 */
+export function PlusIcon({ size = 22 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
+
+/** 任务队列 */
+export function QueueIcon({ size = 21 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8 6h11M8 12h11M8 18h11" />
+      <circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+/** 命令审批设置 */
+export function SlidersIcon({ size = 21 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden>
+      <path d="M4 7h16M4 17h16M9 4v6M15 14v6" />
+    </svg>
+  )
+}
+
 /** 相册 / 附图 */
 export function ImageIcon({ size = 22 }: IconProps) {
   return (
@@ -63,8 +93,8 @@ export function SendIcon({ size = 20 }: IconProps) {
   )
 }
 
-/** 终止运行 */
-export function StopIcon({ size = 18 }: IconProps) {
+/** 终止运行（小圆角方块，外层圆由 CSS 提供） */
+export function StopIcon({ size = 14 }: IconProps) {
   return (
     <svg
       width={size}
@@ -73,7 +103,29 @@ export function StopIcon({ size = 18 }: IconProps) {
       fill="currentColor"
       aria-hidden
     >
-      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <rect x="5" y="5" width="14" height="14" rx="3.5" />
+    </svg>
+  )
+}
+
+/** 任务规划：清单 + 路线，表示分步计划 */
+export function TaskPlanIcon({ size = 20 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="M5 6.2 6.2 7.4 8 5.2" />
+      <path d="M5 12.2 6.2 13.4 8 11.2" />
+      <circle cx="5.5" cy="18" r="1.15" fill="currentColor" stroke="none" />
     </svg>
   )
 }

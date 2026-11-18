@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -65,11 +66,42 @@ type Result struct {
 
 // Runner 用 claude -p 运行分身回答。
 type Runner struct {
-	bin string
+	bin  string
+	mu   sync.Mutex
+	warm *WarmRuntime
 }
 
 func NewRunner(bin string) *Runner {
 	return &Runner{bin: bin}
+}
+
+// ConfigureWarmRuntime 配置 Claude 会话进程保温；ttl=0 时关闭并释放已有实例。
+func (r *Runner) ConfigureWarmRuntime(ttl time.Duration, memoryLimitMB int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.warm != nil {
+		r.warm.Close()
+		r.warm = nil
+	}
+	if ttl > 0 {
+		r.warm = NewWarmRuntime(r.bin, ttl, memoryLimitMB)
+	}
+}
+
+// Close 释放全部保温中的 CLI 子进程。
+func (r *Runner) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.warm != nil {
+		r.warm.Close()
+		r.warm = nil
+	}
+}
+
+func (r *Runner) warmRuntime() *WarmRuntime {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.warm
 }
 
 // HookSpec 描述注入给 CLI 的 PreToolUse hook。
@@ -206,8 +238,8 @@ func claudeDeltaText(delta map[string]interface{}) string {
 	}
 }
 
-// assistantMessageText 拼接 assistant 里的 thinking + text（跳过 tool_use）。
-// 思考块在引擎侧往往先于命令产出；若不展示会被压到最后的 result。
+// assistantMessageText 只取 assistant 里的 text（跳过 thinking / tool_use）。
+// 思考过程由 onChunk 单独推给前端折叠展示，不进入本轮正文，避免写库。
 func assistantMessageText(msg map[string]interface{}) string {
 	if msg == nil {
 		return ""
@@ -216,14 +248,7 @@ func assistantMessageText(msg map[string]interface{}) string {
 	var b strings.Builder
 	for _, it := range arr {
 		m, _ := it.(map[string]interface{})
-		switch strField(m, "type") {
-		case "thinking":
-			t := strField(m, "thinking")
-			if t == "" {
-				t = strField(m, "text")
-			}
-			b.WriteString(t)
-		case "text":
+		if strField(m, "type") == "text" {
 			b.WriteString(strField(m, "text"))
 		}
 	}
@@ -239,8 +264,17 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 
 // AskStreamWithImages 同 AskStream，可附带多模态图片（Claude content image blocks）。
 func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, resumeSession string, images []ImagePart) (string, int, error) {
+	return r.AskStreamWithImagesPhase(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, nil, resumeSession, "", images)
+}
+
+// AskStreamWithImagesPhase 同 AskStreamWithImages，并转发 Claude 原生运行阶段。
+// model 非空时传 --model（含 resume / warm）。
+func (r *Runner) AskStreamWithImagesPhase(ctx context.Context, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, hook HookSpec, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession, model string, images []ImagePart) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
+	}
+	if warm := r.warmRuntime(); warm != nil && hook.ConvID > 0 {
+		return warm.Ask(ctx, dir, systemPrompt, question, history, onChunk, timeout, hook, onActivity, onMeta, onPhase, resumeSession, images, model)
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -262,6 +296,9 @@ func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, que
 	if rs := strings.TrimSpace(resumeSession); rs != "" {
 		args = append(args, "--resume", rs)
 	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "--model", m)
+	}
 	if st := hook.Settings(); st != "" {
 		args = append(args, "--settings", st)
 	}
@@ -272,7 +309,7 @@ func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, que
 	cmd := exec.CommandContext(cctx, r.bin, args...)
 	AttachKillable(cmd)
 	cmd.Dir = dir
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "claude")
 	if env := hook.Environ(); len(env) > 0 {
 		cmd.Env = append(cmd.Env, env...)
 	}
@@ -315,27 +352,32 @@ func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, que
 		if line == "" {
 			continue
 		}
+		linePhase := AgentPhase("")
+		if phase, ok := ParseClaudePhase([]byte(line)); ok {
+			linePhase = phase.Phase
+			if onPhase != nil {
+				onPhase(phase)
+			}
+		}
 		if meta, ok := ParseClaudeStreamMeta([]byte(line)); ok {
 			if meta.SessionID != "" {
 				lastMeta.SessionID = StickySessionID(lastMeta.SessionID, meta.SessionID)
 			}
-			if meta.InputTokens > 0 || meta.OutputTokens > 0 || meta.ContextWindow > 0 {
+			// usage 事件一次性对齐字段；允许 cache=0 覆盖旧值，避免多段 assistant 把 cache_read 粘连叠加虚高。
+			hadUsage := meta.InputTokens > 0 || meta.OutputTokens > 0 || meta.CacheRead > 0 || meta.CacheWrite > 0
+			if hadUsage {
 				if meta.InputTokens > 0 {
 					lastMeta.InputTokens = meta.InputTokens
 				}
 				if meta.OutputTokens > 0 {
 					lastMeta.OutputTokens = meta.OutputTokens
 				}
-				if meta.CacheRead > 0 {
-					lastMeta.CacheRead = meta.CacheRead
-				}
-				if meta.CacheWrite > 0 {
-					lastMeta.CacheWrite = meta.CacheWrite
-				}
-				if meta.ContextWindow > 0 {
-					lastMeta.ContextWindow = meta.ContextWindow
-				}
-				lastMeta.UsedTokens = lastMeta.InputTokens + lastMeta.CacheRead
+				lastMeta.CacheRead = meta.CacheRead
+				lastMeta.CacheWrite = meta.CacheWrite
+				lastMeta.UsedTokens = meta.UsedTokens
+			}
+			if meta.ContextWindow > 0 {
+				lastMeta.ContextWindow = meta.ContextWindow
 			}
 			if onMeta != nil {
 				onMeta(lastMeta)
@@ -358,7 +400,12 @@ func (r *Runner) AskStreamWithImages(ctx context.Context, dir, systemPrompt, que
 		// 合成句「No response requested.」是 CLI 把本轮当成本地命令时的空转，不能当成正文，
 		// 否则后面的真回复快照会因为 full 非空被丢掉。
 		if text != "" && strings.TrimSpace(text) != "No response requested." {
-			if !snapshot || full.Len() == 0 {
+			if linePhase == PhaseThinking {
+				// 思考增量只推给前端折叠展示，不写入本轮正文
+				if onChunk != nil {
+					onChunk(text)
+				}
+			} else if !snapshot || full.Len() == 0 {
 				full.WriteString(text)
 				if onChunk != nil {
 					onChunk(text)

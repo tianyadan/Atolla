@@ -1,0 +1,36 @@
+{
+  "id": "coding",
+  "label": "写代码",
+  "frames": 8,
+  "frame_px": 48,
+  "sheet_size": "384x48 (stitched as row 8 of jelly-{color}@{16,32,48}.png)",
+  "loop": true,
+  "fps": 8,
+  "durationMs": 1000,
+  "cssHint": null,
+  "trigger": "frontend or future SSE coding (not typing/working)",
+  "notes": "laptop-in-front 构图：短触手敲击键盘，屏幕 2–3 行代码闪烁。六色 coding 行已缝合进 web/public/jelly-sprites 与 design/jelly-animations-pack/sprites 主表第 9 行（row index 8）；jelly body 为正确 hue remap，laptop greys 与屏幕代码像素保持不变。本目录保留六色 strips（jelly-*-coding@{16,32,48}.png）、六色预览 frame0 与 sample gifs。",
+  "row": 8,
+  "preview": [
+    "coding-six-colors-frame0@48.png",
+    "coding-orange-v6.gif",
+    "coding-blue-v6.gif",
+    "coding-green-v6.gif",
+    "coding-purple-v6.gif",
+    "coding-purple@48-v6.png"
+  ],
+  "colors": [
+    "orange",
+    "yellow",
+    "blue",
+    "green",
+    "purple",
+    "red",
+    "cyan",
+    "teal",
+    "pink",
+    "lime",
+    "coral",
+    "sky"
+  ]
+}

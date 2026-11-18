@@ -5,21 +5,57 @@ import (
 	"strings"
 
 	"atolla/server/internal/agent"
+	"atolla/server/internal/remotebridge"
 	"atolla/server/internal/store"
 )
 
 const maxTerminalRecover = 2
 
-// activityFromSink 把引擎 Activity 转成 SSE。
-func activityFromSink(sink AskEventSink) agent.ActivityFn {
-	if sink == nil {
-		return nil
-	}
+// activityFromSink 把引擎 Activity 转成 SSE，并写入手机镜像用的即时态。
+func activityFromSink(sink AskEventSink, agentID int64) agent.ActivityFn {
 	return func(a agent.Activity) {
+		remotebridge.SetAgentLive(agentID, "", a.Tool, a.Summary)
+		if sink == nil {
+			return
+		}
 		emitAsk(sink, map[string]any{
 			"type": "activity", "tool": a.Tool, "summary": a.Summary,
 		})
 	}
+}
+
+// phaseFromSink 把各 CLI 的统一阶段转成前端可直接消费的 SSE，并同步手机即时态。
+func phaseFromSink(sink AskEventSink, agentID int64) agent.PhaseFn {
+	return func(p agent.PhaseEvent) {
+		phase := string(p.Phase)
+		if p.Phase == agent.PhaseIdle || p.Phase == agent.PhaseError {
+			remotebridge.ClearAgentLive(agentID)
+		} else {
+			remotebridge.SetAgentLive(agentID, phase, p.Tool, "")
+		}
+		if sink == nil {
+			return
+		}
+		emitAsk(sink, map[string]any{
+			"type": "agent_phase", "agent_id": agentID,
+			"phase": phase, "engine": p.Engine,
+			"source": p.Source, "tool": p.Tool,
+		})
+	}
+}
+
+// finalAgentPhase 只为缺失终态的旧 CLI/fallback 补事件，不覆盖真实终态。
+func finalAgentPhase(last agent.AgentPhase, runErr error) (agent.AgentPhase, bool) {
+	if runErr != nil {
+		if last == agent.PhaseError {
+			return "", false
+		}
+		return agent.PhaseError, true
+	}
+	if last == agent.PhaseIdle || last == agent.PhaseError {
+		return "", false
+	}
+	return agent.PhaseIdle, true
 }
 
 // isTerminalKillErr 进程被超时/信号杀掉。
@@ -49,7 +85,7 @@ func (s *Service) runEngineWithRecover(
 	if permConv == 0 {
 		permConv = sessionConv
 	}
-	out, ms, err = s.runManagedEngine(ctx, a, sys, question, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent, atts)
+	out, ms, err = s.runManagedEngine(ctx, a, sys, question, history, onChunk, activityFromSink(onEvent, a.ID), permConv, a.ID, sessionConv, false, onEvent, atts)
 	if err == nil || !isTerminalKillErr(err) || ctx.Err() != nil {
 		return out, ms, err
 	}
@@ -71,7 +107,7 @@ func (s *Service) runEngineWithRecover(
 
 		checkQ := buildRecoverPrompt(userTask, partial, err.Error())
 		// 恢复轮不再重复塞图，避免重复烧多模态 tokens
-		out2, ms2, err2 := s.runManagedEngine(ctx, a, sys, checkQ, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent, nil)
+		out2, ms2, err2 := s.runManagedEngine(ctx, a, sys, checkQ, history, onChunk, activityFromSink(onEvent, a.ID), permConv, a.ID, sessionConv, false, onEvent, nil)
 		ms += ms2
 		if err2 == nil {
 			joined := strings.TrimSpace(partial)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   clearToken,
+  fetchAgents,
   fetchInstances,
   fetchUnlockOtpStatus,
   hasUnlockToken,
@@ -14,23 +15,19 @@ import {
 } from '../api'
 import { confirmSendUnlockOtp } from '../utils/biometricConfirm'
 import {
-  IconChevronRight,
-  IconChip,
-  IconClock,
-  IconDisk,
-  IconEnter,
-  IconInfo,
-  IconMemory,
-  IconMonitor,
+  IconApple,
+  IconBell,
+  IconLaptop,
   IconMore,
   IconMoon,
+  IconMonitor,
+  IconPlus,
   IconSearch,
+  IconSliders,
   IconSun,
-  IconTemp,
-  IconTrash,
+  IconWindows,
 } from '../components/InstanceIcons'
 import { Modal } from '../components/Modal'
-import { SettingsIcon } from '../components/SettingsIcon'
 import { tapHaptic } from '../haptics'
 import { getStoredTheme, toggleTheme, type ThemeMode } from '../utils/theme'
 import {
@@ -41,17 +38,27 @@ import {
   formatPct,
   formatTempC,
   formatUptime,
+  hostOsFamily,
+  instanceCardSubtitle,
   isInstanceOnline,
-  tempBarPct,
 } from '../utils/instance'
+import {
+  chatRoute,
+  loadInstanceChatSelection,
+  rememberChatSelection,
+} from '../utils/chatResume'
+import { rememberSettingsBack } from '../utils/settingsNav'
+import { hasLanInstanceAccess } from '../utils/connectionSession'
 
 type StatusFilter = 'online' | 'offline'
 
-/** Dark instances management — matches prototype, wired to real APIs */
+/** Instances list — B/W prototype layout, light/dark, wired to real APIs */
 export function InstancesPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const unlockTargetId = searchParams.get('unlock') || ''
+  const resumeAfterUnlock = searchParams.get('resume') === '1'
+  const onboarding = searchParams.get('onboarding') === '1'
   const [items, setItems] = useState<PublicInstance[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -93,6 +100,23 @@ export function InstancesPage() {
     }
   }, [navigate])
 
+  /** 解锁后恢复该实例最近数字人；无历史时进入一次性数字人选择。 */
+  const resumeInstanceChat = useCallback(async (instanceId: string) => {
+    const rows = await fetchAgents(instanceId)
+    const saved = loadInstanceChatSelection(instanceId)
+    const selected = saved && rows.find((item) => item.agent_id === saved.agentId)
+    if (!selected) {
+      navigate(`/instances/${encodeURIComponent(instanceId)}/start`, { replace: true })
+      return
+    }
+    rememberChatSelection(
+      instanceId,
+      selected.agent_id,
+      selected.payload?.conversation_id as string | number,
+    )
+    navigate(chatRoute({ instanceId, agentId: selected.agent_id }), { replace: true })
+  }, [navigate])
+
   useEffect(() => {
     void load()
     const tick = window.setInterval(() => setNow(Date.now()), 10_000)
@@ -107,17 +131,22 @@ export function InstancesPage() {
   useEffect(() => {
     if (loading || !unlockTargetId) return
     const target = loadPendingDeepLink()
-    if (!target || target.instanceId !== unlockTargetId) return
+    const deepLinkTarget = target?.instanceId === unlockTargetId ? target : null
+    if (!deepLinkTarget && !resumeAfterUnlock) return
     const instance = items.find((item) => item.instance_id === unlockTargetId)
     if (!instance) {
       setError('目标实例不存在或已被移除')
       return
     }
-    if (hasUnlockToken(unlockTargetId)) {
-      navigateToDeepLinkChat(navigate, target, {
-        pathname: window.location.pathname,
-        search: window.location.search,
-      })
+    if (hasUnlockToken(unlockTargetId) || hasLanInstanceAccess(unlockTargetId)) {
+      if (deepLinkTarget) {
+        navigateToDeepLinkChat(navigate, deepLinkTarget, {
+          pathname: window.location.pathname,
+          search: window.location.search,
+        })
+      } else {
+        void resumeInstanceChat(unlockTargetId)
+      }
       return
     }
     if (enterTarget?.instance_id !== instance.instance_id) {
@@ -125,7 +154,7 @@ export function InstancesPage() {
       setEnterPassword('')
       setEnterError(null)
     }
-  }, [enterTarget?.instance_id, items, loading, navigate, unlockTargetId])
+  }, [enterTarget?.instance_id, items, loading, navigate, resumeAfterUnlock, resumeInstanceChat, unlockTargetId])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -194,11 +223,11 @@ export function InstancesPage() {
     }
   }, [enterTarget])
 
-  /** Enter instance hub (unlock if needed) */
+  /** Enter digital-agent list (unlock if needed); skip legacy「功能」hub */
   function onEnterClick(inst: PublicInstance) {
     setMenuId(null)
-    if (hasUnlockToken(inst.instance_id)) {
-      navigate(`/instances/${encodeURIComponent(inst.instance_id)}`)
+    if (hasUnlockToken(inst.instance_id) || hasLanInstanceAccess(inst.instance_id)) {
+      navigate(`/instances/${encodeURIComponent(inst.instance_id)}/agents`)
       return
     }
     setEnterTarget(inst)
@@ -283,8 +312,10 @@ export function InstancesPage() {
           pathname: window.location.pathname,
           search: window.location.search,
         })
+      } else if (resumeAfterUnlock) {
+        await resumeInstanceChat(id)
       } else {
-        navigate(`/instances/${encodeURIComponent(id)}`)
+        navigate(`/instances/${encodeURIComponent(id)}/agents`)
       }
     } catch (err) {
       setEnterError(err instanceof Error ? err.message : '验证失败')
@@ -310,23 +341,27 @@ export function InstancesPage() {
     }
   }
 
-  function logout() {
-    clearToken()
-    navigate('/login', { replace: true })
-  }
-
   const [theme, setThemeMode] = useState<ThemeMode>(() => getStoredTheme())
+  const [bindHintOpen, setBindHintOpen] = useState(false)
 
   /** Toggle global light/dark (persisted, applies to all pages) */
   function onToggleTheme() {
     setThemeMode(toggleTheme())
   }
 
+  /** Pick B/W host glyph by OS family */
+  function renderOsIcon(os: string | undefined) {
+    const family = hostOsFamily(os)
+    if (family === 'mac') return <IconApple size={22} />
+    if (family === 'windows') return <IconWindows size={20} />
+    if (family === 'linux') return <IconLaptop size={22} />
+    return <IconMonitor size={22} />
+  }
+
   return (
     <div className="page page-fill instances-dark">
       <header className="inst-topbar">
         <div className="inst-topbar-left">
-          <span className="inst-title-bar" aria-hidden />
           <h1>实例</h1>
         </div>
         <div className="inst-topbar-right">
@@ -344,12 +379,21 @@ export function InstancesPage() {
             className="inst-icon-btn"
             aria-label="设置"
             title="设置"
-            onClick={() => navigate('/settings')}
+            onClick={() => {
+              rememberSettingsBack('/instances')
+              navigate('/settings')
+            }}
           >
-            <SettingsIcon size={20} />
+            <IconBell size={20} />
           </button>
-          <button type="button" className="inst-logout" onClick={logout}>
-            退出
+          <button
+            type="button"
+            className="inst-add-btn"
+            aria-label="绑定实例"
+            title="绑定实例"
+            onClick={() => setBindHintOpen(true)}
+          >
+            <IconPlus size={18} />
           </button>
         </div>
       </header>
@@ -362,9 +406,18 @@ export function InstancesPage() {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索实例名称..."
+              placeholder="搜索实例..."
             />
           </label>
+          <button
+            type="button"
+            className="inst-filter-btn"
+            aria-label="筛选"
+            title="筛选"
+            onClick={() => onStatusTab(statusFilter === 'online' ? 'offline' : 'online')}
+          >
+            <IconSliders size={18} />
+          </button>
         </div>
 
         {error ? <p className="error-banner">{error}</p> : null}
@@ -377,160 +430,104 @@ export function InstancesPage() {
             const cpu = formatPct(host.cpu_pct)
             const mem = formatPct(host.mem_pct)
             const disk = formatPct(host.disk_pct)
-            const tempLabel = formatTempC(host.temp_c)
-            const tempBar = tempBarPct(host.temp_c)
-            const statusLabel = (inst.status || 'unknown').toLowerCase()
+            const subtitle = instanceCardSubtitle(inst, now)
 
             return (
-              <li key={inst.instance_id} className="inst-card">
-                <div className="inst-card-head">
-                  <div className="inst-avatar-wrap">
-                    <span className="inst-avatar">
-                      <IconMonitor size={28} />
-                    </span>
-                    <span className={`inst-live-dot ${online ? 'on' : 'off'}`} />
-                  </div>
-                  <div className="inst-card-title">
-                    <div className="inst-name">{inst.display_name}</div>
-                    <div className="inst-badges">
-                      <span className={`inst-badge ${online ? 'online' : 'offline'}`}>
-                        <span className="inst-badge-dot" />
-                        {online ? '在线' : '离线'}
-                      </span>
-                      <span className="inst-badge status">{statusLabel || '—'}</span>
-                    </div>
-                  </div>
-                  <div className="inst-menu-wrap">
-                    <button
-                      type="button"
-                      className="inst-icon-btn"
-                      aria-label="更多"
-                      onClick={() =>
-                        setMenuId((id) => (id === inst.instance_id ? null : inst.instance_id))
-                      }
-                    >
-                      <IconMore size={18} />
-                    </button>
-                    {menuId === inst.instance_id ? (
-                      <div className="inst-menu-pop">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMenuId(null)
-                            setDetailTarget(inst)
-                          }}
-                        >
-                          查看详情
-                        </button>
-                        <button
-                          type="button"
-                          className="danger"
-                          onClick={() => {
-                            setMenuId(null)
-                            setRevokeTarget(inst)
-                          }}
-                        >
-                          注销
-                        </button>
+              <li key={inst.instance_id} className={`inst-card${online ? '' : ' is-offline'}`}>
+                <button
+                  type="button"
+                  className="inst-card-main"
+                  onClick={() => onEnterClick(inst)}
+                  aria-label={`进入 ${inst.display_name}`}
+                >
+                  <div className="inst-card-head">
+                    <span className="inst-avatar">{renderOsIcon(host.os)}</span>
+                    <div className="inst-card-title">
+                      <div className="inst-name-row">
+                        <span className={`inst-status-dot-inline ${online ? 'on' : 'off'}`} />
+                        <span className="inst-name">{inst.display_name}</span>
                       </div>
-                    ) : null}
+                      <div className="inst-sub">{subtitle}</div>
+                    </div>
                   </div>
-                </div>
 
-                <div className="inst-meta-grid">
-                  <div className="inst-meta-cell">
-                    <IconMonitor size={16} />
-                    <div>
-                      <div className="inst-meta-label">系统</div>
-                      <div className="inst-meta-value">{host.os || '—'}</div>
+                  {online ? (
+                    <div className="inst-metrics">
+                      <div className="inst-metric">
+                        <div className="inst-metric-top">
+                          <span>CPU</span>
+                          <strong>{cpu}%</strong>
+                        </div>
+                        <div className="inst-bar">
+                          <div className="inst-bar-fill" style={{ width: `${cpu}%` }} />
+                        </div>
+                      </div>
+                      <div className="inst-metric">
+                        <div className="inst-metric-top">
+                          <span>内存</span>
+                          <strong>{mem}%</strong>
+                        </div>
+                        <div className="inst-bar">
+                          <div className="inst-bar-fill" style={{ width: `${mem}%` }} />
+                        </div>
+                      </div>
+                      <div className="inst-metric">
+                        <div className="inst-metric-top">
+                          <span>磁盘</span>
+                          <strong>{disk}%</strong>
+                        </div>
+                        <div className="inst-bar">
+                          <div className="inst-bar-fill" style={{ width: `${disk}%` }} />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="inst-meta-cell">
-                    <IconChip size={16} />
-                    <div>
-                      <div className="inst-meta-label">IP 地址</div>
-                      <div className="inst-meta-value">{host.ip || '—'}</div>
-                    </div>
-                  </div>
-                  <div className="inst-meta-cell">
-                    <IconClock size={16} />
-                    <div>
-                      <div className="inst-meta-label">运行时长</div>
-                      <div className="inst-meta-value">{formatUptime(host.uptime_sec)}</div>
-                    </div>
-                  </div>
-                </div>
+                  ) : null}
+                </button>
 
-                <div className="inst-res-grid">
-                  <div className="inst-res-card">
-                    <div className="inst-res-top">
-                      <IconChip size={14} />
-                      <span>CPU</span>
-                      <strong>{cpu}%</strong>
-                    </div>
-                    <div className="inst-bar">
-                      <div className="inst-bar-fill cpu" style={{ width: `${cpu}%` }} />
-                    </div>
-                  </div>
-                  <div className="inst-res-card">
-                    <div className="inst-res-top">
-                      <IconMemory size={14} />
-                      <span>内存</span>
-                      <strong>{mem}%</strong>
-                    </div>
-                    <div className="inst-bar">
-                      <div className="inst-bar-fill mem" style={{ width: `${mem}%` }} />
-                    </div>
-                  </div>
-                  <div className="inst-res-card">
-                    <div className="inst-res-top">
-                      <IconDisk size={14} />
-                      <span>磁盘</span>
-                      <strong>{disk}%</strong>
-                    </div>
-                    <div className="inst-bar">
-                      <div className="inst-bar-fill disk" style={{ width: `${disk}%` }} />
-                    </div>
-                  </div>
-                  <div className="inst-res-card">
-                    <div className="inst-res-top">
-                      <IconTemp size={14} />
-                      <span>温度</span>
-                      <strong>{tempLabel}</strong>
-                    </div>
-                    <div className="inst-bar">
-                      <div className="inst-bar-fill temp" style={{ width: `${tempBar}%` }} />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="inst-card-actions">
+                <div className="inst-menu-wrap">
                   <button
                     type="button"
-                    className="inst-btn detail"
-                    onClick={() => setDetailTarget(inst)}
+                    className="inst-icon-btn"
+                    aria-label="更多"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setMenuId((id) => (id === inst.instance_id ? null : inst.instance_id))
+                    }}
                   >
-                    <IconInfo size={16} />
-                    <span>查看详情</span>
-                    <IconChevronRight size={16} />
+                    <IconMore size={18} />
                   </button>
-                  <button
-                    type="button"
-                    className="inst-btn enter"
-                    onClick={() => onEnterClick(inst)}
-                  >
-                    <IconEnter size={16} />
-                    进入
-                  </button>
-                  <button
-                    type="button"
-                    className="inst-btn revoke"
-                    disabled={busyId === inst.instance_id}
-                    onClick={() => setRevokeTarget(inst)}
-                    aria-label="注销"
-                  >
-                    <IconTrash size={16} />
-                  </button>
+                  {menuId === inst.instance_id ? (
+                    <div className="inst-menu-pop">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuId(null)
+                          setDetailTarget(inst)
+                        }}
+                      >
+                        查看详情
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuId(null)
+                          onEnterClick(inst)
+                        }}
+                      >
+                        进入
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => {
+                          setMenuId(null)
+                          setRevokeTarget(inst)
+                        }}
+                      >
+                        注销
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </li>
             )
@@ -541,14 +538,14 @@ export function InstancesPage() {
           <div className="inst-empty">
             <p className="inst-empty-title">
               {items.length === 0
-                ? '暂无实例'
+                ? onboarding ? '先绑定一个实例' : '暂无实例'
                 : statusFilter === 'online'
                   ? '暂无在线实例'
                   : '暂无离线实例'}
             </p>
             <p className="inst-empty-sub">
               {items.length === 0
-                ? '请先在 Mac 管理台启用远程中继并完成注册'
+                ? '请在 Mac 管理台启用远程中继并完成注册；绑定成功后实例会自动出现在这里'
                 : statusFilter === 'online'
                   ? '可切换到「离线」查看其它设备'
                   : '可切换到「在线」查看当前可用设备'}
@@ -761,6 +758,21 @@ export function InstancesPage() {
       >
         <p className="modal-hint">
           注销后，「{revokeTarget?.display_name}」的实例密码将立即失效，该 Mac 需重新生成并注册才能继续同步。
+        </p>
+      </Modal>
+
+      <Modal
+        open={bindHintOpen}
+        title="绑定实例"
+        onClose={() => setBindHintOpen(false)}
+        footer={
+          <button type="button" className="btn primary" onClick={() => setBindHintOpen(false)}>
+            知道了
+          </button>
+        }
+      >
+        <p className="modal-hint">
+          请在电脑端管理台启用远程中继并完成注册。绑定成功后，实例会自动出现在此列表。
         </p>
       </Modal>
     </div>

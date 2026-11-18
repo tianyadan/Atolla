@@ -77,6 +77,7 @@ func (h *Handler) RegisterAdmin(c *gin.Context) {
 
 // SetupStatus 首次引导：是否还需注册，以及三个工作引擎是否已安装。
 func (h *Handler) SetupStatus(c *gin.Context) {
+	force := c.Query("fresh") == "1" || c.Query("fresh") == "true"
 	needs := true
 	if h.svc.Store != nil {
 		acc, err := h.svc.Store.GetAdminAccount(c.Request.Context())
@@ -88,7 +89,7 @@ func (h *Handler) SetupStatus(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"needs_register": needs,
-		"engines":        enginecheck.Scan(),
+		"engines":        enginecheck.ScanCached(force),
 	})
 }
 

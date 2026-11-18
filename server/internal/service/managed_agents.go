@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"atolla/server/internal/agent"
@@ -15,7 +17,8 @@ import (
 )
 
 // AskManagedBackground validates the agent then runs AskManagedWith on a detached goroutine (remote-relay).
-func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt) error {
+// mode: interrupt=打断优先；enqueue 或空=忙碌入队；direct=强制直发（忙碌则报错）。
+func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, question string, atts []remotebridge.ChatAtt, mode string) error {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return err
@@ -34,9 +37,75 @@ func (s *Service) AskManagedBackground(ctx context.Context, agentID int64, quest
 	if q == "" {
 		q = "请查看图片"
 	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	// 活跃 Task Plan：待确认须先处理；执行/暂停中插话入队。
+	if phase, hasPlan := s.HasBlockingTaskPlan(ctx, agentID); hasPlan {
+		if phase == TaskPhaseAwaitingConfirm || phase == TaskPhasePlanning {
+			return fmt.Errorf("请先确认或拒绝当前任务计划")
+		}
+		tqAtts := make([]TaskQueueAttachment, 0, len(chatAtts))
+		for _, x := range chatAtts {
+			tqAtts = append(tqAtts, TaskQueueAttachment{ID: x.ID, URL: x.URL, Mime: x.Mime, Name: x.Name})
+		}
+		if mode == "interrupt" {
+			return fmt.Errorf("任务计划执行中不可打断，消息请入队或终止计划")
+		}
+		out, err := s.EnqueueAgentTaskEx(ctx, agentID, q, tqAtts)
+		if err != nil {
+			return err
+		}
+		log.Printf("remotebridge agent.ask agent=%d: plan %s -> enqueued", agentID, phase)
+		_ = out
+		return nil
+	}
+	s.runMu.Lock()
+	_, liveAsk := s.runs[agentID]
+	s.runMu.Unlock()
+	busyStatus := a.Status == "running" || a.Status == "busy" || a.Status == "waiting" || a.Status == "插话中" || a.Status == "compressing" || a.Status == "initializing"
+	if liveAsk || busyStatus {
+		tqAtts := make([]TaskQueueAttachment, 0, len(chatAtts))
+		for _, x := range chatAtts {
+			tqAtts = append(tqAtts, TaskQueueAttachment{ID: x.ID, URL: x.URL, Mime: x.Mime, Name: x.Name})
+		}
+		switch mode {
+		case "interrupt":
+			if _, ierr := s.InterruptPreferAgentTask(ctx, agentID, q, tqAtts); ierr != nil {
+				return ierr
+			}
+			go func() {
+				bg := context.Background()
+				// 打断后直发，不挂 task_id，避免插话写入队列轨。
+				_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{})
+				if askErr != nil {
+					log.Printf("remotebridge agent.ask interrupt agent=%d: %v", agentID, askErr)
+				}
+				if s.RemoteBridge != nil {
+					s.RemoteBridge.PushAgentMessagesSnapshot(agentID)
+				}
+			}()
+			log.Printf("remotebridge agent.ask agent=%d: busy -> interrupt direct", agentID)
+			return nil
+		case "direct":
+			return fmt.Errorf("agent busy")
+		default:
+			// enqueue 或旧客户端缺省 mode
+			out, err := s.EnqueueAgentTaskEx(ctx, agentID, q, tqAtts)
+			if err != nil {
+				return err
+			}
+			// 竞态：入队时刚好变空闲 → 服务端立刻续跑，避免队列挂死
+			if out.Kickoff != nil {
+				go s.autoRunClaimedTaskQueueItem(agentID, out.Kickoff)
+				log.Printf("remotebridge agent.ask agent=%d: enqueued+kickoff task=%d", agentID, out.Kickoff.ID)
+				return nil
+			}
+			log.Printf("remotebridge agent.ask agent=%d: busy -> enqueued", agentID)
+			return nil
+		}
+	}
 	go func() {
 		bg := context.Background()
-		_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil)
+		_, askErr := s.askManagedUserFacing(bg, agentID, q, chatAtts, store.AgentAskSourceMobile, nil, AskUserFacingOpts{})
 		if askErr != nil {
 			log.Printf("remotebridge agent.ask agent=%d: %v", agentID, askErr)
 		}
@@ -107,11 +176,24 @@ func (s *Service) AskManaged(ctx context.Context, agentID int64, question string
 
 // AskManagedWith 同 AskManaged，可附带聊天图片（来源记为后台）。
 func (s *Service) AskManagedWith(ctx context.Context, agentID int64, question string, atts []ChatAttachment, onEvent AskEventSink) (*store.Message, error) {
-	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent)
+	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent, AskUserFacingOpts{})
+}
+
+// AskManagedWithTask 带任务队列节点的 Ask（打断/续跑/直发登记）。
+func (s *Service) AskManagedWithTask(ctx context.Context, agentID int64, question string, atts []ChatAttachment, onEvent AskEventSink, opts AskUserFacingOpts) (*store.Message, error) {
+	return s.askManagedUserFacing(ctx, agentID, question, atts, store.AgentAskSourceAdmin, onEvent, opts)
+}
+
+// AskUserFacingOpts 任务队列挂钩。
+type AskUserFacingOpts struct {
+	TaskID       int64
+	ResumePrefix bool
+	// Locale 界面语言（zh-CN / en），用于约束思考与回复语言。
+	Locale string
 }
 
 // askManagedUserFacing 后台或手机发起的主会话 Ask，写入数字员工审计。
-func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, question string, atts []ChatAttachment, source string, onEvent AskEventSink) (*store.Message, error) {
+func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, question string, atts []ChatAttachment, source string, onEvent AskEventSink, opts AskUserFacingOpts) (*store.Message, error) {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil {
 		return nil, err
@@ -126,21 +208,83 @@ func (s *Service) askManagedUserFacing(ctx context.Context, agentID int64, quest
 	if OccupancyBlocksUserChat(occ) {
 		return nil, &OccupancyBusyError{Occ: occ}
 	}
-	_ = s.Store.ClearOccupancy(ctx, agentID)
+	// DIRECT 占用只有在本进程已无运行槽时才是陈旧数据；不能清掉仍在执行的占用，
+	// 否则重复请求会取消上一轮并再次执行相同任务。
+	s.runMu.Lock()
+	_, liveRun := s.runs[agentID]
+	s.runMu.Unlock()
+	if liveRun {
+		return nil, &OccupancyBusyError{Occ: occ}
+	}
+	if occ != nil {
+		_ = s.Store.ClearOccupancy(ctx, agentID)
+	}
+
+	var taskID int64
+	silentNotify := false
+	askQ := strings.TrimSpace(question)
+	if opts.TaskID > 0 {
+		// 仅队列节点（打断紧急 / 出队 / 继续）带 task_id；普通直发不入队
+		taskID = opts.TaskID
+		it, startErr := s.beginTaskQueueExecution(ctx, agentID, taskID)
+		if startErr != nil {
+			return nil, startErr
+		}
+		silentNotify = it.SilentNotify
+		if askQ == "" {
+			askQ = it.Question
+		}
+		if opts.ResumePrefix || it.ResumeHint {
+			askQ = BuildTaskQueueAskQuestion(it, true)
+		}
+	} else {
+		// 空闲再发：解除 Stop 的 hold，本轮结束后仍可自动出队
+		_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, false)
+	}
+
 	if err := s.TryAcquireOccupancy(ctx, store.Occupancy{
 		AgentID: agentID, SourceType: SourceDirect, SourceID: fmt.Sprintf("%d", agentID),
-		SourceName: a.Name, TaskName: truncate(question, 120),
+		SourceName: a.Name, TaskName: truncate(askQ, 120),
 	}); err != nil {
+		if taskID > 0 {
+			_ = s.Store.ResetAgentTaskExecution(context.WithoutCancel(ctx), taskID)
+		}
 		return nil, err
 	}
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
-	msg, askErr := s.askManagedCore(ctx, a, 0, question, askCoreOpts{
+	msg, askErr := s.askManagedCore(ctx, a, 0, askQ, askCoreOpts{
 		bindMainConv: true,
 		attachments:  NormalizeChatAttachments(atts),
 		agentAudit:   &agentAskAudit{Source: source},
+		locale:       opts.Locale,
 	}, onEvent)
-	if askErr == nil && msg != nil {
+	ok := askErr == nil
+	errText := ""
+	if askErr != nil {
+		errText = askErr.Error()
+	}
+	next, ferr := s.FinishAgentTaskAndPeekNext(context.WithoutCancel(ctx), agentID, taskID, ok, errText)
+	if ferr != nil {
+		log.Printf("task queue finish agent=%d: %v", agentID, ferr)
+	}
+	if next != nil {
+		if onEvent != nil {
+			// PC SSE：由前端接 task_queue_next 再发 Ask
+			onEvent(map[string]any{
+				"type":            "task_queue_next",
+				"task_id":         next.ID,
+				"question":        next.Question,
+				"attachments":     ParseTaskQueueAttachments(next.AttachmentsJSON),
+				"resume_prefix":   next.ResumeHint,
+				"conversation_id": next.ConversationID,
+			})
+		} else {
+			// 手机/后台无 SSE：服务端自动续跑已 claim 的下一条
+			go s.autoRunClaimedTaskQueueItem(agentID, next)
+		}
+	}
+	if askErr == nil && msg != nil && !silentNotify {
 		s.notifyTaskDone(agentID, question, fmt.Sprintf("%d-%d", agentID, msg.ID))
 	}
 	// Push mirror after PC/SSE ask so mobile chat catches up without waiting for next poll.
@@ -178,6 +322,8 @@ type askCoreOpts struct {
 	visitorAudit *visitorAskAudit
 	// agentAudit 非空时：数字员工主会话 Ask 写入审计看板（后台/手机）。
 	agentAudit *agentAskAudit
+	// locale 界面语言（zh-CN / en）：约束思考与回复语言，空则不加指令。
+	locale string
 }
 
 // visitorAskAudit 前台一轮 Ask 的审计上下文。
@@ -202,6 +348,9 @@ type agentAskAudit struct {
 	output     int64
 	cacheRead  int64
 	cacheWrite int64
+	traceMu    sync.Mutex
+	traceStep  int
+	traceIDs   map[string]int64
 }
 
 func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question string, holdStatus bool) (*store.Message, error) {
@@ -226,10 +375,16 @@ func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question
 
 func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fixedConvID int64, question string, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
 	// 先包装 onEvent，再定义 onChunk，确保 usage / 工具事件能写入审计。
-	if opts.visitorAudit != nil || opts.agentAudit != nil {
+	// thinkingPhase 记录引擎当前是否在思考：思考增量走 reasoning 事件，不进正文也不进库。
+	var thinkingPhase atomic.Bool
+	{
 		inner := onEvent
 		onEvent = func(ev map[string]any) {
 			if ev != nil {
+				if t, _ := ev["type"].(string); t == "agent_phase" {
+					phase, _ := ev["phase"].(string)
+					thinkingPhase.Store(phase == string(agent.PhaseThinking))
+				}
 				if t, _ := ev["type"].(string); t == "usage" {
 					in := toInt64Any(ev["input_tokens"])
 					out := toInt64Any(ev["output_tokens"])
@@ -249,6 +404,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 					}
 				}
 				if opts.agentAudit != nil && opts.agentAudit.logID > 0 {
+					s.recordAgentLLMTraceEvent(opts.agentAudit, a.ID, ev)
 					s.recordAgentAskToolEvent(opts.agentAudit, a.ID, ev)
 				}
 			}
@@ -304,6 +460,11 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	liveBuf := s.beginLiveAssistant(convID, agentID)
 	defer s.abandonLiveAssistant(convID)
 	onChunk := func(chunk string) {
+		// 思考过程单独推给前端折叠区：不进入本轮正文、不落库、也不进移动端实时缓冲
+		if thinkingPhase.Load() {
+			emitAsk(onEvent, map[string]any{"type": "reasoning", "content": chunk})
+			return
+		}
 		if liveBuf != nil {
 			liveBuf.appendChunk(chunk)
 		}
@@ -334,6 +495,15 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		}
 	}
 	mentions = filtered
+
+	// Task Plan 与 @同事互斥：开了规划时禁止委托。
+	if shouldEmitTaskPlanAsk(a, opts.skipTaskPlan) && len(mentions) > 0 {
+		err := fmt.Errorf("任务规划模式下不能同时 @同事，请先关闭任务规划或去掉 @")
+		if !opts.holdStatus {
+			_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "idle", "", 0, statusConvID(opts.bindMainConv, convID))
+		}
+		return nil, err
+	}
 
 	calleeRefs := make([]AgentRef, 0, len(mentions))
 	for _, m := range mentions {
@@ -375,11 +545,18 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	var steps []string
 	var tp *TaskProgress
 	if shouldEmitTaskPlanAsk(a, opts.skipTaskPlan) {
-		// 真实阶段：planning → 拆分 → 激活第 0 步；禁止再跳到中间步
+		if phase, ok := s.HasBlockingTaskPlan(runCtx, agentID); ok {
+			return nil, fmt.Errorf("已有未完成的任务计划（%s），请先确认、拒绝或终止", phase)
+		}
+		// 第 1 拍：当前引擎出草稿 → awaiting_confirm，等用户确认后再执行
 		tp = s.beginTaskProgress(runCtx, agentID, truncateRunTitle(taskBody), onEvent)
-		steps = s.PlanConcreteSteps(runCtx, a, taskBody, calleeRefs)
-		tp.SetPlan(runCtx, steps)
+		draft := s.PlanConcreteStepDetails(runCtx, a, taskBody, calleeRefs, onEvent)
+		tp.SetPlanDraft(runCtx, draft)
 		steps = tp.Snapshot("").StepTitles
+		msg, err := s.finishTaskPlanAwaitingConfirm(runCtx, a, convID, opts, tp, onEvent)
+		s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, err)
+		s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, err)
+		return msg, err
 	}
 
 	if len(mentions) > 0 {
@@ -393,9 +570,8 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	sys = s.consumeSystemReinject(runCtx, convID, sys)
 	userTurns, _ := s.Store.CountUserMessages(runCtx, convID)
 	q := MaybeReinforcePolicy(a, userTurns, engineQuestion)
-	// 单引擎长跑：整段执行期间保持第 0 步 active（不伪造中段进度）
-	if tp != nil {
-		tp.Activate(runCtx, 0, "")
+	if d := LanguageDirective(opts.locale); d != "" {
+		q = d + "\n\n" + q
 	}
 
 	// 默认靠引擎 resume；session 丢失或需 reinject（换工作区/压缩）时拼平台历史
@@ -405,11 +581,70 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		history = FormatResumeHistory(turns, q)
 	}
 	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, history, onChunk, onEvent, userQuestion, atts)
-	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
+	msg, err := s.finishManagedAsk(runCtx, a, convID, opts.bindMainConv, out, ms, runErr, tp, opts, onEvent)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, runErr)
 	return msg, err
+}
+
+// finishTaskPlanAwaitingConfirm 规划第 1 拍结束：不执行业务，agent 回 idle，弹窗等确认。
+func (s *Service) finishTaskPlanAwaitingConfirm(
+	ctx context.Context,
+	a *store.ManagedAgent,
+	convID int64,
+	opts askCoreOpts,
+	tp *TaskProgress,
+	onEvent AskEventSink,
+) (*store.Message, error) {
+	agentID := int64(0)
+	if a != nil {
+		agentID = a.ID
+		remotebridge.ClearAgentLive(agentID)
+	}
+	s.abandonLiveAssistant(convID)
+	snap := TaskPlanSnapshot{}
+	if tp != nil {
+		snap = tp.Snapshot("待确认")
+	}
+	out := "已拟定任务计划，请在弹窗中确认或拒绝后再执行。"
+	msg := &store.Message{
+		ConversationID: convID, Role: "assistant", Content: out, Status: "ok",
+	}
+	if !opts.silent {
+		if id, err := s.Store.InsertMessage(context.WithoutCancel(ctx), msg); err != nil {
+			log.Printf("finishTaskPlanAwaitingConfirm: insert failed: %v", err)
+		} else {
+			msg.ID = id
+		}
+	}
+	payload := map[string]any{
+		"schema":       snap.Schema,
+		"phase":        snap.Phase,
+		"frozen":       snap.Frozen,
+		"task_id":      snap.TaskID,
+		"task_name":    snap.TaskName,
+		"step_items":   snap.Steps,
+		"steps":        snap.StepTitles,
+		"total_count":  snap.TotalCount,
+		"progress":     snap.Progress,
+		"message":      snap.Message,
+		"current_step": snap.CurrentStep,
+	}
+	emitAsk(onEvent, map[string]any{
+		"type":    "task_plan_awaiting_confirm",
+		"task_id": snap.TaskID,
+		"phase":   snap.Phase,
+		"payload": payload,
+	})
+	if agentID > 0 {
+		s.PushTaskPlanAwaitingBark(agentID, snap.TaskID, snap.TaskName)
+	}
+	if !opts.holdStatus && agentID > 0 {
+		_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), agentID, "idle", "", 0, statusConvID(opts.bindMainConv, convID))
+		s.PushAgentsMirrorNow()
+	}
+	return msg, nil
 }
 
 // ensureLiveAgentConversation 返回仍存在的主会话。指针指向已删除会话时新建并重新绑定。
@@ -502,7 +737,7 @@ func (s *Service) askManagedWithInvokes(
 	sumQ = MaybeReinforcePolicy(caller, userTurns, sumQ)
 
 	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, convID, sys, sumQ, "", onChunk, onEvent, taskBody, nil)
-	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, opts)
+	msg, err := s.finishManagedAsk(ctx, caller, convID, bindMainConv, out, ms, runErr, tp, opts, onEvent)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
 	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(ctx, opts.agentAudit, msg, runErr)
@@ -522,7 +757,18 @@ func (s *Service) flushCompactAfterAsk(ctx context.Context, convID int64, onEven
 	})
 }
 
-func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, bindMainConv bool, out string, ms int, runErr error, tp *TaskProgress, opts askCoreOpts) (*store.Message, error) {
+func (s *Service) finishManagedAsk(ctx context.Context, a *store.ManagedAgent, convID int64, bindMainConv bool, out string, ms int, runErr error, tp *TaskProgress, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
+	agentID := int64(0)
+	engine, workspace := "", ""
+	if a != nil {
+		agentID = a.ID
+		engine = a.Engine
+		workspace = a.WorkspacePath
+	}
+	// 回合结束：清掉手机灵动岛即时态，避免残留「正在…」
+	if agentID > 0 {
+		remotebridge.ClearAgentLive(agentID)
+	}
 	out, runErr = applyCancelledAskOutput(ctx.Err(), out, runErr)
 	if ctx.Err() != nil && ms == 0 {
 		ms = 1
@@ -554,12 +800,19 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 		}
 	}
 
-	msg := &store.Message{
-		ConversationID: convID, Role: "assistant", Content: out, Status: status, ReplyMs: ms,
+	// Codex/Cursor：从完整正文识别本机图并上传（用 out，避免切段尾巴漏路径）。
+	var localAtts []ChatAttachment
+	if !opts.silent && EngineSupportsLocalImageAttach(engine) {
+		localAtts = s.AttachLocalImagesFromText(context.WithoutCancel(ctx), engine, workspace, out)
 	}
-	if !opts.silent && strings.TrimSpace(persist) != "" {
+	metaJSON := AttachmentsMetaJSON(localAtts)
+
+	msg := &store.Message{
+		ConversationID: convID, Role: "assistant", Content: out, Status: status, ReplyMs: ms, MetaJSON: metaJSON,
+	}
+	if !opts.silent && (strings.TrimSpace(persist) != "" || len(localAtts) > 0) {
 		row := &store.Message{
-			ConversationID: convID, Role: "assistant", Content: persist, Status: status, ReplyMs: ms,
+			ConversationID: convID, Role: "assistant", Content: persist, Status: status, ReplyMs: ms, MetaJSON: metaJSON,
 		}
 		if id, err := s.Store.InsertMessage(context.WithoutCancel(ctx), row); err != nil {
 			log.Printf("finishManagedAsk: insert assistant failed: %v", err)
@@ -567,6 +820,12 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 			msg.ID = id
 			msg.Content = persist
 		}
+	}
+	if len(localAtts) > 0 && msg.ID > 0 {
+		emitAsk(onEvent, map[string]any{
+			"type": "assistant_attachments", "message_id": msg.ID,
+			"attachments": AttachmentsForSSE(localAtts),
+		})
 	}
 	if !opts.holdStatus {
 		_ = s.setManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))
@@ -640,6 +899,88 @@ func (s *Service) recordAgentAskToolEvent(audit *agentAskAudit, agentID int64, e
 	if err := s.Store.InsertAgentAskToolCall(context.Background(), audit.logID, agentID, tool, result, 0); err != nil {
 		log.Printf("agent ask: tool audit failed: %v", err)
 	}
+}
+
+// recordAgentLLMTraceEvent 把 CLI 可见边界写入轨迹表；不推测 CLI 内部真实 API 调用。
+func (s *Service) recordAgentLLMTraceEvent(audit *agentAskAudit, fallbackAgentID int64, ev map[string]any) {
+	if audit == nil || audit.logID <= 0 || ev == nil {
+		return
+	}
+	typ, _ := ev["type"].(string)
+	runID, _ := ev["trace_run_id"].(string)
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return
+	}
+	agentID := toInt64Any(ev["agent_id"])
+	if agentID <= 0 {
+		agentID = fallbackAgentID
+	}
+
+	switch typ {
+	case "llm_trace_start":
+		audit.traceMu.Lock()
+		audit.traceStep++
+		step := audit.traceStep
+		audit.traceMu.Unlock()
+		item := store.AgentLLMInvocation{
+			AskLogID:         audit.logID,
+			AgentID:          agentID,
+			StepNo:           step,
+			Engine:           stringAny(ev["engine"]),
+			Source:           stringAny(ev["source"]),
+			Model:            stringAny(ev["model"]),
+			InputContent:     stringAny(ev["input_content"]),
+			AvailabilityNote: stringAny(ev["availability_note"]),
+		}
+		id, err := s.Store.BeginAgentLLMInvocation(context.Background(), item)
+		if err != nil {
+			log.Printf("agent ask: begin llm trace failed: %v", err)
+			return
+		}
+		audit.traceMu.Lock()
+		if audit.traceIDs == nil {
+			audit.traceIDs = make(map[string]int64)
+		}
+		audit.traceIDs[runID] = id
+		audit.traceMu.Unlock()
+		ev["trace_id"] = id
+		ev["step_no"] = step
+	case "usage":
+		id := audit.traceID(runID)
+		if id <= 0 {
+			return
+		}
+		cache := toInt64Any(ev["cache_read_tokens"]) + toInt64Any(ev["cache_write_tokens"])
+		if err := s.Store.UpdateAgentLLMInvocationUsage(context.Background(), id,
+			toInt64Any(ev["input_tokens"]), toInt64Any(ev["output_tokens"]), cache,
+			toInt64Any(ev["window_tokens"]), toInt64Any(ev["used_tokens"])); err != nil {
+			log.Printf("agent ask: update llm trace usage failed: %v", err)
+		}
+		ev["trace_id"] = id
+	case "llm_trace_end":
+		id := audit.traceID(runID)
+		if id <= 0 {
+			return
+		}
+		status := stringAny(ev["status"])
+		if err := s.Store.FinishAgentLLMInvocation(context.Background(), id, status,
+			stringAny(ev["output_content"]), int(toInt64Any(ev["duration_ms"]))); err != nil {
+			log.Printf("agent ask: finish llm trace failed: %v", err)
+		}
+		ev["trace_id"] = id
+	}
+}
+
+func (a *agentAskAudit) traceID(runID string) int64 {
+	a.traceMu.Lock()
+	defer a.traceMu.Unlock()
+	return a.traceIDs[runID]
+}
+
+func stringAny(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 // mapAgentAskStatus 把取消/超时/失败映射到审计终态。

@@ -109,6 +109,40 @@ func TestBuildEngineContextSnapshot_ClaudeProbeFailFallback(t *testing.T) {
 	}
 }
 
+func TestEstimateTurnOccupancy_DoubleCountSuspect(t *testing.T) {
+	// input 已接近满窗且又加了同等 cache → 疑似双计，应回退到 input
+	used, anomaly := EstimateTurnOccupancy(800_000, 800_000, 262_144)
+	if used != 262_144 || anomaly == "" {
+		t.Fatalf("used=%d anomaly=%q", used, anomaly)
+	}
+	used, anomaly = EstimateTurnOccupancy(200_000, 180_000, 262_144)
+	if used != 200_000 || anomaly != "turn_usage_double_count_suspect" {
+		t.Fatalf("used=%d anomaly=%q", used, anomaly)
+	}
+}
+
+func TestEstimateTurnOccupancy_NormalSum(t *testing.T) {
+	used, anomaly := EstimateTurnOccupancy(1000, 200, 200_000)
+	if used != 1200 || anomaly != "" {
+		t.Fatalf("used=%d anomaly=%q", used, anomaly)
+	}
+}
+
+func TestEstimatedContextFromCache_ClampsOverWindow(t *testing.T) {
+	s := EstimatedContextFromCache("s1", 1_600_000, 200_000, 262_144)
+	if s.UsedTokens != 262_144 || s.WindowTokens != 262_144 || s.UsedPercent > 100.1 || s.Anomaly == "" {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+func TestNormalizeRunMetaContext_ClampsOverWindow(t *testing.T) {
+	m := RunMeta{InputTokens: 900_000, CacheRead: 800_000}
+	out := NormalizeRunMetaContext("claude", m, 262_144)
+	if out.UsedTokens > 262_144 || out.ContextWindow != 262_144 {
+		t.Fatalf("got %+v", out)
+	}
+}
+
 func TestInferEstimatedFromLegacy_NoField(t *testing.T) {
 	if InferEstimated("claude", "probe") {
 		t.Fatal("claude probe legacy => not estimated")

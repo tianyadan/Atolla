@@ -100,6 +100,29 @@ func looksRestart(argv []string) bool {
 	return false
 }
 
+// isLockedCLIUpdate 禁止 Agent 绕过 Atolla 的版本锁定升级三类工作 CLI。
+func isLockedCLIUpdate(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	bin := binName(argv)
+	joined := strings.ToLower(strings.Join(argv, " "))
+	switch bin {
+	case "claude", "codex", "agent", "cursor-agent":
+		if len(argv) > 1 {
+			sub := strings.ToLower(strings.TrimSpace(argv[1]))
+			return sub == "update" || sub == "upgrade" || sub == "self-update"
+		}
+	case "npm", "pnpm", "yarn", "bun":
+		changesPackages := strings.Contains(joined, " install ") || strings.Contains(joined, " update ") || strings.Contains(joined, " upgrade ") || strings.Contains(joined, " add ")
+		return changesPackages && (strings.Contains(joined, "@anthropic-ai/claude-code") || strings.Contains(joined, "@openai/codex"))
+	case "brew":
+		changesPackages := strings.Contains(joined, " upgrade ") || strings.Contains(joined, " reinstall ")
+		return changesPackages && (strings.Contains(joined, "claude") || strings.Contains(joined, "codex"))
+	}
+	return false
+}
+
 func looksStop(argv []string) bool {
 	for _, t := range argv {
 		if strings.EqualFold(t, "stop") || strings.EqualFold(t, "kill") || strings.EqualFold(t, "down") {
@@ -150,6 +173,9 @@ func IsHardDeny(a ToolAction) bool {
 		argv = ParseArgv(a.Command)
 	}
 	bin := binName(argv)
+	if isLockedCLIUpdate(argv) {
+		return true
+	}
 	if strings.HasPrefix(bin, "mkfs") || diskBins[bin] {
 		return true
 	}

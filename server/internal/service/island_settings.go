@@ -24,20 +24,29 @@ const (
 
 // IslandSettingsStatus 设置页「灵动岛」状态（可缓存）。
 type IslandSettingsStatus struct {
-	Installed   bool   `json:"installed"`
-	Enabled     bool   `json:"enabled"`
-	HasSource   bool   `json:"has_source"`
-	HasXcode    bool   `json:"has_xcode"`
-	SourcePath  string `json:"source_path"`
-	BinaryPath  string `json:"binary_path"`
-	XcodeDetail string `json:"xcode_detail"`
-	Detail      string `json:"detail"`
-	Cached      bool   `json:"cached"`
-	CheckedAt   string `json:"checked_at"`
-	RepoHint    string `json:"repo_hint"`
-	ReleaseTag  string `json:"release_tag,omitempty"`
-	ReleaseURL  string `json:"release_url,omitempty"`
-	AssetName   string `json:"asset_name,omitempty"`
+	Installed       bool   `json:"installed"`
+	Enabled         bool   `json:"enabled"`
+	HasSource       bool   `json:"has_source"`
+	HasXcode        bool   `json:"has_xcode"`
+	SourcePath      string `json:"source_path"`
+	BinaryPath      string `json:"binary_path"`
+	XcodeDetail     string `json:"xcode_detail"`
+	Detail          string `json:"detail"`
+	Cached          bool   `json:"cached"`
+	CheckedAt       string `json:"checked_at"`
+	RepoHint        string `json:"repo_hint"`
+	ReleaseTag      string `json:"release_tag,omitempty"`       // 远端最新 tag
+	ReleaseURL      string `json:"release_url,omitempty"`
+	AssetName       string `json:"asset_name,omitempty"`
+	InstalledTag    string `json:"installed_tag,omitempty"`     // 本机已安装 tag
+	UpdateAvailable bool   `json:"update_available,omitempty"` // 有新版本可更新
+}
+
+// islandInstallMeta 本机安装记录（与 settings 缓存分离，卸载时清掉）。
+type islandInstallMeta struct {
+	Tag       string `json:"tag"`
+	AssetName string `json:"asset_name,omitempty"`
+	Installed string `json:"installed_at,omitempty"`
 }
 
 type islandSettingsCacheFile struct {
@@ -55,15 +64,20 @@ type githubRelease struct {
 	Assets  []githubReleaseAsset `json:"assets"`
 }
 
-// GetIslandSettingsStatus 读取灵动岛状态；默认用缓存，force 时重检。
+// GetIslandSettingsStatus 读取灵动岛状态；默认用缓存，force 时重检并拉取最新 Release 对比更新。
 func (s *Service) GetIslandSettingsStatus(force bool) (IslandSettingsStatus, error) {
 	if !force {
 		if c, ok := s.loadIslandSettingsCache(); ok {
 			c.Cached = true
+			// 缓存命中也补齐本机安装 tag，避免 UI 缺字段
+			if c.InstalledTag == "" {
+				c.InstalledTag = s.readIslandInstalledTag()
+			}
 			return c, nil
 		}
 	}
 	st := s.probeIslandSettings()
+	s.enrichIslandReleaseStatus(&st)
 	st.Cached = false
 	st.CheckedAt = time.Now().Format(time.RFC3339)
 	_ = s.saveIslandSettingsCache(st)
@@ -131,11 +145,23 @@ func (s *Service) InstallIsland() (IslandSettingsStatus, error) {
 		return st, fmt.Errorf("%s", st.Detail)
 	}
 
+	assetName := ""
+	if len(rel.Assets) > 0 {
+		assetName = rel.Assets[0].Name
+	}
+	_ = s.saveIslandInstallMeta(islandInstallMeta{
+		Tag:       rel.TagName,
+		AssetName: assetName,
+		Installed: time.Now().Format(time.RFC3339),
+	})
+
 	if err := s.startIslandLaunchAgent(); err != nil {
 		st := s.probeIslandSettings()
 		st.Detail = "已写入文件，但启动失败: " + shortIslandErr(err)
 		st.ReleaseTag = rel.TagName
 		st.ReleaseURL = rel.HTMLURL
+		st.InstalledTag = rel.TagName
+		st.AssetName = assetName
 		_ = s.saveIslandSettingsCache(st)
 		return st, fmt.Errorf("%s", st.Detail)
 	}
@@ -145,9 +171,13 @@ func (s *Service) InstallIsland() (IslandSettingsStatus, error) {
 	st.CheckedAt = time.Now().Format(time.RFC3339)
 	st.ReleaseTag = rel.TagName
 	st.ReleaseURL = rel.HTMLURL
-	st.AssetName = rel.Assets[0].Name
+	st.AssetName = assetName
+	st.InstalledTag = rel.TagName
+	st.UpdateAvailable = false
 	if st.Detail == "" || !st.Enabled {
 		st.Detail = "安装成功（" + rel.TagName + "）"
+	} else {
+		st.Detail = "已安装并启用（" + rel.TagName + "）"
 	}
 	if _, err := os.Stat(s.islandConfigPath()); err != nil {
 		st.Detail += "；请登录一次以同步凭证"
@@ -177,8 +207,9 @@ func (s *Service) UninstallIsland() (IslandSettingsStatus, error) {
 		}
 	}
 
-	// 缓存与日志归档后删除缓存文件
+	// 缓存、安装记录与日志归档后删除
 	_ = os.Remove(s.islandSettingsCachePath())
+	_ = os.Remove(s.islandInstallMetaPath())
 	for _, logName := range []string{"island.out.log", "island.err.log"} {
 		_ = os.Remove(filepath.Join(homeDir(), ".atolla", logName))
 	}
@@ -187,6 +218,8 @@ func (s *Service) UninstallIsland() (IslandSettingsStatus, error) {
 	st.Detail = "已卸载灵动岛"
 	st.Cached = false
 	st.CheckedAt = time.Now().Format(time.RFC3339)
+	st.UpdateAvailable = false
+	st.InstalledTag = ""
 	_ = s.saveIslandSettingsCache(st)
 	return st, nil
 }
@@ -230,6 +263,7 @@ func (s *Service) probeIslandSettings() IslandSettingsStatus {
 	}
 	st.Installed = fileExists(bin)
 	st.Enabled = s.islandLaunchAgentLoaded()
+	st.InstalledTag = s.readIslandInstalledTag()
 	// 源码/Xcode 仅作附加信息，不再作为安装前置条件
 	if root, err := s.resolveIslandRoot(); err == nil {
 		st.HasSource = true
@@ -248,12 +282,75 @@ func (s *Service) probeIslandSettings() IslandSettingsStatus {
 	switch {
 	case st.Installed && st.Enabled:
 		st.Detail = "已安装并启用"
+		if st.InstalledTag != "" {
+			st.Detail += "（" + st.InstalledTag + "）"
+		}
 	case st.Installed && !st.Enabled:
 		st.Detail = "已安装，胶囊关闭"
+		if st.InstalledTag != "" {
+			st.Detail += "（" + st.InstalledTag + "）"
+		}
 	default:
 		st.Detail = "未安装：点击安装将自动下载最新 GitHub Release"
 	}
 	return st
+}
+
+/** 拉取最新 Release，填充 release_*，并与本机 installed_tag 对比是否可更新 */
+func (s *Service) enrichIslandReleaseStatus(st *IslandSettingsStatus) {
+	if st == nil {
+		return
+	}
+	if st.InstalledTag == "" {
+		st.InstalledTag = s.readIslandInstalledTag()
+	}
+	rel, err := s.resolveIslandRelease()
+	if err != nil {
+		return
+	}
+	st.ReleaseTag = rel.TagName
+	st.ReleaseURL = rel.HTMLURL
+	if len(rel.Assets) > 0 {
+		st.AssetName = rel.Assets[0].Name
+	}
+	if st.Installed && st.InstalledTag != "" && rel.TagName != "" && st.InstalledTag != rel.TagName {
+		st.UpdateAvailable = true
+		st.Detail = "发现新版本 " + rel.TagName + "（当前 " + st.InstalledTag + "）"
+	} else if st.Installed && st.InstalledTag == "" && rel.TagName != "" {
+		// 旧安装无记录：提示可点更新对齐最新 Release
+		st.UpdateAvailable = true
+		st.Detail = "可更新到最新 " + rel.TagName
+	} else {
+		st.UpdateAvailable = false
+	}
+}
+
+func (s *Service) islandInstallMetaPath() string {
+	return filepath.Join(homeDir(), ".atolla", "island-install.json")
+}
+
+func (s *Service) readIslandInstalledTag() string {
+	raw, err := os.ReadFile(s.islandInstallMetaPath())
+	if err != nil {
+		return ""
+	}
+	var m islandInstallMeta
+	if json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Tag)
+}
+
+func (s *Service) saveIslandInstallMeta(m islandInstallMeta) error {
+	path := s.islandInstallMetaPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
 }
 
 func (s *Service) islandBinDir() string {

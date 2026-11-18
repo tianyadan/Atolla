@@ -36,11 +36,14 @@ func (s *Store) UpsertWorkflowAgentSession(ctx context.Context, defID, agentID, 
 	if defID <= 0 || agentID <= 0 || convID <= 0 {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO workflow_agent_sessions (definition_id, agent_id, conversation_id)
-		VALUES (?, ?, ?)
-		ON DUPLICATE KEY UPDATE conversation_id=VALUES(conversation_id), updated_at=CURRENT_TIMESTAMP`,
-		defID, agentID, convID)
+	q := s.insertOnConflictUpdate(
+		`workflow_agent_sessions (definition_id, agent_id, conversation_id)`,
+		`(?, ?, ?)`,
+		`definition_id, agent_id`,
+		`conversation_id=VALUES(conversation_id), updated_at=CURRENT_TIMESTAMP`,
+		`conversation_id=excluded.conversation_id, updated_at=CURRENT_TIMESTAMP`,
+	)
+	_, err := s.db.ExecContext(ctx, q, defID, agentID, convID)
 	return err
 }
 

@@ -8,7 +8,7 @@ import (
 )
 
 func (s *Store) ensurePermissionGatewaySchema(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS session_permissions (
 		  id                 BIGINT        NOT NULL AUTO_INCREMENT,
 		  conversation_id    BIGINT        NOT NULL,
@@ -30,17 +30,8 @@ func (s *Store) ensurePermissionGatewaySchema(ctx context.Context) error {
 		{"environment", `ALTER TABLE command_audits ADD COLUMN environment VARCHAR(128) NOT NULL DEFAULT ''`},
 		{"risk_score", `ALTER TABLE command_audits ADD COLUMN risk_score DOUBLE NOT NULL DEFAULT 0`},
 	} {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'command_audits' AND COLUMN_NAME = ?`, col.name,
-		).Scan(&n); err != nil {
+		if err := s.addColumnIfMissing(ctx, "command_audits", col.name, col.ddl); err != nil {
 			return err
-		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

@@ -1,0 +1,22 @@
+appId: com.atolla.desktop
+productName: Atolla
+directories:
+  output: ../dist/electron
+files:
+  - main.mjs
+  - preload.mjs
+  - runtime.mjs
+extraResources:
+  - from: stage/bin/atolla-server
+    to: bin/atolla-server
+  - from: stage/web
+    to: web
+mac:
+  category: public.app-category.productivity
+  # 第一版仅交付本地测试包；避免本机重复开发证书触发自动签名歧义。
+  identity: null
+  target:
+    - target: dmg
+      arch:
+        - arm64
+artifactName: Atolla-${version}-mac-arm64.${ext}

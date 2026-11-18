@@ -58,8 +58,10 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	var body struct {
 		Name                string  `json:"name"`
+		JobRole             string  `json:"job_role"`
 		Engine              string  `json:"engine"`
 		ContextWindowTokens *int64  `json:"context_window_tokens"`
+		Model               *string `json:"model"`
 		BinPath             string  `json:"bin_path"`
 		RulesPrompt         string  `json:"rules_prompt"`
 		AllowWrite          *bool   `json:"allow_write"`
@@ -101,8 +103,14 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	se := body.ScheduleEnabled
 	cron := strings.TrimSpace(body.ScheduleCron)
 	label := strings.TrimSpace(body.ScheduleLabel)
+	jobRole := strings.TrimSpace(body.JobRole)
+	var modelPtr *string
+	if body.Model != nil {
+		m := strings.TrimSpace(*body.Model)
+		modelPtr = &m
+	}
 	in := store.ManagedAgentInput{
-		Name: name, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
+		Name: name, JobRole: &jobRole, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, Model: modelPtr, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
 		AllowWrite: body.AllowWrite, AllowNetwork: body.AllowNetwork, AllowRm: body.AllowRm, AllowBrowser: body.AllowBrowser,
 		WorkspacePath: &ws, ScheduleEnabled: &se, ScheduleCron: &cron, ScheduleLabel: &label,
 		JellyColor: body.JellyColor,
@@ -215,6 +223,15 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 		}
 		in.ContextWindowTokens = &window
 	}
+	if v, ok := body["model"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model"})
+			return
+		}
+		s = strings.TrimSpace(s)
+		in.Model = &s
+	}
 	if v, ok := body["name"]; ok {
 		var s string
 		_ = json.Unmarshal(v, &s)
@@ -256,6 +273,8 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	in.AllowNetwork = parseBoolPtr("allow_network")
 	in.AllowRm = parseBoolPtr("allow_rm")
 	in.AllowBrowser = parseBoolPtr("allow_browser")
+	// 岗位是智能调度的硬约束；显式传空字符串表示清除岗位。
+	in.JobRole = parseStrPtr("job_role")
 	in.WorkspacePath = parseStrPtr("workspace_path")
 	in.ScheduleEnabled = parseBoolPtr("schedule_enabled")
 	in.ScheduleCron = parseStrPtr("schedule_cron")
@@ -423,8 +442,11 @@ func (h *Handler) AdminAgentsFile(c *gin.Context) {
 func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
-		Question    string `json:"question"`
-		Attachments []struct {
+		Question     string `json:"question"`
+		TaskID       int64  `json:"task_id"`
+		ResumePrefix bool   `json:"resume_prefix"`
+		Locale       string `json:"locale"`
+		Attachments  []struct {
 			ID   string `json:"id"`
 			URL  string `json:"url"`
 			Mime string `json:"mime"`
@@ -436,7 +458,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 		return
 	}
 	atts := parseAskAttachments(body.Attachments)
-	if strings.TrimSpace(body.Question) == "" && len(atts) == 0 {
+	if strings.TrimSpace(body.Question) == "" && len(atts) == 0 && body.TaskID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "question required"})
 		return
 	}
@@ -466,31 +488,49 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 		return
 	}
 
+	// 引擎进程必须脱离 HTTP Request.Context：浏览器刷新/关页会取消请求，
+	// 若绑在同一 ctx 上会 CommandContext→SIGKILL 整组进程。终止只走 /stop（StopManaged）。
+	clientCtx := c.Request.Context()
+	var sinkMu sync.Mutex
+	live := true
 	var wmu sync.Mutex
 	sendEvent := func(payload any) {
+		sinkMu.Lock()
+		okLive := live
+		sinkMu.Unlock()
+		if !okLive {
+			return
+		}
 		wmu.Lock()
 		defer wmu.Unlock()
 		b, _ := json.Marshal(payload)
 		_, _ = c.Writer.Write([]byte("data: " + string(b) + "\n\n"))
 		flusher.Flush()
 	}
+	detachSink := func() {
+		sinkMu.Lock()
+		live = false
+		sinkMu.Unlock()
+	}
 
 	sub := h.svc.Perms.Subscribe()
 	defer h.svc.Perms.Unsubscribe(sub)
-	done := make(chan struct{})
+	fwdDone := make(chan struct{})
 	var fwd sync.WaitGroup
 	fwd.Add(1)
 	go func() {
 		defer fwd.Done()
 		for {
 			select {
-			case <-done:
+			case <-fwdDone:
+				return
+			case <-clientCtx.Done():
 				return
 			case ev := <-sub:
 				var payload map[string]interface{}
 				if (ev.Kind == "request" || ev.Kind == "auto") && ev.Req != nil {
 					// 会话重建后 hook 可能用新 ConvID；同属本数字人仍应展示审批卡。
-					if !h.permEventForAgent(c.Request.Context(), ev.Req.ConvID, convID, id) {
+					if !h.permEventForAgent(context.Background(), ev.Req.ConvID, convID, id) {
 						continue
 					}
 					typ := "permission_request"
@@ -504,7 +544,7 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 					}
 				} else if ev.Kind == "command" && ev.Req != nil {
 					// 必须按会话隔离：ConvID 缺失或与本轮不符时丢弃，避免串到其他数字人窗口。
-					if !h.permEventForAgent(c.Request.Context(), ev.Req.ConvID, convID, id) {
+					if !h.permEventForAgent(context.Background(), ev.Req.ConvID, convID, id) {
 						continue
 					}
 					payload = map[string]interface{}{
@@ -529,30 +569,46 @@ func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	}()
 	var stopOnce sync.Once
 	stopForward := func() {
-		stopOnce.Do(func() { close(done); fwd.Wait() })
+		stopOnce.Do(func() { close(fwdDone); fwd.Wait() })
 	}
 	defer stopForward()
 
-	msg, askErr := h.svc.AskManagedWith(c.Request.Context(), id, body.Question, atts, func(ev map[string]any) {
-		if ev == nil {
+	askDone := make(chan struct{})
+	go func() {
+		defer close(askDone)
+		msg, askErr := h.svc.AskManagedWithTask(context.Background(), id, body.Question, atts, func(ev map[string]any) {
+			if ev == nil {
+				return
+			}
+			if t, _ := ev["type"].(string); t == "chunk" || t == "reasoning" {
+				if ctn, ok := ev["content"].(string); ok {
+					ev["content"] = strings.ReplaceAll(ctn, "\n", "\\n")
+				}
+			}
+			sendEvent(ev)
+		}, service.AskUserFacingOpts{TaskID: body.TaskID, ResumePrefix: body.ResumePrefix, Locale: body.Locale})
+		if askErr != nil {
+			sendEvent(map[string]interface{}{"type": "error", "message": askErr.Error()})
 			return
 		}
-		if t, _ := ev["type"].(string); t == "chunk" {
-			if c, ok := ev["content"].(string); ok {
-				ev["content"] = strings.ReplaceAll(c, "\n", "\\n")
-			}
+		if msg == nil {
+			sendEvent(map[string]interface{}{"type": "error", "message": "empty response"})
+			return
 		}
-		sendEvent(ev)
-	})
-	stopForward()
-	if askErr != nil {
-		sendEvent(map[string]interface{}{"type": "error", "message": askErr.Error()})
-		return
+		sendEvent(map[string]interface{}{
+			"type": "done", "conversation_id": msg.ConversationID,
+			"reply_ms": msg.ReplyMs, "status": msg.Status,
+		})
+	}()
+
+	select {
+	case <-clientCtx.Done():
+		// 刷新/关页：停 SSE，引擎继续跑；仅 StopManaged 可杀进程
+		detachSink()
+		stopForward()
+	case <-askDone:
+		stopForward()
 	}
-	sendEvent(map[string]interface{}{
-		"type": "done", "conversation_id": msg.ConversationID,
-		"reply_ms": msg.ReplyMs, "status": msg.Status,
-	})
 }
 
 // AdminAgentsMarkRead POST /api/admin/agents/:id/mark-read — 清除任务完成未读。
@@ -634,11 +690,11 @@ func (h *Handler) AdminAgentsTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// AdminAgentsStop 终止当前进行中的数字员工问答。
+// AdminAgentsStop 终止当前进行中的数字员工问答，并挂起任务队列自动续跑。
 func (h *Handler) AdminAgentsStop(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	ok := h.svc.StopManaged(id)
-	c.JSON(http.StatusOK, gin.H{"ok": true, "stopped": ok})
+	ok := h.svc.StopManagedAndHoldQueue(id)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "stopped": ok, "queue_hold": true})
 }
 
 // AdminAgentsCommandAudits 命令审批审计列表。

@@ -35,27 +35,6 @@ func payloadAgentID(payload map[string]interface{}) (int64, error) {
 	return id, nil
 }
 
-// handleAgentAsk accepts and runs Ask in background (no SSE to phone).
-func handleAgentAsk(ec *ExecContext) (any, error) {
-	if ec.Runtime == nil {
-		return nil, fmt.Errorf("agent runtime not configured")
-	}
-	agentID, err := payloadAgentID(ec.Payload)
-	if err != nil {
-		return nil, err
-	}
-	q, _ := ec.Payload["question"].(string)
-	q = strings.TrimSpace(q)
-	atts := payloadChatAtts(ec.Payload)
-	if q == "" && len(atts) == 0 {
-		return nil, fmt.Errorf("question required")
-	}
-	if err := ec.Runtime.AskManagedBackground(ec.Context, agentID, q, atts); err != nil {
-		return nil, err
-	}
-	return map[string]any{"accepted": true, "agent_id": strconv.FormatInt(agentID, 10)}, nil
-}
-
 // handleAgentStop stops in-flight Ask for one agent.
 func handleAgentStop(ec *ExecContext) (any, error) {
 	if ec.Runtime == nil {
@@ -159,6 +138,90 @@ func handlePermissionDecide(ec *ExecContext) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "request_id": requestID, "behavior": behavior}, nil
+}
+
+func handleAgentTaskPlanActive(ec *ExecContext) (any, error) {
+	if ec.Runtime == nil {
+		return nil, fmt.Errorf("agent runtime not configured")
+	}
+	agentID, err := payloadAgentID(ec.Payload)
+	if err != nil {
+		return nil, err
+	}
+	return ec.Runtime.GetActiveTaskPlan(ec.Context, agentID)
+}
+
+func handleAgentTaskPlanConfirm(ec *ExecContext) (any, error) {
+	if ec.Runtime == nil {
+		return nil, fmt.Errorf("agent runtime not configured")
+	}
+	agentID, err := payloadAgentID(ec.Payload)
+	if err != nil {
+		return nil, err
+	}
+	planID, _ := ec.Payload["plan_id"].(string)
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return nil, fmt.Errorf("plan_id required")
+	}
+	return ec.Runtime.ConfirmTaskPlan(ec.Context, agentID, planID, ec.Payload["steps"])
+}
+
+func handleAgentTaskPlanReject(ec *ExecContext) (any, error) {
+	if ec.Runtime == nil {
+		return nil, fmt.Errorf("agent runtime not configured")
+	}
+	agentID, err := payloadAgentID(ec.Payload)
+	if err != nil {
+		return nil, err
+	}
+	planID, _ := ec.Payload["plan_id"].(string)
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return nil, fmt.Errorf("plan_id required")
+	}
+	if err := ec.Runtime.RejectTaskPlan(ec.Context, agentID, planID); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func handleAgentTaskPlanAbort(ec *ExecContext) (any, error) {
+	if ec.Runtime == nil {
+		return nil, fmt.Errorf("agent runtime not configured")
+	}
+	agentID, err := payloadAgentID(ec.Payload)
+	if err != nil {
+		return nil, err
+	}
+	planID, _ := ec.Payload["plan_id"].(string)
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return nil, fmt.Errorf("plan_id required")
+	}
+	if err := ec.Runtime.AbortTaskPlan(ec.Context, agentID, planID); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func handleAgentTaskPlanResume(ec *ExecContext) (any, error) {
+	if ec.Runtime == nil {
+		return nil, fmt.Errorf("agent runtime not configured")
+	}
+	agentID, err := payloadAgentID(ec.Payload)
+	if err != nil {
+		return nil, err
+	}
+	planID, _ := ec.Payload["plan_id"].(string)
+	planID = strings.TrimSpace(planID)
+	if planID == "" {
+		return nil, fmt.Errorf("plan_id required")
+	}
+	if err := ec.Runtime.ResumeTaskPlan(ec.Context, agentID, planID); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
 }
 
 // pushAgentsAfterPolicy refreshes agents mirror so phone sees new flags.

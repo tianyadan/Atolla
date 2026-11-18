@@ -103,6 +103,9 @@ export default function TalentMarket({
     if (!detail || busy) return
     setBusy(true)
     setErr('')
+    // 招聘接口应秒级返回；超时则解除「招聘中…」，避免装依赖把 UI 卡死
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 30000)
     try {
       const res = await fetch(`${API}/admin/talent-market/hire`, {
         method: 'POST',
@@ -114,6 +117,7 @@ export default function TalentMarket({
           context_window_tokens: contextWindow,
           ...jellyColorPayload(jellyColor),
         }),
+        signal: ac.signal,
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json().catch(() => ({}))
@@ -121,8 +125,13 @@ export default function TalentMarket({
       onHired?.(d?.id ? { ...d, jelly_color: d.jelly_color || jellyColor } : d)
       onClose?.()
     } catch (e) {
-      setErr(String(e.message || e))
+      if (e?.name === 'AbortError') {
+        setErr('招聘超时，请刷新列表确认是否已入职；若未入职请重试')
+      } else {
+        setErr(String(e.message || e))
+      }
     } finally {
+      clearTimeout(timer)
       setBusy(false)
     }
   }
@@ -159,7 +168,7 @@ export default function TalentMarket({
                       <JellyAvatar
                         className="tm-avatar"
                         color={resolveJellyColor({ id: t.id })}
-                        size={48}
+                        size={36}
                         state="idle"
                       />
                     </span>
@@ -179,12 +188,6 @@ export default function TalentMarket({
           <>
             <div className="tm-head">
               <div className="tm-detail-identity">
-                <JellyAvatar
-                  className="tm-avatar tm-avatar-lg"
-                  color={jellyColor}
-                  size={64}
-                  state="idle"
-                />
                 <div>
                   <h2>{detail.name}</h2>
                   <p className="tm-title">{detail.title}</p>
@@ -215,7 +218,12 @@ export default function TalentMarket({
               <pre className="tm-prompt">{detail.rules_prompt}</pre>
               <p className="muted tm-hint">招聘后可在员工设置中随时修改提示词与技能。</p>
             </div>
-            <JellyColorPicker value={jellyColor} onChange={setJellyColor} disabled={busy} />
+            <JellyColorPicker
+              value={jellyColor}
+              onChange={setJellyColor}
+              disabled={busy}
+              previewSize={56}
+            />
             <div className="tm-form-row">
               <label>
                 显示名称

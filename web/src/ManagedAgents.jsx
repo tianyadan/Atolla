@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
-import { ListCollapseIcon } from './adminMenuIcons.jsx'
-import AgentMarkdown, { selectionInside } from './agentMarkdown.jsx'
+import AgentMarkdown from './agentMarkdown.jsx'
+import StaticHtml from './staticHtml.jsx'
+import { hasTextSelection, isSelectingText } from './selectionGuard.js'
 import JellyAvatar from './JellyAvatar.jsx'
 import JellyColorPicker from './JellyColorPicker.jsx'
 import {
   assignJellyColor,
   jellyColorPayload,
   jellyStateFromAgent,
+  jellyStateFromPhase,
   resolveJellyColor,
 } from './jellyColor.js'
 import {
@@ -19,7 +21,7 @@ import {
   setAgentChatLog,
   subscribeAgentSessions,
 } from './managedAgentSessions.js'
-import { coalesceChatLog } from './coalesceChatLog.js'
+import { coalesceChatLog, shouldAppendAssistantChunk, stripRepeatedAssistantTail } from './coalesceChatLog.js'
 import AgentSkillsPanel from './AgentSkillsPanel.jsx'
 import TalentMarket from './TalentMarket.jsx'
 import DismissAgentModal from './DismissAgentModal.jsx'
@@ -35,6 +37,22 @@ import { MobileViewerIcon } from './MobileViewerIcon.jsx'
 import GroupChatOfferSheet, { buildGroupMemberSet } from './GroupChatOfferSheet.jsx'
 import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import EngineUsageChip from './EngineUsageChip.jsx'
+import { runningElapsedSec } from './taskTiming.js'
+import { useLocale } from './i18n/useLocale.js'
+import TaskQueueRail from './TaskQueueRail.jsx'
+import TaskQueueChoiceSheet from './TaskQueueChoiceSheet.jsx'
+import TaskPlanConfirmSheet from './TaskPlanConfirmSheet.jsx'
+import AgentRuntimeDetail from './AgentRuntimeDetail.jsx'
+import {
+  beginAgentRuntime,
+  finishAgentRuntime,
+  recordRuntimeLLMTrace,
+  recordRuntimeTool,
+  recordRuntimeUsage,
+  runtimeFromActiveAgent,
+  runtimeFromAudit,
+  selectRuntimeDetail,
+} from './agentRuntime.js'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -43,6 +61,78 @@ const ENGINES = [
   { id: 'codex', label: 'Codex', color: '#10a37f' },
   { id: 'agent', label: 'Cursor', color: '#6366f1' },
 ]
+/** Stored values stay Chinese for API compatibility; labels come from i18n. */
+const JOB_ROLES = [
+  { value: '前端', key: 'frontend' },
+  { value: '后端', key: 'backend' },
+  { value: '移动端', key: 'mobile' },
+  { value: '测试', key: 'qa' },
+  { value: '运维', key: 'ops' },
+  { value: '设计', key: 'design' },
+  { value: '文档', key: 'docs' },
+]
+
+/**
+ * 模型目录的 label 可能是“名称 — 功能说明”。下拉框只承担选择职责，
+ * 不应把说明挤进原生 select；实际提交仍使用完整且稳定的 model id。
+ */
+function compactModelOptionLabel(item) {
+  const label = String(item?.label || item?.id || '').trim()
+  const separator = label.indexOf(' — ')
+  return separator >= 0 ? label.slice(0, separator) : label
+}
+
+function composerModelLabel(agent, defaultModelLabel) {
+  const engine = String(agent?.engine || '').trim().toLowerCase()
+  const engineLabel = engine === 'codex' ? 'Codex' : engine === 'claude' ? 'Claude' : engine === 'agent' ? 'Cursor' : (agent?.engine || 'Engine')
+  const model = String(agent?.model || '').trim()
+  return `${engineLabel} · ${model || defaultModelLabel}`
+}
+
+/** 本地消息稳定 key：无 DB id 的流式/乐观消息在数组重排后也不能重新挂载。 */
+let localMsgSeq = 0
+function localMsgUid() {
+  localMsgSeq += 1
+  return `u${localMsgSeq}-${Date.now().toString(36)}`
+}
+
+function messageKey(m, i) {
+  if (m?.id != null) return `db-${m.id}`
+  if (m?.uid) return m.uid
+  return `i${i}`
+}
+
+/** 思考流式节流：约 60ms 合并一次，避免每个 delta 都触发整页重渲染 */
+const THINKING_FLUSH_MS = 60
+const thinkingBuf = new Map()
+const thinkingTimers = new Map()
+
+function flushThinking(agentId) {
+  const timer = thinkingTimers.get(agentId)
+  if (timer) {
+    clearTimeout(timer)
+    thinkingTimers.delete(agentId)
+  }
+  const piece = thinkingBuf.get(agentId) || ''
+  thinkingBuf.delete(agentId)
+  if (!piece) return
+  const sess = getAgentSession(agentId)
+  patchAgentSession(agentId, { liveThinking: `${sess.liveThinking || ''}${piece}` })
+}
+
+function queueThinking(agentId, piece) {
+  if (!piece) return
+  thinkingBuf.set(agentId, (thinkingBuf.get(agentId) || '') + piece)
+  if (thinkingTimers.has(agentId)) return
+  thinkingTimers.set(agentId, setTimeout(() => flushThinking(agentId), THINKING_FLUSH_MS))
+}
+
+function resetThinking(agentId) {
+  const timer = thinkingTimers.get(agentId)
+  if (timer) clearTimeout(timer)
+  thinkingTimers.delete(agentId)
+  thinkingBuf.delete(agentId)
+}
 
 /** 引擎错误展示压成约 1～2 行，完整内容放 title。 */
 function shortErrorText(raw, max = 140) {
@@ -58,50 +148,53 @@ function shortErrorText(raw, max = 140) {
   return `${t.slice(0, max)}…`
 }
 
-/** 未入组：没有工作组，或工作组已被删除（否则人和组对不上，列表两边都看不到）。 */
-function isUngroupedAgent(agent, folders) {
-  const id = Number(agent?.folder_id) || 0
-  if (id <= 0) return true
-  return !(folders || []).some((f) => Number(f.id) === id)
+/** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默）；跟随系统语言 */
+const THINKING_PHRASES = {
+  'zh-CN': [
+    '思考中',
+    '琢磨中',
+    '构思中',
+    '翻找线索',
+    '整理思路',
+    '推敲细节',
+    '核对上下文',
+    '权衡方案',
+    '理顺逻辑',
+    '逐条排查',
+    '准备动手',
+    '酝酿灵感',
+  ],
+  en: [
+    'thinking',
+    'pondering',
+    'brewing ideas',
+    'consulting the rubber duck',
+    'untangling spaghetti',
+    'asking the void politely',
+    'compiling vibes',
+    'negotiating with reality',
+    'warming up neurons',
+    'reading tea leaves',
+    'sharpening virtual pencils',
+    'counting token sheep',
+    'channeling inner Claude',
+    'politely poking the model',
+    'assembling coherent thoughts',
+  ],
 }
 
-/** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默） */
-const THINKING_PHRASES = [
-  'thinking',
-  'pondering',
-  'brewing ideas',
-  'consulting the rubber duck',
-  'untangling spaghetti',
-  'asking the void politely',
-  'compiling vibes',
-  'negotiating with reality',
-  'warming up neurons',
-  'reading tea leaves',
-  'sharpening virtual pencils',
-  'counting token sheep',
-  'channeling inner Claude',
-  'politely poking the model',
-  'assembling coherent thoughts',
-]
-
 const SCHEDULE_PRESETS = [
-  { id: '', label: '自定义 cron', cron: '' },
-  { id: 'daily9', label: '每天 09:00', cron: '0 9 * * *' },
-  { id: 'daily18', label: '每天 18:00', cron: '0 18 * * *' },
-  { id: 'weekday9', label: '工作日 09:00', cron: '0 9 * * 1-5' },
-  { id: 'weekly1', label: '每周一 09:00', cron: '0 9 * * 1' },
-  { id: 'monthly1', label: '每月 1 日 09:00', cron: '0 9 1 * *' },
-  { id: 'hourly', label: '每小时整点', cron: '0 * * * *' },
+  { id: '', labelKey: 'custom', cron: '' },
+  { id: 'daily9', labelKey: 'daily9', cron: '0 9 * * *' },
+  { id: 'daily18', labelKey: 'daily18', cron: '0 18 * * *' },
+  { id: 'weekday9', labelKey: 'weekday9', cron: '0 9 * * 1-5' },
+  { id: 'weekly1', labelKey: 'weekly1', cron: '0 9 * * 1' },
+  { id: 'monthly1', labelKey: 'monthly1', cron: '0 9 1 * *' },
+  { id: 'hourly', labelKey: 'hourly', cron: '0 * * * *' },
 ]
 
 function engineMeta(id) {
   return ENGINES.find((e) => e.id === id) || { id, label: id, color: '#94a3b8' }
-}
-
-const BUILTIN_SKILL_ICON = {
-  database: '/skill-icons/database.svg',
-  server: '/skill-icons/server.svg',
-  browser: '/skill-icons/browser.svg',
 }
 
 /** 引擎标签旁：已安装技能数量（浅紫粉半透明） */
@@ -109,8 +202,15 @@ function SkillCountBadge({ count }) {
   const n = Number(count) || 0
   if (n <= 0) return null
   return (
-    <span className="skill-count-badge" title={`已安装 ${n} 个技能`}>
-      {n}
+    <SkillCountBadgeInner count={n} />
+  )
+}
+
+function SkillCountBadgeInner({ count }) {
+  const { t } = useLocale()
+  return (
+    <span className="skill-count-badge" title={t('agentSettings.skillsInstalled', { n: count })}>
+      {count}
     </span>
   )
 }
@@ -124,26 +224,6 @@ function EngineTagWithSkills({ engine, skillCount }) {
       </span>
       <SkillCountBadge count={skillCount} />
     </span>
-  )
-}
-
-/** 悬停展示已安装技能 10×10 图标 */
-function SkillIconStrip({ icons }) {
-  if (!icons?.length) return null
-  return (
-    <div className="ma-item-skills" aria-hidden="true">
-      {icons.map((sk) => {
-        const src = sk.icon_url || BUILTIN_SKILL_ICON[sk.icon_key]
-        if (src) {
-          return <img key={sk.id} className="ma-skill-ico" src={src} alt="" title={sk.name || sk.id} />
-        }
-        return (
-          <span key={sk.id} className="ma-skill-ico glyph" title={sk.name || sk.id}>
-            ◇
-          </span>
-        )
-      })}
-    </div>
   )
 }
 
@@ -161,16 +241,16 @@ function emptyPolicy() {
   }
 }
 
-/** 状态英文 → 中文展示 */
-function statusZh(st) {
+/** 状态码 → 本地化展示文案 */
+function statusZh(st, t) {
   const s = String(st || 'idle')
-  if (s === 'initializing') return '初始化中'
-  if (s === 'compressing') return '压缩记忆'
-  if (s === 'running' || s === 'busy' || s === '插话中') return '忙碌中'
-  if (s === 'waiting') return '等待中'
-  if (s === 'error') return '错误'
-  if (s === 'done') return '空闲中'
-  return '空闲中'
+  if (s === 'initializing') return t('status.initializing')
+  if (s === 'compressing') return t('status.compressing')
+  if (s === 'running' || s === 'busy' || s === '插话中') return t('status.busy')
+  if (s === 'waiting') return t('status.waiting')
+  if (s === 'error') return t('status.error')
+  if (s === 'done') return t('status.idle')
+  return t('status.idle')
 }
 
 /** 是否被项目协作占用 */
@@ -216,12 +296,20 @@ export default function ManagedAgentsPanel({
   authHeaders, onUnauthorized, active = true, onOpenWorkflowRun, onOpenGroupChat,
   focusAgentId = 0, onFocusConsumed, focusApprovalRequestId = '', onApprovalFocusConsumed,
   openHire = false, onHireConsumed, openSettings = false,
-  presentation = 'classic', conversationRefreshKey = 0, onAgentHired,
+  conversationRefreshKey = 0, onAgentHired,
 }) {
+  const { locale, t } = useLocale()
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
+  /** 忙碌发送二选一弹层：{ question, attachments, hideEnqueue } */
+  const [tqChoice, setTqChoice] = useState(null)
+  const [tqChoiceBusy, setTqChoiceBusy] = useState(false)
+  const [tqRefreshKey, setTqRefreshKey] = useState(0)
+  const [taskQueueOpen, setTaskQueueOpen] = useState(false)
+  const [taskQueueBadge, setTaskQueueBadge] = useState(0)
+  const [runtimeDetailOpen, setRuntimeDetailOpen] = useState(false)
+  const pendingQueueNextRef = useRef(null)
   const [question, setQuestion] = useState('')
-  const [tasks, setTasks] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
   const [talentMarketOpen, setTalentMarketOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
@@ -232,20 +320,17 @@ export default function ManagedAgentsPanel({
   const [skillsSubTab, setSkillsSubTab] = useState('installed') // installed | store
   const [dismissTarget, setDismissTarget] = useState(null) // agent | null
   const [legacyMounts, setLegacyMounts] = useState([])
-  const [folders, setFolders] = useState([])
-  const [agentSearch, setAgentSearch] = useState('')
-  const [collapsedFolders, setCollapsedFolders] = useState({})
-  const [folderCreateOpen, setFolderCreateOpen] = useState(false)
-  const [folderCreateName, setFolderCreateName] = useState('新建工作组')
-  const [folderEdit, setFolderEdit] = useState(null) // { id, name }
-  const [listCollapsed, setListCollapsed] = useState(() => {
-    try { return localStorage.getItem('ma_list_collapsed') === '1' } catch { return false }
-  })
-  const [folderEditName, setFolderEditName] = useState('')
   const [newName, setNewName] = useState('新同事')
   const [newEngine, setNewEngine] = useState('claude')
+  const [newJobRole, setNewJobRole] = useState('')
   const [newContextWindow, setNewContextWindow] = useState(1000000)
   const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
+  /** 引擎模型 id；空=CLI 默认 */
+  const [modelDraft, setModelDraft] = useState('')
+  /** '' | catalog id | '__custom__' */
+  const [modelPick, setModelPick] = useState('')
+  const [modelCatalog, setModelCatalog] = useState({ items: [], allow_custom: true, source: '', detail: '' })
+  const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
   const [newRules, setNewRules] = useState('')
   const [newJellyColor, setNewJellyColor] = useState(() => assignJellyColor('new'))
   const [jellyColorDraft, setJellyColorDraft] = useState('blue')
@@ -264,8 +349,10 @@ export default function ManagedAgentsPanel({
   const [attachBusy, setAttachBusy] = useState(false)
   const composerRef = useRef(null)
   const composerDropRef = useRef(null)
+  const composerFileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
+  const [jobRoleDraft, setJobRoleDraft] = useState('')
   const [rulesDraft, setRulesDraft] = useState('')
   const [permBusy, setPermBusy] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -274,14 +361,19 @@ export default function ManagedAgentsPanel({
   const [jevReady, setJevReady] = useState(false)
   const [jevHint, setJevHint] = useState('')
   const [taskPlanSaving, setTaskPlanSaving] = useState(false)
+  const [taskPlanDecisionBusy, setTaskPlanDecisionBusy] = useState(false)
   const [, setTick] = useState(0)
   const [sessVer, setSessVer] = useState(0)
   const boxRef = useRef(null)
   /** 列表请求序号：慢返回的旧轮询不能盖掉刚创建出来的员工。 */
   const agentsLoadGen = useRef(0)
-  /** loadDetail 世代号：切换数字人后丢弃过期拉取，避免写错会话 */
-  const detailLoadGen = useRef(0)
   const stickBottomRef = useRef(true)
+  /** 程序性滚底期间忽略 onScroll，避免把 stickBottom 误判为 false */
+  const pinningScrollRef = useRef(false)
+  /** 选字期间被推迟落盘的聊天快照，选区结束后补上 */
+  const pendingChatLogRef = useRef(null)
+  /** 上次滚底时的高度，内容没变就不重复滚 */
+  const lastPinnedHeightRef = useRef(-1)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
 
@@ -290,9 +382,13 @@ export default function ManagedAgentsPanel({
   // sessVer：外部 session patch 必须驱动重渲染，否则 permQueue 更新不刷新审批卡
   void sessVer
   const sess = getAgentSession(selectedId)
+  const activeTaskPlan = sess.activeTaskPlan
   const loading = !!sess.loading
   const compressing = !!sess.compressing
-  const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog, sessVer])
+  // 只用 chatLog 引用做依赖：sessVer 每 2~5 秒被轮询顶一次，会让数组换引用并触发多余的滚底
+  const chatLog = useMemo(() => sess.chatLog || [], [sess.chatLog])
+  // 思考过程：仅本轮流式可见（不落库），在消息流末尾折叠展示
+  const liveThinking = sess.liveThinking || ''
   const interrupting = !!sess.interrupting
   const permQueue = sess.permQueue || []
   const autoOn = !!sess.autoOn
@@ -300,6 +396,8 @@ export default function ManagedAgentsPanel({
   // 缺省 true：兼容尚未返回字段的旧响应
   const taskPlanOn = selected ? selected.task_plan_enabled !== false : true
   const invokeMap = sess.invokes || {}
+  const localRuntimeStreamActive = loading && !!sess.abort
+  const runtimeForDetail = selectRuntimeDetail(sess.runtimeDetail, sess.lastRuntimeDetail, localRuntimeStreamActive)
   const mentionCandidates = agents.filter((a) => a.id !== selectedId)
 
   useEffect(() => subscribeAgentSessions(() => setSessVer((v) => v + 1)), [])
@@ -307,6 +405,19 @@ export default function ManagedAgentsPanel({
     const t = setInterval(() => setTick((x) => x + 1), 1000)
     return () => clearInterval(t)
   }, [])
+
+  // 当前页面实时数据优先；刷新或外部任务结束后，用审计表恢复最近一轮。
+  useEffect(() => {
+    if (!selectedId || !active) return undefined
+    // 当前 fetch SSE 会直接更新 runtimeDetail；此时读取数据库 processing 快照会覆盖实时轨迹。
+    if (getAgentSession(selectedId).loading && getAgentSession(selectedId).abort) return undefined
+    void loadLatestRuntime(selectedId)
+    const serverRunning = ['running', 'busy', 'waiting', '插话中'].includes(selected?.status)
+    if (!serverRunning || loading) return undefined
+    const timer = window.setInterval(() => void loadLatestRuntime(selectedId), 3000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, active, selected?.status, loading])
 
   // 上下文圆环：空闲/运行中每 5s 刷新真实占用
   useEffect(() => {
@@ -399,6 +510,43 @@ export default function ManagedAgentsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, selectedId, active, selected?.conversation_id, selected?.status, focusApprovalRequestId])
 
+  // Task Plan 由 PC 与移动端共用后端状态；轮询负责跨端确认后及时收起弹层。
+  useEffect(() => {
+    if (!selectedId || !active) return undefined
+    const agentId = selectedId
+    let stopped = false
+
+    const pull = async () => {
+      try {
+        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+          headers: authHeaders(),
+        })
+        if (res.status === 401) {
+          onUnauthorized?.()
+          return
+        }
+        if (!res.ok) return
+
+        const data = await res.json().catch(() => ({}))
+        if (stopped || viewRef.current.selectedId !== agentId) return
+        const plan = data?.plan
+        const awaiting = plan?.phase === 'awaiting_confirm' && !plan?.frozen
+        patchAgentSession(agentId, { activeTaskPlan: awaiting ? plan : null })
+        if (awaiting) setTqChoice(null)
+      } catch {
+        // 临时离线时保留当前编辑内容，恢复连接后再同步服务端状态。
+      }
+    }
+
+    void pull()
+    const timer = window.setInterval(() => void pull(), 2000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, active])
+
   // 窗口重新可见时补拉审批（岛点进来若未整页刷新，也能恢复弹窗）
   useEffect(() => {
     if (!active) return undefined
@@ -427,12 +575,9 @@ export default function ManagedAgentsPanel({
     // 首页未登录也会挂着本面板轮询。没令牌时接口必然 401，不能当成登录过期。
     if (!hasBearerToken(headers)) return
     const gen = ++agentsLoadGen.current
-    const [res, folderRes] = await Promise.all([
-      fetch(`${API}/admin/agents`, { headers }),
-      fetch(`${API}/admin/agent-folders`, { headers }),
-    ])
+    const res = await fetch(`${API}/admin/agents`, { headers })
     if (gen !== agentsLoadGen.current) return
-    if (shouldForceLogout(res.status, headers) || shouldForceLogout(folderRes.status, headers)) {
+    if (shouldForceLogout(res.status, headers)) {
       onUnauthorized?.()
       return
     }
@@ -462,14 +607,12 @@ export default function ManagedAgentsPanel({
       }).catch(() => {})
     }
     setAgents(items)
-    if (folderRes.ok) {
-      const fd = await folderRes.json()
-      setFolders(fd.items || [])
-    }
     // 从服务端恢复自动审核开关(刷新不丢)
     items.forEach((a) => {
       if (a && a.id) patchAgentSession(a.id, { autoOn: !!a.auto_review })
     })
+    // 刷新后服务端仍 running：恢复本地 loading，避免误以为已中断
+    syncLoadingFromAgentStatus(items)
     setSelectedId((cur) => {
       if (forceSelect && preferId && items.some((a) => a.id === preferId)) {
         return preferId
@@ -555,37 +698,43 @@ export default function ManagedAgentsPanel({
     }).catch(() => {})
   }, [active, selectedId])
 
-  async function loadDetail(id, { force = false } = {}) {
-    if (!id) {
-      if (!viewRef.current.selectedId) setTasks([])
-      return
-    }
-    const gen = ++detailLoadGen.current
+  /**
+   * 拉取会话详情。
+   * preferDb：Ask 回合结束后以 DB 为准，丢掉 SSE 无 id 命令挂尾，避免最终回复被顶出视口。
+   */
+  async function loadDetail(id, { force = false, preferDb = false } = {}) {
+    if (!id) return
     const local = getAgentSession(id)
-    const [msgRes, taskRes] = await Promise.all([
-      fetch(`${API}/admin/agents/${id}/messages?limit=${PAGE_SIZE}`, { headers: authHeaders() }),
-      fetch(`${API}/admin/agents/${id}/tasks`, { headers: authHeaders() }),
-    ])
-    // 已发起更新的 loadDetail：只丢弃「写 tasks UI」；会话 chatLog 仍按 id 写入，互不串台
-    if (msgRes.status === 401 || taskRes.status === 401) { onUnauthorized?.(); return }
+    const msgLimit = preferDb ? 100 : PAGE_SIZE
+    const msgRes = await fetch(`${API}/admin/agents/${id}/messages?limit=${msgLimit}`, { headers: authHeaders() })
+    // 会话 chatLog 按请求 id 写入，互不串台
+    if (msgRes.status === 401) { onUnauthorized?.(); return }
     const msgData = await msgRes.json().catch(() => ({}))
-    const taskData = await taskRes.json().catch(() => ({}))
     if (!msgRes.ok) return
     // 选中对话时 pc-viewer 已 mark-read；本地同步去掉蓝徽标 / 「未读」区
     setAgents((list) => list.map((a) => (a.id === id && a.task_unread ? { ...a, task_unread: false } : a)))
-    // 任务条是全局状态：只更新「当前正在看」的那位，避免 A 刷新写到 B 的进度区
-    if (viewRef.current.selectedId === id && gen === detailLoadGen.current) {
-      setTasks(taskData.items || [])
-    }
     // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
-    if (force || !getAgentSession(id).loading) {
+    if (force || preferDb || !getAgentSession(id).loading) {
       const fromDb = mapMsgs(msgData.items)
-      const next = force
-        ? coalesceChatLog(getAgentSession(id).chatLog, fromDb)
-        : fromDb
-      // 划选复制中不要整表替换聊天 DOM（仅当前窗口有选区）
-      const skipDom = viewRef.current.selectedId === id && selectionInside(boxRef.current)
-      if (!skipDom) {
+      let next
+      if (preferDb) {
+        // 保留「加载更早」留下的、本页之前的本地消息；本页完全以 DB 时间线为准
+        const oldestDb = fromDb[0]?.id
+        const olderLocal = (getAgentSession(id).chatLog || []).filter(
+          (m) => m?.id != null && oldestDb != null && Number(m.id) < Number(oldestDb),
+        )
+        next = [...olderLocal, ...fromDb]
+      } else if (force) {
+        next = coalesceChatLog(getAgentSession(id).chatLog, fromDb)
+      } else {
+        next = fromDb
+      }
+      // 划选/拖选中不要整表替换聊天 DOM；先把最新快照存起来，等选区结束再落盘
+      const skipDom = viewRef.current.selectedId === id && isSelectingText()
+      if (skipDom) {
+        pendingChatLogRef.current = { id, next }
+      } else {
+        pendingChatLogRef.current = null
         setAgentChatLog(id, next)
       }
       patchAgentSession(id, {
@@ -613,6 +762,8 @@ export default function ManagedAgentsPanel({
 
   async function loadOlder() {
     if (!selectedId || sess.loadingMore || !sess.hasMore || loading) return
+    // 有选区时插历史会挪动选中的文字
+    if (hasTextSelection()) return
     const agentId = selectedId
     const oldestId = chatLog.find((m) => m.id)?.id
     if (!oldestId) return
@@ -648,6 +799,11 @@ export default function ManagedAgentsPanel({
   }
 
   useEffect(() => { loadAgents() /* eslint-disable-next-line */ }, [])
+
+  // 切换数字人时先清理旧队列徽标，等待新队列状态回传。
+  useEffect(() => {
+    setTaskQueueBadge(0)
+  }, [selectedId])
 
   // 从「数字人管理」卡片 / 灵动岛跳转：选中并打开设置 / 招聘；顺带补拉审批
   useEffect(() => {
@@ -712,7 +868,7 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => {
     if (!selected) {
-      setRenameDraft(''); setRulesDraft(''); setTasks([])
+      setRenameDraft(''); setRulesDraft('')
       return
     }
     setRenameDraft(selected.name || '')
@@ -729,14 +885,88 @@ export default function ManagedAgentsPanel({
       return []
     })
     setLightboxSrc('')
+    // 换人后高度缓存作废，否则可能跳过首次贴底
+    lastPinnedHeightRef.current = -1
   }, [selectedId])
+
+  /** 把对话区钉在底部（双 rAF 等用户气泡 / RunStatus 布局完成） */
+  function scrollChatToBottom() {
+    stickBottomRef.current = true
+    const el = boxRef.current
+    // 按住鼠标（可能正要拖选）或有选区时都不许滚，滚底会把锚点带走
+    if (!el || isSelectingText()) return
+    // 高度没变说明没有新内容，不必重复滚动
+    if (el.scrollHeight === lastPinnedHeightRef.current) return
+    lastPinnedHeightRef.current = el.scrollHeight
+    pinningScrollRef.current = true
+    const pin = () => { el.scrollTop = el.scrollHeight }
+    pin()
+    requestAnimationFrame(() => {
+      pin()
+      requestAnimationFrame(() => {
+        pin()
+        pinningScrollRef.current = false
+      })
+    })
+  }
 
   useEffect(() => {
     if (!active || !stickBottomRef.current) return
-    const el = boxRef.current
-    // 用户正在划选正文时不要强滚到底，否则选区会被冲掉
-    if (el && !selectionInside(el)) el.scrollTop = el.scrollHeight
+    scrollChatToBottom()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatLog, loading, active, permQueue.length])
+
+  // 选区结束（或松手且没有选区）时，把选字期间攒下的聊天快照补进去
+  useEffect(() => {
+    const flush = () => {
+      if (isSelectingText()) return
+      const pending = pendingChatLogRef.current
+      if (!pending) return
+      pendingChatLogRef.current = null
+      // 选字期间 SSE 仍在往本地追加，直接覆盖会丢新内容；按 id 与最新本地状态合并
+      setAgentChatLog(pending.id, (prev) => coalesceChatLog(prev, pending.next))
+    }
+    document.addEventListener('selectionchange', flush)
+    document.addEventListener('pointerup', flush)
+    return () => {
+      document.removeEventListener('selectionchange', flush)
+      document.removeEventListener('pointerup', flush)
+    }
+  }, [])
+
+  /** 刷新后无本地 SSE：按服务端 running 恢复 loading，并在终态清掉「幽灵忙碌」 */
+  function syncLoadingFromAgentStatus(list) {
+    for (const a of list || []) {
+      const id = a?.id
+      if (!id) continue
+      const local = getAgentSession(id)
+      const remoteBusy =
+        a.status === 'running' ||
+        a.status === 'busy' ||
+        a.status === 'waiting' ||
+        a.status === 'compressing' ||
+        a.status === '插话中' ||
+        a.status === 'initializing'
+      // 本页正挂着 Ask SSE（有 abort）时不干涉
+      if (local.abort) continue
+      if (remoteBusy && (!local.loading || !local.runtimeDetail)) {
+        const restoredRuntime = local.runtimeDetail || runtimeFromActiveAgent(a)
+        const startedMs = restoredRuntime?.startedAt || Date.now()
+        patchAgentSession(id, {
+          loading: true,
+          runStartedAt: startedMs,
+          liveActivity: local.liveActivity || { tool: '', summary: '后台运行中…', at: Date.now() },
+          agentPhase: local.agentPhase || 'working',
+          // 页面刷新会清空模块内存；从服务端 running 状态补回 Runtime Detail 按钮。
+          runtimeDetail: restoredRuntime,
+        })
+      } else if (!remoteBusy && local.loading && !local.abort) {
+        patchAgentSession(id, {
+          loading: false, runStartedAt: 0, liveActivity: null, agentPhase: '', interrupting: false,
+        })
+      }
+    }
+  }
 
   useEffect(() => {
     if (!active) return undefined
@@ -762,16 +992,13 @@ export default function ManagedAgentsPanel({
       if (!hasBearerToken(headers)) return
       const sid = viewRef.current.selectedId
       // 只刷新名单，不改选中（避免状态变更时对话窗跳到别人）
-      loadAgents()
+      Promise.resolve(loadAgents()).then(() => {
+        syncLoadingFromAgentStatus(viewRef.current.agents)
+      }).catch(() => {})
       if (sid) {
-        fetch(`${API}/admin/agents/${sid}/tasks`, { headers })
-          .then((r) => r.json())
-          .then((d) => {
-            if (viewRef.current.selectedId === sid) setTasks(d.items || [])
-          })
-          .catch(() => {})
-        // 与手机同看时近实时拉消息；本机 SSE 流式中跳过，避免打断打字机
-        if (!getAgentSession(sid).loading) {
+        const local = getAgentSession(sid)
+        // 本机 SSE 流式中跳过；刷新后恢复的 loading（无 abort）仍要轮询消息
+        if (!local.loading || !local.abort) {
           void loadDetail(sid, { force: true })
         }
       }
@@ -795,8 +1022,11 @@ export default function ManagedAgentsPanel({
   function onChatScroll() {
     const el = boxRef.current
     if (!el) return
-    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-    if (el.scrollTop < 40) loadOlder()
+    if (pinningScrollRef.current) return
+    // 阈值略放宽：亚像素 / RunStatus 增高时仍视为贴底
+    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96
+    // 划选时不往光标上方插历史消息，否则选区会被撑大
+    if (el.scrollTop < 40 && !hasTextSelection()) loadOlder()
   }
 
   async function createAgent(e) {
@@ -810,6 +1040,7 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: newName.trim() || '未命名员工',
+          job_role: newJobRole,
           engine: newEngine,
           context_window_tokens: newContextWindow,
           rules_prompt: newRules,
@@ -838,9 +1069,9 @@ export default function ManagedAgentsPanel({
         }
         setAgents((prev) => [created, ...prev.filter((a) => a.id !== created.id)])
         setSelectedId(created.id)
-        setAgentSearch('')
       }
       setCreateOpen(false)
+      setNewJobRole('')
       setNewPolicy(emptyPolicy())
       setNewJellyColor(assignJellyColor(String(Date.now())))
       await loadAgents(d?.id, { forceSelect: true })
@@ -897,7 +1128,9 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: renameDraft.trim() || selected.name,
+          job_role: jobRoleDraft,
           context_window_tokens: contextWindowDraft,
+          model: String(modelDraft || '').trim(),
           rules_prompt: rulesDraft,
           allow_write: !!policyDraft.allow_write,
           allow_network: !!policyDraft.allow_network,
@@ -916,66 +1149,13 @@ export default function ManagedAgentsPanel({
         return
       }
       setAgents((prev) => prev.map((a) => (
-        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft } : a
+        a.id === selected.id ? { ...a, jelly_color: jellyColorDraft, job_role: jobRoleDraft } : a
       )))
       setSettingsOpen(false)
       await loadAgents(selected.id)
       // 换工作区后可能写入系统提示，刷新对话区
       await loadDetail(selected.id, { force: true })
     } finally { setBusy(false) }
-  }
-
-  async function createFolder(e) {
-    e?.preventDefault?.()
-    if (busy) return
-    const name = folderCreateName.trim() || '新建工作组'
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agent-folders`, {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name }),
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      if (!res.ok) return
-      setFolderCreateOpen(false)
-      setFolderCreateName('新建工作组')
-      await loadAgents(selectedId)
-    } finally { setBusy(false) }
-  }
-
-  async function saveFolderEdit(e) {
-    e?.preventDefault?.()
-    if (!folderEdit || busy) return
-    const name = folderEditName.trim()
-    if (!name) return
-    setBusy(true)
-    try {
-      const res = await fetch(`${API}/admin/agent-folders/${folderEdit.id}`, {
-        method: 'PATCH',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name }),
-      })
-      if (res.status === 401) { onUnauthorized?.(); return }
-      if (!res.ok) return
-      setFolderEdit(null)
-      await loadAgents(selectedId)
-    } finally { setBusy(false) }
-  }
-
-  async function moveAgentToFolder(agentId, folderId) {
-    const res = await fetch(`${API}/admin/agents/${agentId}/folder`, {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ folder_id: folderId || 0 }),
-    })
-    if (res.status === 401) { onUnauthorized?.(); return }
-    await loadAgents(selectedId)
-  }
-
-  /** 从工作组移出到未入组 */
-  async function removeAgentFromFolder(agentId) {
-    await moveAgentToFolder(agentId, 0)
   }
 
   async function fetchStatusSnapshot() {
@@ -986,7 +1166,7 @@ export default function ManagedAgentsPanel({
     if (!res.ok) return
     setAgentChatLog(selected.id, (prev) => [
       ...prev,
-      { role: 'status', content: d.text || '', time: Date.now() },
+      { role: 'status', content: d.text || '', time: Date.now(), uid: localMsgUid() },
     ])
     stickBottomRef.current = true
     await refreshAgentContext(selected.id, true)
@@ -997,17 +1177,62 @@ export default function ManagedAgentsPanel({
     setDismissTarget(selected)
   }
 
-  /** 统一准备员工设置草稿，现代/经典入口共用，避免打开后字段残留。 */
+  /** 拉取引擎可选模型（CLI/cache/docs）；失败仍允许手输。 */
+  async function loadModelCatalog(engine) {
+    const eng = String(engine || '').trim() || 'claude'
+    setModelCatalogLoading(true)
+    try {
+      const res = await fetch(`${API}/admin/engines/${encodeURIComponent(eng)}/models`, { headers: authHeaders() })
+      if (res.status === 401) { onUnauthorized?.(); return null }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setModelCatalog({ items: [], allow_custom: true, source: 'none', detail: d.error || 'load failed' })
+        return { items: [], allow_custom: true }
+      }
+      const cat = {
+        items: Array.isArray(d.items) ? d.items : [],
+        allow_custom: d.allow_custom !== false,
+        source: d.source || '',
+        detail: d.detail || '',
+      }
+      setModelCatalog(cat)
+      return cat
+    } catch {
+      const cat = { items: [], allow_custom: true, source: 'none', detail: 'network error' }
+      setModelCatalog(cat)
+      return cat
+    } finally {
+      setModelCatalogLoading(false)
+    }
+  }
+
+  /** 按 catalog 把当前 modelDraft 映射到下拉选中态。 */
+  function syncModelPick(model, catalog) {
+    const m = String(model || '').trim()
+    const ids = new Set((catalog?.items || []).map((it) => it.id))
+    if (!m) setModelPick('')
+    else if (ids.has(m)) setModelPick(m)
+    else setModelPick('__custom__')
+  }
+
+  /** 统一准备员工设置草稿，避免从不同入口打开后残留旧字段。 */
   function openSelectedSettings(tab = 'basic') {
     if (!selected) return
     setRenameDraft(selected.name || '')
+    setJobRoleDraft(selected.job_role || '')
     setRulesDraft(selected.rules_prompt || '')
     setPolicyDraft(policyFromAgent(selected))
     setContextWindowDraft(selected.context_window_tokens || 1000000)
+    const m = selected.model || ''
+    setModelDraft(m)
+    setModelPick(m ? '__custom__' : '')
     setJellyColorDraft(resolveJellyColor(selected))
     setSettingsTab(tab)
     setSettingsOpen(true)
     setDetailMoreOpen(false)
+    loadModelCatalog(selected.engine).then((cat) => {
+      if (cat) syncModelPick(m, cat)
+    })
   }
 
   /** 加载设置页「继承记忆」 */
@@ -1112,6 +1337,8 @@ export default function ManagedAgentsPanel({
 
   useEffect(() => {
     setDetailMoreOpen(false)
+    setTaskQueueOpen(false)
+    setRuntimeDetailOpen(false)
   }, [selectedId])
 
   /** 开关「命令全部审批通过」并落库 */
@@ -1159,6 +1386,55 @@ export default function ManagedAgentsPanel({
     }
   }
 
+  /** 确认或拒绝当前计划；任一端处理成功后共享状态会让另一端自动收起。 */
+  async function decideTaskPlan(action, steps = []) {
+    const agentId = selectedId
+    const planId = String(getAgentSession(agentId).activeTaskPlan?.plan_id || '')
+    if (!agentId || !planId || taskPlanDecisionBusy) return
+
+    setTaskPlanDecisionBusy(true)
+    try {
+      const res = await fetch(
+        `${API}/admin/agents/${agentId}/task-plan/${encodeURIComponent(planId)}/${action}`,
+        {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: action === 'confirm' ? JSON.stringify({ steps }) : '{}',
+        },
+      )
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || `任务计划${action === 'confirm' ? '确认' : '拒绝'}失败`)
+      }
+
+      patchAgentSession(agentId, { activeTaskPlan: null, error: '' })
+      await loadAgents(agentId)
+    } catch (error) {
+      patchAgentSession(agentId, { error: String(error?.message || error) })
+
+      // 另一端抢先处理时补拉真实状态，避免 PC 保留已过期的计划弹层。
+      try {
+        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+          headers: authHeaders(),
+        })
+        const data = await res.json().catch(() => ({}))
+        const plan = data?.plan
+        if (res.ok && (plan?.phase !== 'awaiting_confirm' || plan?.frozen)) {
+          patchAgentSession(agentId, { activeTaskPlan: null })
+        }
+      } catch {
+        // 离线时保留错误与计划，便于用户恢复连接后重试。
+      }
+    } finally {
+      setTaskPlanDecisionBusy(false)
+    }
+  }
+
   async function decide(requestId, behavior) {
     if (permBusy) return
     setPermBusy(true)
@@ -1192,10 +1468,43 @@ export default function ManagedAgentsPanel({
 
   function applyEvents(agentId, events) {
     for (const ev of events) {
-      if (ev.type === 'activity') {
+      if (ev.type === 'task_queue_next') {
+        pendingQueueNextRef.current = {
+          task_id: ev.task_id,
+          question: ev.question || '',
+          attachments: ev.attachments || [],
+          resume_prefix: !!ev.resume_prefix,
+        }
+        setTqRefreshKey((k) => k + 1)
+      } else if (ev.type === 'llm_trace_start' || ev.type === 'llm_trace_end') {
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          runtimeDetail: recordRuntimeLLMTrace(local.runtimeDetail, ev),
+        })
+      } else if (ev.type === 'activity') {
+        const local = getAgentSession(agentId)
         patchAgentSession(agentId, {
           liveActivity: { tool: ev.tool || '', summary: ev.summary || '运行中…', at: Date.now() },
+          runtimeDetail: recordRuntimeTool(local.runtimeDetail, ev),
         })
+      } else if (ev.type === 'agent_phase') {
+        patchAgentSession(agentId, { agentPhase: ev.phase || '' })
+      } else if (ev.type === 'task_plan_awaiting_confirm') {
+        const payload = ev.payload || {}
+        patchAgentSession(agentId, {
+          activeTaskPlan: {
+            plan_id: ev.task_id || payload.task_id || '',
+            phase: 'awaiting_confirm',
+            frozen: !!payload.frozen,
+            task_name: payload.task_name || '',
+            progress: Number(payload.progress) || 0,
+            message: payload.message || '',
+            current_step: Number(payload.current_step) || 0,
+            total_count: Number(payload.total_count) || 0,
+            step_items: Array.isArray(payload.step_items) ? payload.step_items : [],
+          },
+        })
+        setTqChoice(null)
       } else if (ev.type === 'chunk') {
         const piece = (ev.content || '').replace(/\\n/g, '\n')
         if (!piece) continue
@@ -1204,23 +1513,58 @@ export default function ManagedAgentsPanel({
           // 命令/引用事件会插在末尾;后续正文必须接到 assistant
           if (n.length && n[n.length - 1].role === 'assistant') {
             const last = n[n.length - 1]
-            n[n.length - 1] = { ...last, content: (last.content || '') + piece }
+            const cur = last.content || ''
+            // 引擎重放已推送段落时跳过，避免「改动」等章节贴两次
+            if (!shouldAppendAssistantChunk(cur, piece)) return n
+            const next = stripRepeatedAssistantTail(cur + piece)
+            n[n.length - 1] = { ...last, content: next }
           } else {
-            n.push({ role: 'assistant', content: piece, time: Date.now() })
+            n.push({ role: 'assistant', content: stripRepeatedAssistantTail(piece), time: Date.now(), uid: localMsgUid() })
           }
           return n
         })
+      } else if (ev.type === 'reasoning') {
+        // 思考过程：只进折叠区，不写入 chatLog、不落库；按 ~60ms 合并渲染
+        const piece = (ev.content || '').replace(/\\n/g, '\n')
+        if (!piece) continue
+        queueThinking(agentId, piece)
       } else if (ev.type === 'error') {
+        flushThinking(agentId)
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          agentPhase: 'error',
+          runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'failed'),
+        })
         setAgentChatLog(agentId, (prev) => {
           const n = [...prev]
           if (n.length && n[n.length - 1].role === 'assistant') {
             n[n.length - 1] = { ...n[n.length - 1], content: `❌ ${ev.message || '出错'}`, error: true }
           } else {
-            n.push({ role: 'assistant', content: `❌ ${ev.message || '出错'}`, error: true })
+            n.push({ role: 'assistant', content: `❌ ${ev.message || '出错'}`, error: true, uid: localMsgUid() })
+          }
+          return n
+        })
+      } else if (ev.type === 'assistant_attachments') {
+        const atts = Array.isArray(ev.attachments) ? ev.attachments : []
+        if (!atts.length) continue
+        const mid = ev.message_id
+        setAgentChatLog(agentId, (prev) => {
+          const n = [...prev]
+          for (let i = n.length - 1; i >= 0; i--) {
+            if (n[i].role !== 'assistant') continue
+            if (mid && n[i].id && n[i].id !== mid) continue
+            n[i] = { ...n[i], id: n[i].id || mid, attachments: atts }
+            break
           }
           return n
         })
       } else if (ev.type === 'done') {
+        flushThinking(agentId)
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          agentPhase: 'idle',
+          runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'completed'),
+        })
         if (ev.conversation_id) patchAgentSession(agentId, { convId: ev.conversation_id })
         if (ev.reply_ms) {
           setAgentChatLog(agentId, (prev) => {
@@ -1238,8 +1582,8 @@ export default function ManagedAgentsPanel({
         const inv = { ...(getAgentSession(agentId).invokes || {}) }
         Object.keys(inv).forEach((k) => { inv[k] = { ...inv[k], collapsed: true } })
         patchAgentSession(agentId, { invokes: inv, liveActivity: null })
-		// 回合结束后从引擎状态接口刷新；Codex 不可将 SSE 的 turn usage 当上下文。
-		void refreshAgentContext(agentId, false)
+		// 回合结束后强制探测：Claude 走 /context 真值；勿用 turn usage 冒充占用。
+		void refreshAgentContext(agentId, true)
       } else if (ev.type === 'invoke_status') {
         const id = String(ev.callee_id)
         const inv = { ...(getAgentSession(agentId).invokes || {}) }
@@ -1274,6 +1618,7 @@ export default function ManagedAgentsPanel({
               calleeName: ev.callee_name,
               collapsed: true,
               time: Date.now(),
+              uid: localMsgUid(),
             },
           ])
         }
@@ -1282,16 +1627,16 @@ export default function ManagedAgentsPanel({
           Number(ev.input_tokens || 0) + Number(ev.output_tokens || 0)
           + Number(ev.cache_read_tokens || 0) + Number(ev.cache_write_tokens || 0)
         )
-        const patch = {}
+        const patch = {
+          runtimeDetail: recordRuntimeUsage(getAgentSession(agentId).runtimeDetail, ev),
+        }
         if (turn > 0) patch.taskTokens = turn
 		// SSE usage 是本轮统计，只记录任务消耗；圆环统一由 /context 刷新。
         if (Object.keys(patch).length) patchAgentSession(agentId, patch)
-      } else if (ev.type === 'task_progress') {
-        // 触发 tasks 刷新由轮询承接
       } else if (ev.type === 'system_note') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,
-          { role: 'system', content: ev.content || '系统提示', time: Date.now() },
+          { role: 'system', content: ev.content || '系统提示', time: Date.now(), uid: localMsgUid() },
         ])
       } else if (ev.type === 'context_compacted') {
 		// 压缩后的真实上下文值以随后 rollout token_count 快照为准。
@@ -1299,7 +1644,7 @@ export default function ManagedAgentsPanel({
         if (getAgentSession(agentId).loading) {
           setAgentChatLog(agentId, (prev) => [
             ...prev,
-            { role: 'system', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now() },
+            { role: 'system', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now(), uid: localMsgUid() },
           ])
         } else {
           setAgentChatLog(agentId, (prev) => {
@@ -1327,7 +1672,12 @@ export default function ManagedAgentsPanel({
               }
             }
             const next = [
-              { role: 'assistant', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now() },
+              {
+                role: 'assistant',
+                content: ev.content || '📦 上下文已由引擎压缩，会话已保留',
+                time: Date.now(),
+                uid: localMsgUid(),
+              },
             ]
             if (lastUser) next.push(lastUser)
             if (lastAsst) next.push(lastAsst)
@@ -1346,7 +1696,7 @@ export default function ManagedAgentsPanel({
       } else if (ev.type === 'permission_auto') {
         setAgentChatLog(agentId, (prev) => [
           ...prev,
-          { role: 'auto', content: `${ev.tool_name} · ${(ev.summary || '').slice(0, 80)}`, note: ev.note },
+          { role: 'auto', content: `${ev.tool_name} · ${(ev.summary || '').slice(0, 80)}`, note: ev.note, uid: localMsgUid() },
         ])
         patchAgentSession(agentId, {
           liveActivity: {
@@ -1356,6 +1706,10 @@ export default function ManagedAgentsPanel({
           },
         })
       } else if (ev.type === 'command') {
+        const local = getAgentSession(agentId)
+        patchAgentSession(agentId, {
+          runtimeDetail: recordRuntimeTool(local.runtimeDetail, ev),
+        })
         setAgentChatLog(agentId, (prev) => [
           ...prev,
           {
@@ -1367,6 +1721,7 @@ export default function ManagedAgentsPanel({
             meaning: ev.meaning || '',
             note: ev.note || ev.output || '',
             time: Date.now(),
+            uid: localMsgUid(),
           },
         ])
       } else if (ev.type === 'permission_resolved') {
@@ -1403,24 +1758,57 @@ export default function ManagedAgentsPanel({
     } catch { /* ignore */ }
   }
 
-  async function sendQuestion(agentId, q, attachments = []) {
+  async function loadLatestRuntime(agentId) {
+    if (!agentId) return null
+    try {
+      const res = await fetch(`${API}/admin/agent-audit/latest?agent_id=${agentId}`, { headers: authHeaders() })
+      if (res.status === 401) { onUnauthorized?.(); return null }
+      if (!res.ok) return null
+      const data = await res.json().catch(() => ({}))
+      const runtime = runtimeFromAudit(data.item)
+      patchAgentSession(agentId, { lastRuntimeDetail: runtime })
+      return runtime
+    } catch {
+      return null
+    }
+  }
+
+  async function sendQuestion(agentId, q, attachments = [], opts = {}) {
     const atts = (attachments || []).filter((a) => a?.url || a?.id)
+    const taskId = Number(opts.taskId) || 0
+    const resumePrefix = !!opts.resumePrefix
     const ac = new AbortController()
+    // 先钉底再改会话，避免中间一次 effect 读到旧的 stickBottom=false
+    stickBottomRef.current = true
+    const startedAt = Date.now()
+    resetThinking(agentId)
     patchAgentSession(agentId, {
-      loading: true, error: '', runStartedAt: Date.now(), abort: ac, interrupting: false, invokes: {},
+      loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
+      agentPhase: 'working',
+      liveThinking: '',
       taskTokens: 0,
       liveActivity: { tool: '', summary: '启动中…', at: Date.now() },
+      runtimeDetail: beginAgentRuntime(startedAt),
+      lastRuntimeDetail: null,
     })
+    // pending: 轮询 force 校准时由 coalesce 保留，避免乐观气泡被冲掉
     setAgentChatLog(agentId, (prev) => [
       ...prev,
-      { role: 'user', content: q, attachments: atts, time: Date.now() },
+      { role: 'user', content: q, attachments: atts, time: Date.now(), pending: true, uid: localMsgUid() },
     ])
-    stickBottomRef.current = true
+    scrollChatToBottom()
+    pendingQueueNextRef.current = null
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/ask`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ question: q, attachments: atts }),
+        body: JSON.stringify({
+          question: q,
+          attachments: atts,
+          task_id: taskId || undefined,
+          resume_prefix: resumePrefix || undefined,
+          locale,
+        }),
         signal: ac.signal,
       })
       if (res.status === 401) { onUnauthorized?.(); return }
@@ -1438,23 +1826,24 @@ export default function ManagedAgentsPanel({
         const parsed = parseSSE(buf)
         buf = parsed.rest
         applyEvents(agentId, parsed.events)
-        // 流式期间刷新任务进度
-        if (parsed.events.some((e) => e.type === 'task_progress' || e.type === 'invoke_status')) {
-          fetch(`${API}/admin/agents/${agentId}/tasks`, { headers: authHeaders() })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => { if (d && selectedId === agentId) setTasks(d.items || []) })
-            .catch(() => {})
-        }
       }
       try {
         await loadAgents(agentId)
-        await loadDetail(agentId, { force: true })
+        // preferDb：用落库时间线替换 SSE 挂尾命令，保证最终回复出现在视口底部
+        await loadDetail(agentId, { force: true, preferDb: true })
       } catch (postErr) {
         // 回合已结束；刷新列表失败不掩盖委托/汇总错误
         console.warn('ask post-refresh failed', postErr)
       }
     } catch (err) {
+      // 已被新一轮 Ask 接管时，旧流的 Abort 不写「已停止」、不收尾会话态。
+      if (getAgentSession(agentId).abort !== ac) {
+        return
+      }
       if (err?.name === 'AbortError') {
+        patchAgentSession(agentId, {
+          runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'interrupted'),
+        })
         const isInterrupt = !!getAgentSession(agentId).pendingInterrupt
         if (!isInterrupt) {
           setAgentChatLog(agentId, (prev) => {
@@ -1465,21 +1854,44 @@ export default function ManagedAgentsPanel({
                 return n
               }
             }
-            n.push({ role: 'assistant', content: '⏹ 已停止', error: true, time: Date.now() })
+            n.push({ role: 'assistant', content: '⏹ 已停止', error: true, time: Date.now(), uid: localMsgUid() })
             return n
           })
         }
       } else {
-        patchAgentSession(agentId, { error: String(err) })
+        patchAgentSession(agentId, {
+          error: String(err),
+          runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'failed'),
+        })
       }
     } finally {
-      const pending = getAgentSession(agentId).pendingInterrupt
-      const pendingAtts = getAgentSession(agentId).pendingAttachments || []
+      const currentSession = getAgentSession(agentId)
+      // 打断后立刻发起的新 Ask 会换掉 abort；旧请求不得清掉新一轮 loading / 活动态。
+      if (currentSession.abort !== ac) {
+        return
+      }
+      const pending = currentSession.pendingInterrupt
+      const pendingAtts = currentSession.pendingAttachments || []
+      const queueNext = pendingQueueNextRef.current
+      pendingQueueNextRef.current = null
       patchAgentSession(agentId, {
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
-        interrupting: false, liveActivity: null,
+        interrupting: false, liveActivity: null, agentPhase: '',
+        runtimeDetail: finishAgentRuntime(currentSession.runtimeDetail, currentSession.error ? 'failed' : 'completed'),
       })
-      await refreshAgentContext(agentId, false)
+      setTqRefreshKey((k) => k + 1)
+      // fresh=true：空闲时拉 Claude /context 或 Codex session 真值，避免一直停在 turn usage 估算
+      await refreshAgentContext(agentId, true)
+      await loadLatestRuntime(agentId)
+      // 旧插话路径兼容；优先走服务端 task_queue_next
+      if (queueNext?.task_id) {
+        const nextAtts = Array.isArray(queueNext.attachments) ? queueNext.attachments : []
+        await sendQuestion(agentId, queueNext.question || '', nextAtts, {
+          taskId: queueNext.task_id,
+          resumePrefix: !!queueNext.resume_prefix,
+        })
+        return
+      }
       if (pending || pendingAtts.length) await sendQuestion(agentId, pending || '', pendingAtts)
     }
   }
@@ -1575,6 +1987,7 @@ export default function ManagedAgentsPanel({
     if (!selected) return
     if (selected.status === 'initializing' || isCloneInitBusy(selected)) return
     if (groupOffer) return // 岔路面板打开时先别叠发
+    if (tqChoice) return
     const q = question.trim()
     const pending = pendingImages
     if (!q && !pending.length) return
@@ -1599,21 +2012,132 @@ export default function ManagedAgentsPanel({
       }
       setAttachBusy(false)
     }
+    // 忙碌：弹层二选一（与 @ 多人群聊互斥：有群聊资格则不提供入队）
+    if (s.loading) {
+      const { canOfferGroup } = buildGroupMemberSet(id, q)
+      setTqChoice({ question: q, attachments: atts, hideEnqueue: !!canOfferGroup })
+      setQuestion('')
+      revokePendingImages(pending)
+      setPendingImages([])
+      return
+    }
     setQuestion('')
     revokePendingImages(pending)
     setPendingImages([])
-    if (s.loading) {
-      patchAgentSession(id, { pendingInterrupt: q, pendingAttachments: atts, interrupting: true })
-      s.abort?.abort()
-      return
-    }
-    // 3～5 人（含当前窗口）→ 5s「生成群聊」岔路；否则直接旧并行
+    // 3～5 人（含当前窗口）→ 5s「生成群聊」岔路；队列活跃时不做群聊 offer
     const { memberIds, canOfferGroup } = buildGroupMemberSet(id, q)
-    if (canOfferGroup) {
+    let queueActive = false
+    try {
+      const res = await fetch(`${API}/admin/agents/${id}/task-queue`, { headers: authHeaders() })
+      if (res.ok) {
+        const d = await res.json()
+        queueActive = Number(d.active) > 0
+      }
+    } catch { /* ignore */ }
+    if (canOfferGroup && !queueActive) {
       setGroupOffer({ memberIds, question: q, attachments: atts })
       return
     }
     await sendQuestion(id, q, atts)
+  }
+
+  /** 弹层：打断并优先执行（取消当前、直发，不入队） */
+  async function onTqInterrupt() {
+    if (!selected || !tqChoice || tqChoiceBusy) return
+    const id = selected.id
+    const q = tqChoice.question
+    const atts = tqChoice.attachments || []
+    setTqChoiceBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${id}/task-queue/interrupt`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ question: q, attachments: atts }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `打断失败(${res.status})`)
+      setTqChoice(null)
+      // 先开新 Ask（换掉 abort），再中止旧流，避免旧 finally 清掉第二轮 loading。
+      const prevAbort = getAgentSession(id).abort
+      const sendPromise = sendQuestion(id, q, atts)
+      prevAbort?.abort()
+      setTqRefreshKey((k) => k + 1)
+      await sendPromise
+    } catch (err) {
+      patchAgentSession(id, { error: String(err.message || err) })
+    } finally {
+      setTqChoiceBusy(false)
+    }
+  }
+
+  /** 弹层：加入队列末尾 */
+  async function onTqEnqueue() {
+    if (!selected || !tqChoice || tqChoiceBusy) return
+    const id = selected.id
+    const q = tqChoice.question
+    const atts = tqChoice.attachments || []
+    setTqChoiceBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${id}/task-queue`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ question: q, attachments: atts }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `入队失败(${res.status})`)
+      setTqChoice(null)
+      setTqRefreshKey((k) => k + 1)
+      // 入队时刚好空闲：服务端已 claim，需立刻 Ask，否则会一直挂在队列里
+      const kick = d.kickoff || (d.status === 'running' ? d : null)
+      if (kick?.id) {
+        let kickAtts = atts
+        if (kick.attachments_json) {
+          try { kickAtts = JSON.parse(kick.attachments_json) } catch { /* keep */ }
+        }
+        await sendQuestion(id, kick.question || q, kickAtts, {
+          taskId: kick.id,
+          resumePrefix: !!kick.resume_hint,
+        })
+      }
+    } catch (err) {
+      patchAgentSession(id, { error: String(err.message || err) })
+    } finally {
+      setTqChoiceBusy(false)
+    }
+  }
+
+  /** 继续被 Stop 挂起的队列 */
+  async function onTqContinue() {
+    if (!selectedId) return false
+    try {
+      const res = await fetch(`${API}/admin/agents/${selectedId}/task-queue/continue`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return false }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `继续失败(${res.status})`)
+      setTqRefreshKey((k) => k + 1)
+      const task = d.task
+      if (!task?.id) return true
+      const atts = (() => {
+        try {
+          return task.attachments_json ? JSON.parse(task.attachments_json) : []
+        } catch {
+          return []
+        }
+      })()
+      await sendQuestion(selectedId, task.question || '', atts, {
+        taskId: task.id,
+        resumePrefix: !!d.resume_prefix || !!task.resume_hint,
+      })
+      return true
+    } catch (err) {
+      patchAgentSession(selectedId, { error: String(err.message || err) })
+      return false
+    }
   }
 
   /** 岔路超时 / 选并行：关闭面板并走现有 ask SSE */
@@ -1662,6 +2186,7 @@ export default function ManagedAgentsPanel({
     try {
       await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
     } catch { /* ignore */ }
+    setTqRefreshKey((k) => k + 1)
     patchAgentSession(id, { loading: false, abort: null, runStartedAt: 0, liveActivity: null })
     setAgentChatLog(id, (prev) => {
       const n = [...prev]
@@ -1673,7 +2198,7 @@ export default function ManagedAgentsPanel({
           error: true,
         }
       } else {
-        n.push({ role: 'assistant', content: '⏹ 已终止本次对话', error: true, time: Date.now() })
+        n.push({ role: 'assistant', content: '⏹ 已终止本次对话', error: true, time: Date.now(), uid: localMsgUid() })
       }
       return n
     })
@@ -1715,354 +2240,48 @@ export default function ManagedAgentsPanel({
     const local = getAgentSession(a.id)
     if (local.loading && local.runStartedAt) return Math.max(1, Math.round((Date.now() - local.runStartedAt) / 1000))
     if ((a.status === 'running' || a.status === 'compressing' || local.compressing) && a.run_started_at) {
-      return Math.max(1, Math.round((Date.now() - new Date(a.run_started_at).getTime()) / 1000))
+      return Math.max(1, runningElapsedSec(a.run_started_at))
     }
     return 0
   }
 
   const statusLabel = (a) => {
     const local = getAgentSession(a.id)
-    if (isCloneInitBusy(a)) return '整理记忆'
-    if (local.compressing || a.status === 'compressing') return '压缩记忆'
-    if (a.status === 'initializing') return '初始化中'
-    if (local.loading) return '忙碌中'
-    return statusZh(a.status)
+    if (isCloneInitBusy(a)) return t('status.organizing')
+    if (local.compressing || a.status === 'compressing') return t('status.compressing')
+    if (a.status === 'initializing') return t('status.initializing')
+    if (local.loading) return t('status.busy')
+    return statusZh(a.status, t)
   }
 
   const workflowBusy = isWorkflowBusy(selected)
   const cloneInitBusy = isCloneInitBusy(selected)
   const chatLocked = isChatLocked(selected)
-  const liveTask = (tasks || []).find((t) => t.status === 'running' || t.status === 'waiting')
-  // 团队占用时不回落到已结束任务；结束后清空进度展示
-  const activeTask = liveTask || (workflowBusy ? {
-    task_name: selected?.occupancy?.task_name || selected?.occupancy?.source_name || '项目协作任务',
-    status: 'running',
-    progress: 0,
-    message: '项目协作执行中…',
-    payload: {},
-  } : null)
-  const activeProgress = Math.min(100, Math.max(0, activeTask?.progress || 0))
-  /** 优先 step_items（v1 协议）；兼容旧 steps 字符串数组 */
-  const planPayload = activeTask?.payload || {}
-  const stepItems = Array.isArray(planPayload.step_items) ? planPayload.step_items : null
-  const activeSteps = stepItems
-    ? stepItems.map((s) => s?.title || s?.Title || '')
-    : (planPayload.steps || [])
-  const activeStepIdx = planPayload.current_step ?? 0
-  const failedStepIdx = planPayload.failed ? (planPayload.failed_step ?? -1) : -1
-  const planPhase = planPayload.phase || ''
-  function stepClass(i) {
-    if (stepItems?.[i]?.status) {
-      const st = stepItems[i].status
-      if (st === 'failed') return 'failed'
-      if (st === 'done' || st === 'skipped') return 'done'
-      if (st === 'active') return 'current'
-      return ''
-    }
-    if (i === failedStepIdx) return 'failed'
-    if (i < activeStepIdx) return 'done'
-    if (i === activeStepIdx) return 'current'
-    return ''
-  }
-
-  const searchQ = agentSearch.trim().toLowerCase()
-  const filteredAgents = useMemo(() => {
-    if (!searchQ) return agents
-    return agents.filter((a) => (a.name || '').toLowerCase().includes(searchQ))
-  }, [agents, searchQ])
-  // 依赖 sessVer：本地 loading 变化时刷新「运行中」镜像区
-  const busyAgents = useMemo(
-    () => filteredAgents.filter((a) => isAgentBusy(a)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
-    [filteredAgents, sessVer],
-  )
-  /** 任务完成未读（非忙碌）；按完成时间倒序：越早越靠后 */
-  const unreadAgents = useMemo(
-    () =>
-      filteredAgents
-        .filter((a) => !!a.task_unread && !isAgentBusy(a))
-        .sort((a, b) => unreadAtMs(b) - unreadAtMs(a)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessVer 驱动 session 重算
-    [filteredAgents, sessVer],
-  )
-
-  function renderAgentItem(a) {
-    const st = statusLabel(a)
-    const stClass = isCloneInitBusy(a)
-      ? 'initializing'
-      : statusClass(getAgentSession(a.id).compressing ? 'compressing' : (getAgentSession(a.id).loading ? 'running' : a.status))
-    const runSec = liveRunSec(a)
-    const pend = (getAgentSession(a.id).permQueue || []).length
-    return (
-      <div
-        key={a.id}
-        role="button"
-        tabIndex={0}
-        className={`ma-item ${selectedId === a.id ? 'active' : ''}`}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData('text/agent-id', String(a.id))
-          e.dataTransfer.effectAllowed = 'move'
-        }}
-        onClick={() => setSelectedId(a.id)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setSelectedId(a.id)
-          }
-        }}
-      >
-        <div className="ma-item-head">
-          <JellyAvatar
-            className="ma-avatar ma-avatar-sm"
-            color={resolveJellyColor(a)}
-            size={28}
-            state={jellyStateFromAgent(a, { loading: getAgentSession(a.id).loading })}
-          />
-          <strong className="ma-item-name">
-            {a.name}
-            {a.mobile_viewing ? <MobileViewerIcon /> : null}
-          </strong>
-          <span className="ma-item-badges">
-            {pend > 0 && <span className="admin-badge admin-badge-perm" title="待授权">{pend}</span>}
-            {!!a.task_unread && !isAgentBusy(a) && (
-              <span className="admin-badge admin-badge-unread" title="任务完成未读">未读</span>
-            )}
-            <span className={`ma-status st-${stClass}`}>{st}</span>
-          </span>
-        </div>
-        <div className="ma-item-meta">
-          <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
-          <span className="ma-age-fixed">已运行 {fmtAge(a.created_at)}</span>
-          {runSec > 0 ? <span className="ma-runlive">本次 {fmtSec(runSec)}</span>
-            : a.last_run_ms > 0 ? <span>上次 {fmtSec(Math.round(a.last_run_ms / 1000))}</span> : null}
-          {isWorkflowBusy(a) && onOpenWorkflowRun && a.occupancy?.workflow_run_id > 0 && (
-            <button
-              type="button"
-              className="ma-occ-link"
-              onClick={(e) => { e.stopPropagation(); onOpenWorkflowRun(a.occupancy.workflow_run_id) }}
-            >
-              查看团队任务
-            </button>
-          )}
-        </div>
-        <SkillIconStrip icons={a.skill_icons} />
-      </div>
-    )
-  }
-
-  /** 向左收起工作组列表，把横向空间让给对话区。 */
-  function toggleAgentList() {
-    setListCollapsed((v) => {
-      const next = !v
-      try { localStorage.setItem('ma_list_collapsed', next ? '1' : '0') } catch { /* 隐私模式忽略 */ }
-      return next
-    })
-  }
-
-  /** 一键展开所有工作组（含未入组）。 */
-  function expandAllFolders() {
-    setCollapsedFolders({})
-  }
-
-  /** 一键折叠所有工作组（含未入组）。 */
-  function collapseAllFolders() {
-    const next = { root: true }
-    for (const f of folders) {
-      if (f?.id != null) next[f.id] = true
-    }
-    setCollapsedFolders(next)
-  }
 
   return (
-    <section className={`ma-panel${presentation === 'focus' ? ' ma-panel-focus' : ''}`}>
-      <button
-        type="button"
-        className="ma-list-collapse"
-        onClick={toggleAgentList}
-        title={listCollapsed ? '展开工作组' : '向左收起工作组'}
-        aria-expanded={!listCollapsed}
-        aria-label={listCollapsed ? '展开工作组' : '向左收起工作组'}
-      >
-        <ListCollapseIcon collapsed={listCollapsed} />
-      </button>
-      <div className="ma-toolbar">
-        <h2>数字人对话</h2>
-        <div className="ma-toolbar-actions">
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => { setFolderCreateName('新建工作组'); setFolderCreateOpen(true) }}
-            disabled={busy}
-          >
-            创建工作组
-          </button>
-          <button type="button" className="new" onClick={() => setTalentMarketOpen(true)}>＋ 一键招聘</button>
-        </div>
-      </div>
-
-      <div className={`ma-layout${listCollapsed ? ' is-collapsed' : ''}`}>
-        <aside className="ma-list">
-          <input
-            className="ma-search"
-            value={agentSearch}
-            onChange={(e) => setAgentSearch(e.target.value)}
-            placeholder="搜索数字员工名称…"
-          />
-          {folders.length > 0 || filteredAgents.some((a) => isUngroupedAgent(a, folders)) ? (
-            <div className="ma-fold-toolbar">
-              <button type="button" className="ghost ma-fold-btn" onClick={expandAllFolders}>
-                全部展开
-              </button>
-              <button type="button" className="ghost ma-fold-btn" onClick={collapseAllFolders}>
-                全部折叠
-              </button>
-            </div>
+    <section className="ma-panel ma-panel-focus">
+      <div className="ma-layout">
+        <div className="ma-main ma-main-with-tq">
+          {selected ? (
+            <TaskQueueRail
+              agentId={selected.id}
+              authHeaders={authHeaders}
+              onUnauthorized={onUnauthorized}
+              active={active && !!selected}
+              agentBusy={isAgentBusy(selected)}
+              refreshKey={tqRefreshKey}
+              onContinue={onTqContinue}
+              open={taskQueueOpen}
+              onOpenChange={setTaskQueueOpen}
+              onBadgeChange={setTaskQueueBadge}
+              showToggle={false}
+            />
           ) : null}
-          {filteredAgents.length === 0 && <p className="empty">暂无匹配的数字员工</p>}
-
-          {/* 未读置顶，优先级高于运行中；浅蓝边框；点进对话后已读移出 */}
-          {unreadAgents.length > 0 && (
-            <div className="ma-folder-block ma-unread-block">
-              <div className="ma-folder-head">
-                <div className="ma-folder-title">
-                  <span className="ma-folder-title-text">未读</span>
-                  <span className="ma-folder-title-right">
-                    <span className="admin-badge admin-badge-unread ma-folder-badge" title="任务完成未读">
-                      {unreadAgents.length}
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <div className="ma-folder-agents">
-                {unreadAgents.map(renderAgentItem)}
-              </div>
-            </div>
-          )}
-
-          {busyAgents.length > 0 && (
-            <div className="ma-folder-block ma-running-block">
-              <div className="ma-folder-head">
-                <div className="ma-folder-title">
-                  <span className="ma-folder-title-text">运行中</span>
-                  <span className="ma-folder-title-right">
-                    <span className="admin-badge ma-folder-badge" title="运行中">
-                      {busyAgents.length}
-                    </span>
-                  </span>
-                </div>
-              </div>
-              <div className="ma-folder-agents">
-                {busyAgents.map(renderAgentItem)}
-              </div>
-            </div>
-          )}
-
-          <div
-            className="ma-folder-block ma-folder-root"
-            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
-            onDrop={(e) => {
-              e.preventDefault()
-              const id = Number(e.dataTransfer.getData('text/agent-id'))
-              if (id) moveAgentToFolder(id, 0)
-            }}
-          >
-            <div className="ma-folder-head">
-              <button
-                type="button"
-                className="ma-folder-title"
-                onClick={() => setCollapsedFolders((m) => ({ ...m, root: !m.root }))}
-              >
-                <span className="ma-folder-title-text">{collapsedFolders.root ? '▸' : '▾'} 未入组</span>
-                <span className="ma-folder-title-right">
-                  {(() => {
-                    const kids = filteredAgents.filter((a) => isUngroupedAgent(a, folders))
-                    const { direct, wf } = countFolderBusy(kids)
-                    return (
-                      <>
-                        {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="项目协作忙碌">{wf}</span>}
-                        {direct > 0 && <span className="admin-badge ma-folder-badge" title="直接运行中">{direct}</span>}
-                        <span className="muted">{kids.length}</span>
-                      </>
-                    )
-                  })()}
-                </span>
-              </button>
-            </div>
-            {(!collapsedFolders.root || !!searchQ) && (
-              <div className="ma-folder-agents">
-                {filteredAgents.filter((a) => isUngroupedAgent(a, folders)).map(renderAgentItem)}
-              </div>
-            )}
-          </div>
-
-          {folders.map((f) => {
-            const kids = filteredAgents.filter((a) => Number(a.folder_id) === Number(f.id))
-            if (searchQ && kids.length === 0) return null
-            // 搜索时强制展开，避免匹配结果被藏在折叠组里
-            const collapsed = !searchQ && !!collapsedFolders[f.id]
-            return (
-              <div
-                key={f.id}
-                className="ma-folder-block"
-                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  const id = Number(e.dataTransfer.getData('text/agent-id'))
-                  if (id) moveAgentToFolder(id, f.id)
-                }}
-              >
-                <div className="ma-folder-head">
-                  <button
-                    type="button"
-                    className="ma-folder-title"
-                    onClick={() => setCollapsedFolders((m) => ({ ...m, [f.id]: !m[f.id] }))}
-                  >
-                    <span className="ma-folder-title-text">{collapsed ? '▸' : '▾'} {f.name}</span>
-                    <span className="ma-folder-title-right">
-                      {(() => {
-                        const { direct, wf } = countFolderBusy(kids)
-                        return (
-                          <>
-                            {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="项目协作忙碌">{wf}</span>}
-                            {direct > 0 && <span className="admin-badge ma-folder-badge" title="直接运行中">{direct}</span>}
-                            <span className="muted">{kids.length}</span>
-                          </>
-                        )
-                      })()}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="ma-folder-edit"
-                    title="编辑工作组"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setFolderEdit({ id: f.id, name: f.name })
-                      setFolderEditName(f.name || '')
-                    }}
-                  >
-                    编辑
-                  </button>
-                </div>
-                {!collapsed && (
-                  <div className="ma-folder-agents">
-                    {kids.length === 0
-                      ? <p className="ma-folder-empty">工作组空闲 · 把同事拖进来</p>
-                      : kids.map(renderAgentItem)}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </aside>
-
-        <div className="ma-main">
           {!selected ? (
             <div className="empty ma-empty ma-empty-hero">
               <div className="ma-empty-icon" aria-hidden="true" />
               <p>还没有选中同事</p>
-              <p className="ma-empty-sub">从左侧工作组点选，或点右上角「一键招聘」打开人才市场</p>
+              <p className="ma-empty-sub">从左侧最近对话选择同事，或使用招聘按钮添加新员工</p>
             </div>
           ) : (
             <div className="ma-detail">
@@ -2072,9 +2291,9 @@ export default function ManagedAgentsPanel({
                     className="ma-avatar ma-avatar-md"
                     color={resolveJellyColor(selected)}
                     size={36}
-                    state={jellyStateFromAgent(selected, {
-                      loading: getAgentSession(selected.id).loading,
-                    })}
+                    state={sess.loading
+                      ? jellyStateFromPhase(sess.agentPhase, 'working')
+                      : jellyStateFromAgent(selected)}
                   />
                   <h3 className="ma-detail-name">
                     {selected.name}
@@ -2084,14 +2303,12 @@ export default function ManagedAgentsPanel({
                   <span className={`ma-status st-${cloneInitBusy ? 'initializing' : statusClass(getAgentSession(selected.id).compressing ? 'compressing' : (getAgentSession(selected.id).loading ? 'running' : selected.status))}`}>
                     {statusLabel(selected)}
                   </span>
-                  {presentation === 'focus' && (
-                    <EngineUsageChip
-                      engine={selected.engine}
-                      authHeaders={authHeaders}
-                      onUnauthorized={onUnauthorized}
-                      active={active}
-                    />
-                  )}
+                  <EngineUsageChip
+                    engine={selected.engine}
+                    authHeaders={authHeaders}
+                    onUnauthorized={onUnauthorized}
+                    active={active}
+                  />
                   {workflowBusy && selected.occupancy?.workflow_run_id > 0 && onOpenWorkflowRun && (
                     <button
                       type="button"
@@ -2104,95 +2321,65 @@ export default function ManagedAgentsPanel({
                   {liveRunSec(selected) > 0 && <span className="ma-runlive">{fmtSec(liveRunSec(selected))}</span>}
                 </div>
                 <div className="ma-detail-tools">
-                  {presentation === 'focus' ? (
-                    <>
-                      <button
-                        type="button"
-                        className={`ma-detail-icon-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
-                        onClick={() => openSelectedSettings('basic')}
-                        title="员工设置"
-                        aria-label="员工设置"
-                      >
-                        <ModernIcon name="settings" />
-                        {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
-                      </button>
-                      <div
-                        className="ma-detail-menu-wrap"
-                        onBlur={(event) => {
-                          if (!event.currentTarget.contains(event.relatedTarget)) setDetailMoreOpen(false)
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Escape') setDetailMoreOpen(false)
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className="ma-detail-icon-btn"
-                          onClick={() => setDetailMoreOpen((value) => !value)}
-                          title="更多操作"
-                          aria-label="更多操作"
-                          aria-expanded={detailMoreOpen}
-                        >
-                          <ModernIcon name="menu" />
-                        </button>
-                        {detailMoreOpen && (
-                          <div className="ma-detail-more-menu">
-                            {selected.status !== 'initializing' && !cloneInitBusy && (
-                              <button
-                                type="button"
-                                disabled={busy || loading}
-                                onClick={() => {
-                                  setCopyName(`${selected.name || '未命名员工'} 副本`)
-                                  setCopyJellyColor(resolveJellyColor(selected))
-                                  setCopyOpen(true)
-                                  setDetailMoreOpen(false)
-                                }}
-                              >复制</button>
-                            )}
-                            {!workflowBusy && !initializing && !cloneInitBusy && (
-                              <>
-                                <button type="button" onClick={() => { setDetailMoreOpen(false); fetchStatusSnapshot() }} disabled={loading || compressing}>状态</button>
-                                <button type="button" onClick={() => { setDetailMoreOpen(false); compressChat() }} disabled={loading || compressing}>
-                                  {compressing ? '压缩记忆…' : '压缩'}
-                                </button>
-                              </>
-                            )}
-                            {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
-                              <button type="button" disabled={busy} onClick={() => { setDetailMoreOpen(false); retryCloneInit() }}>重试初始化</button>
-                            )}
-                            <hr />
-                            <button type="button" className="danger-item" onClick={() => { setDetailMoreOpen(false); deleteAgent() }} disabled={busy || loading}>解聘</button>
-                          </div>
+                  <button
+                    type="button"
+                    className={`ma-detail-icon-btn${approveAllOn || autoOn ? ' is-on' : ''}`}
+                    onClick={() => openSelectedSettings('basic')}
+                    title={t('agentSettings.title')}
+                    aria-label={t('agentSettings.title')}
+                  >
+                    <ModernIcon name="settings" />
+                    {(approveAllOn || autoOn) && <span className="ma-approve-dot" />}
+                  </button>
+                  <div
+                    className="ma-detail-menu-wrap"
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) setDetailMoreOpen(false)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setDetailMoreOpen(false)
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="ma-detail-icon-btn"
+                      onClick={() => setDetailMoreOpen((value) => !value)}
+                      title="更多操作"
+                      aria-label="更多操作"
+                      aria-expanded={detailMoreOpen}
+                    >
+                      <ModernIcon name="menu" />
+                    </button>
+                    {detailMoreOpen && (
+                      <div className="ma-detail-more-menu">
+                        {selected.status !== 'initializing' && !cloneInitBusy && (
+                          <button
+                            type="button"
+                            disabled={busy || loading}
+                            onClick={() => {
+                              setCopyName(`${selected.name || '未命名员工'} 副本`)
+                              setCopyJellyColor(resolveJellyColor(selected))
+                              setCopyOpen(true)
+                              setDetailMoreOpen(false)
+                            }}
+                          >复制</button>
                         )}
+                        {!workflowBusy && !initializing && !cloneInitBusy && (
+                          <>
+                            <button type="button" onClick={() => { setDetailMoreOpen(false); fetchStatusSnapshot() }} disabled={loading || compressing}>状态</button>
+                            <button type="button" onClick={() => { setDetailMoreOpen(false); compressChat() }} disabled={loading || compressing}>
+                              {compressing ? '压缩记忆…' : '压缩'}
+                            </button>
+                          </>
+                        )}
+                        {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
+                          <button type="button" disabled={busy} onClick={() => { setDetailMoreOpen(false); retryCloneInit() }}>重试初始化</button>
+                        )}
+                        <hr />
+                        <button type="button" className="danger-item" onClick={() => { setDetailMoreOpen(false); deleteAgent() }} disabled={busy || loading}>解聘</button>
                       </div>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" className="ghost" onClick={() => openSelectedSettings('basic')}>设置</button>
-                      {selected.status !== 'initializing' && !cloneInitBusy && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          disabled={busy || loading}
-                          onClick={() => {
-                            setCopyName(`${selected.name || '未命名员工'} 副本`)
-                            setCopyJellyColor(resolveJellyColor(selected))
-                            setCopyOpen(true)
-                          }}
-                        >复制</button>
-                      )}
-                      {!workflowBusy && !initializing && !cloneInitBusy && (
-                        <>
-                          <button type="button" className="ghost" onClick={fetchStatusSnapshot} disabled={loading || compressing}>状态</button>
-                          <button type="button" className="ghost" onClick={compressChat} disabled={loading || compressing}>{compressing ? '压缩记忆…' : '压缩'}</button>
-                        </>
-                      )}
-                      {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
-                        <button type="button" className="ghost" disabled={busy} onClick={retryCloneInit}>重试初始化</button>
-                      )}
-                      <button type="button" className="ghost danger-text" onClick={deleteAgent} disabled={busy || loading}>解聘</button>
-                    </>
-                  )}
+                    )}
+                  </div>
                 </div>
               </header>
 
@@ -2208,7 +2395,7 @@ export default function ManagedAgentsPanel({
                     <div key={inv.calleeId} className={`ma-invoke-chip ${inv.collapsed ? 'collapsed' : ''}`}>
                       <div className="ma-invoke-chip-head">
                         <strong>{inv.name}</strong>
-                        <span className={`ma-status st-${statusClass(inv.status)}`}>{statusZh(inv.status)}</span>
+                        <span className={`ma-status st-${statusClass(inv.status)}`}>{statusZh(inv.status, t)}</span>
                       </div>
                       {!inv.collapsed && (
                         <p className="ma-invoke-chip-body">{inv.message || inv.content?.slice(0, 80) || '执行中…'}</p>
@@ -2228,19 +2415,15 @@ export default function ManagedAgentsPanel({
                   <p className="empty-chat">给同事下达任务后，需授权的命令会在此确认</p>
                 )}
                 {chatLog.map((m, i) => (
-                  <div key={`${selectedId}-${m.id || `i${i}`}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
+                  <div key={`${selectedId}-${messageKey(m, i)}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
                     <div className="msg-label">
                       <span>
-                        {(m.role === 'assistant' || m.role === 'invoke_quote') && (
+                        {m.role === 'invoke_quote' && (
                           <JellyAvatar
                             className="ma-msg-jelly"
                             color={resolveJellyColor(selected)}
                             size={16}
-                            state={
-                              m.role === 'assistant' && !(m.content || '').trim() && loading && i === chatLog.length - 1
-                                ? 'typing'
-                                : jellyStateFromAgent(selected, { loading })
-                            }
+                            state={jellyStateFromAgent(selected)}
                           />
                         )}
                         {m.role === 'user' ? '你'
@@ -2292,6 +2475,9 @@ export default function ManagedAgentsPanel({
                     ) : m.role === 'assistant' ? (
                       <div className="ma-timeline-assistant">
                         <AgentMarkdown content={m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
+                        {(m.attachments || []).length > 0 && (
+                          <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
+                        )}
                       </div>
                     ) : (
                       <div className="msg-body">
@@ -2299,7 +2485,7 @@ export default function ManagedAgentsPanel({
                           <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
                         )}
                         {m.content ? (
-                          <div dangerouslySetInnerHTML={{ __html: escapeHtml(m.content) }} />
+                          <StaticHtml html={escapeHtml(m.content)} />
                         ) : null}
                       </div>
                     )}
@@ -2313,12 +2499,14 @@ export default function ManagedAgentsPanel({
                     onDecide={decide}
                   />
                 )}
+                {liveThinking ? <ThinkingFold text={liveThinking} live={loading} /> : null}
                 {loading && (
                   <RunStatus
                     interrupting={interrupting}
                     activity={sess.liveActivity}
                     runSec={liveRunSec(selected)}
                     taskTokens={sess.taskTokens || 0}
+                    phase={sess.agentPhase}
                     jellyColor={resolveJellyColor(selected)}
                   />
                 )}
@@ -2332,83 +2520,214 @@ export default function ManagedAgentsPanel({
                 onDragOver={onComposerDragOver}
                 onDrop={onComposerDrop}
               >
-                <CapsuleToggle
-                  label="任务规划"
-                  hint="开启后先拆分步骤并展示进度；关闭则跳过规划、直接执行"
-                  checked={taskPlanOn}
-                  disabled={taskPlanSaving || loading}
-                  onChange={toggleTaskPlan}
+                <AgentRuntimeDetail
+                  open={runtimeDetailOpen && !!runtimeForDetail}
+                  runtime={runtimeForDetail}
+                  agent={selected}
+                  context={{
+                    used: sess.contextUsed,
+                    window: sess.contextWindow,
+                    estimated: sess.contextEstimated,
+                    source: sess.contextSource,
+                  }}
+                  parallelCount={Object.keys(invokeMap).length}
+                  onClose={() => setRuntimeDetailOpen(false)}
                 />
-                <div className="ma-composer-wrap">
-                  <GroupChatOfferSheet
-                    open={!!groupOffer}
-                    agents={agents}
-                    memberIds={groupOffer?.memberIds || []}
-                    creating={groupCreating}
-                    onCreate={resolveGroupOfferCreate}
-                    onTimeout={resolveGroupOfferParallel}
-                  />
-                  {mentionOpen && mentionCandidates.length > 0 && (
-                    <ul className="ma-mention-list">
-                      {mentionCandidates.map((a, i) => (
-                        <li key={a.id}>
-                          <button
-                            type="button"
-                            className={i === mentionIdx ? 'active' : ''}
-                            onMouseDown={(e) => { e.preventDefault(); insertMention(a) }}
-                          >
-                            <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
-                            {a.name}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
-                  <textarea
-                    ref={composerRef}
-                    className="ma-composer-input"
-                    value={question}
-                    onChange={onComposerChange}
-                    onKeyDown={onKeyDown}
-                    onPaste={onComposerPaste}
-                    onInput={autosizeComposer}
-                    rows={1}
-                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事；可粘贴图片' : '输入任务，Ctrl+Enter 发送，Enter 换行；@ 协作；可粘贴/拖入图片')}
-                    disabled={initializing || !!groupOffer}
-                  />
-                  <ContextRing
-                    used={sess.contextUsed || 0}
-                    window={sess.contextWindow || 0}
-                    estimated={sess.contextEstimated !== false}
-					source={sess.contextSource || ''}
-					updatedAt={sess.contextUpdatedAt || 0}
-					anomaly={sess.contextAnomaly || ''}
-                  />
-                </div>
-                <div className="ma-composer-actions">
-                  {!loading ? (
+                <div className="ma-composer-shell">
+                  <div className="ma-composer-tools" aria-label="任务工具">
                     <button
                       type="button"
-                      className="primary"
-                      onClick={ask}
-                      disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                      className="ma-composer-model"
+                      title={composerModelLabel(selected, t('composer.defaultModel'))}
+                      aria-label={`${t('composer.model')}：${composerModelLabel(selected, t('composer.defaultModel'))}`}
+                      onClick={() => openSelectedSettings('basic')}
                     >
-                      {attachBusy ? '上传中…' : '发送'}
+                      {composerModelLabel(selected, t('composer.defaultModel'))}
                     </button>
-                  ) : (
-                    <>
+                    <button
+                      type="button"
+                      className={`ma-composer-tool${taskPlanOn ? ' is-active' : ''}`}
+                      data-tooltip="Task Plan"
+                      aria-label={`${t('composer.taskPlan')} · ${taskPlanOn ? '已开启' : '已关闭'}`}
+                      aria-pressed={taskPlanOn}
+                      disabled={taskPlanSaving || loading}
+                      onClick={() => void toggleTaskPlan(!taskPlanOn)}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="6" cy="5" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="7" cy="18" r="2" /><path d="M8 5h4a4 4 0 0 1 4 4v1M7 7v9M9 18h5a4 4 0 0 0 4-4v-2" />
+                      </svg>
+                      <span>Task Plan</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`ma-composer-tool${taskQueueOpen ? ' is-active' : ''}`}
+                      data-tooltip="Task Queue"
+                      aria-label="Task Queue · 任务队列"
+                      aria-pressed={taskQueueOpen}
+                      onClick={() => {
+                        setRuntimeDetailOpen(false)
+                        setTaskQueueOpen((value) => !value)
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+                        <path d="M9 6h10M9 12h10M9 18h10" /><circle cx="5" cy="6" r="1" /><circle cx="5" cy="12" r="1" /><circle cx="5" cy="18" r="1" />
+                      </svg>
+                      <span>Task Queue</span>
+                      {taskQueueBadge > 0 ? (
+                        <em className="ma-composer-tool-badge">{taskQueueBadge > 9 ? '9+' : taskQueueBadge}</em>
+                      ) : null}
+                    </button>
+                    {runtimeForDetail ? <button
+                      type="button"
+                      className={`ma-composer-tool${runtimeDetailOpen ? ' is-active' : ''}`}
+                      data-tooltip="Runtime Detail"
+                      aria-label="Agent Runtime Detail · 运行明细"
+                      aria-pressed={runtimeDetailOpen}
+                      onClick={() => {
+                        setTaskQueueOpen(false)
+                        setRuntimeDetailOpen((value) => !value)
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M3 12h3l2-6 4 12 3-9 2 3h4" />
+                      </svg>
+                      <span>Runtime Detail</span>
+                    </button> : null}
+                  </div>
+                  <div className="ma-composer-wrap">
+                    <TaskPlanConfirmSheet
+                      open={activeTaskPlan?.phase === 'awaiting_confirm' && !activeTaskPlan?.frozen}
+                      plan={activeTaskPlan}
+                      busy={taskPlanDecisionBusy}
+                      onConfirm={(steps) => void decideTaskPlan('confirm', steps)}
+                      onReject={() => void decideTaskPlan('reject')}
+                      onError={(message) => patchAgentSession(selectedId, { error: message })}
+                    />
+                    <GroupChatOfferSheet
+                      open={!!groupOffer}
+                      agents={agents}
+                      memberIds={groupOffer?.memberIds || []}
+                      creating={groupCreating}
+                      onCreate={resolveGroupOfferCreate}
+                      onTimeout={resolveGroupOfferParallel}
+                    />
+                    <TaskQueueChoiceSheet
+                      open={!!tqChoice}
+                      busy={tqChoiceBusy}
+                      hideEnqueue={!!tqChoice?.hideEnqueue}
+                      onInterrupt={() => void onTqInterrupt()}
+                      onEnqueue={() => void onTqEnqueue()}
+                      onCancel={() => setTqChoice(null)}
+                    />
+                    {mentionOpen && mentionCandidates.length > 0 && (
+                      <ul className="ma-mention-list">
+                        {mentionCandidates.map((a, i) => (
+                          <li key={a.id}>
+                            <button
+                              type="button"
+                              className={i === mentionIdx ? 'active' : ''}
+                              onMouseDown={(e) => { e.preventDefault(); insertMention(a) }}
+                            >
+                              <EngineTagWithSkills engine={a.engine} skillCount={a.skill_count} />
+                              {a.name}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <ChatAttachPreview
+                      items={pendingImages}
+                      onRemove={removePendingImage}
+                      onOpen={setLightboxSrc}
+                    />
+                    <textarea
+                      ref={composerRef}
+                      className="ma-composer-input"
+                      value={question}
+                      onChange={onComposerChange}
+                      onKeyDown={onKeyDown}
+                      onPaste={onComposerPaste}
+                      onInput={autosizeComposer}
+                      rows={1}
+                      placeholder={
+                        initializing
+                          ? t('composer.placeholderInit')
+                          : (loading
+                            ? t('composer.placeholderBusy')
+                            : t('composer.placeholder'))
+                      }
+                      disabled={initializing || !!groupOffer}
+                    />
+                  </div>
+                  <div className="ma-composer-bar">
+                    <div className="ma-composer-bar-left">
+                      <input
+                        ref={composerFileRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        hidden
+                        onChange={(e) => {
+                          ingestComposerImages(e.target.files)
+                          e.target.value = ''
+                        }}
+                      />
                       <button
                         type="button"
-                        className="primary"
-                        onClick={ask}
-                        disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                        className="ma-composer-plus"
+                        title={t('composer.addImage')}
+                        aria-label={t('composer.addImage')}
+                        disabled={initializing || !!groupOffer || attachBusy || pendingImages.length >= 6}
+                        onClick={() => composerFileRef.current?.click()}
                       >
-                        {attachBusy ? '上传中…' : (interrupting ? '插话中…' : '插话')}
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
                       </button>
-                      <button type="button" className="stop" onClick={stopRun}>终止</button>
-                    </>
-                  )}
+                      <ContextRing
+                        used={sess.contextUsed || 0}
+                        window={sess.contextWindow || 0}
+                        estimated={sess.contextEstimated !== false}
+                        source={sess.contextSource || ''}
+                        updatedAt={sess.contextUpdatedAt || 0}
+                        anomaly={sess.contextAnomaly || ''}
+                      />
+                      <span className="ma-composer-kbd">{t('composer.kbdSend')}</span>
+                    </div>
+                    <div className="ma-composer-actions">
+                      {!loading ? (
+                        <button
+                          type="button"
+                          className="primary ma-composer-send"
+                          onClick={ask}
+                          disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                        >
+                          {attachBusy ? t('composer.uploading') : t('composer.send')}
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="ma-composer-interrupt"
+                            onClick={ask}
+                            disabled={!!groupOffer || (!question.trim() && !pendingImages.length) || compressing || initializing || attachBusy}
+                          >
+                            {attachBusy ? t('composer.uploading') : (interrupting ? t('composer.interrupting') : t('composer.interrupt'))}
+                          </button>
+                          <button
+                            type="button"
+                            className="stop ma-composer-stop"
+                            onClick={stopRun}
+                            title={t('composer.stop')}
+                            aria-label={t('composer.stop')}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
+                            <span>{t('composer.stop')}</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
               )}
@@ -2423,43 +2742,6 @@ export default function ManagedAgentsPanel({
                   该同事正在项目协作中执行任务，对话暂不可用；完成后将自动恢复对话窗口。
                   {occupancyLine(selected) ? `（${occupancyLine(selected)}）` : ''}
                 </p>
-              )}
-
-              {taskPlanOn && (
-              <div className="ma-progress-panel">
-                <div className="ma-progress-head">
-                  <strong>任务规划</strong>
-                  {activeTask ? (
-                    <span className={`ma-status st-${statusClass(activeTask.status)}`}>
-                      {planPhase === 'planning' ? '拆分中' : statusZh(activeTask.status)}
-                    </span>
-                  ) : (
-                    <span className="muted">暂无进行中的任务</span>
-                  )}
-                </div>
-                {activeTask && (
-                  <>
-                    <div className="ma-progress-title">{activeTask.task_name || activeTask.task_id}</div>
-                    <div className="agent-progress-bar">
-                      <div style={{ width: `${activeProgress}%` }} />
-                    </div>
-                    <p className="muted ma-progress-msg">{activeTask.message || `${activeProgress}%`}</p>
-                    {activeSteps.length > 0 && (
-                      <ol className="ma-progress-steps">
-                        {activeSteps.map((s, i) => {
-                          const cls = stepClass(i)
-                          return (
-                            <li key={i} className={cls}>
-                              {cls === 'failed' ? <span className="step-x">✕</span> : null}
-                              {s}
-                            </li>
-                          )
-                        })}
-                      </ol>
-                    )}
-                  </>
-                )}
-              </div>
               )}
             </div>
           )}
@@ -2492,24 +2774,37 @@ export default function ManagedAgentsPanel({
       {createOpen && (
         <div className="modal-mask" onClick={() => !busy && setCreateOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={createAgent}>
-            <h2>自定义招聘</h2>
-            <JellyColorPicker value={newJellyColor} onChange={setNewJellyColor} disabled={busy} />
-            <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
+            <h2>{t('agentSettings.createTitle')}</h2>
+            <JellyColorPicker
+              value={newJellyColor}
+              onChange={setNewJellyColor}
+              disabled={busy}
+              label={t('agentSettings.jellyColor')}
+              previewSize={64}
+            />
+            <label>{t('agentSettings.createName')}<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
-              引擎
+              {t('agentSettings.jobRole')}
+              <select value={newJobRole} onChange={(e) => setNewJobRole(e.target.value)} disabled={busy}>
+                <option value="">{t('agentSettings.jobRoleNone')}</option>
+                {JOB_ROLES.map((role) => <option key={role.value} value={role.value}>{t(`agentSettings.role.${role.key}`)}</option>)}
+              </select>
+            </label>
+            <label>
+              {t('agentSettings.createEngine')}
               <select value={newEngine} onChange={(e) => setNewEngine(e.target.value)} disabled={busy}>
                 {ENGINES.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
               </select>
             </label>
             <label>
-              上下文窗口
+              {t('agentSettings.contextWindow')}
               <select value={newContextWindow} onChange={(e) => setNewContextWindow(Number(e.target.value))} disabled={busy}>
                 <option value={262144}>256K</option>
                 <option value={524288}>512K</option>
                 <option value={1000000}>1M</option>
               </select>
             </label>
-            <label>规则描述<textarea rows={4} value={newRules} onChange={(e) => setNewRules(e.target.value)} disabled={busy} /></label>
+            <label>{t('agentSettings.createRules')}<textarea rows={4} value={newRules} onChange={(e) => setNewRules(e.target.value)} disabled={busy} /></label>
             <AgentPolicyFields
               value={newPolicy}
               onChange={setNewPolicy}
@@ -2521,8 +2816,8 @@ export default function ManagedAgentsPanel({
             />
             {createErr ? <pre className="error">{createErr}</pre> : null}
             <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setCreateOpen(false)}>取消</button>
-              <button type="submit" disabled={busy}>{busy ? '招聘中…' : '确认招聘'}</button>
+              <button type="button" disabled={busy} onClick={() => setCreateOpen(false)}>{t('agentSettings.createCancel')}</button>
+              <button type="submit" disabled={busy}>{busy ? t('agentSettings.createBusy') : t('agentSettings.createSubmit')}</button>
             </div>
           </form>
         </div>
@@ -2531,86 +2826,23 @@ export default function ManagedAgentsPanel({
       {copyOpen && selected && (
         <div className="modal-mask" onClick={() => !busy && setCopyOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={copyAgent}>
-            <h2>复制数字员工</h2>
-            <div className="ma-avatar-edit">
-              <JellyAvatar color={copyJellyColor} size={36} state="idle" />
-              <p className="muted" style={{ margin: 0 }}>默认同源色，可改；不选则后端按新 id 分配。</p>
-            </div>
-            <JellyColorPicker value={copyJellyColor} onChange={setCopyJellyColor} disabled={busy} />
+            <h2>{t('agentSettings.copyTitle')}</h2>
+            <p className="muted" style={{ margin: '0 0 8px' }}>{t('agentSettings.copyHintColor')}</p>
+            <JellyColorPicker
+              value={copyJellyColor}
+              onChange={setCopyJellyColor}
+              disabled={busy}
+              label={t('agentSettings.jellyColor')}
+              previewSize={56}
+            />
             <label>
-              新名称
+              {t('agentSettings.copyName')}
               <input value={copyName} onChange={(e) => setCopyName(e.target.value)} disabled={busy} autoFocus />
             </label>
-            <p className="muted">将复制系统提示词、模型、权限与设置。新同事使用独立会话，并异步继承原员工的工作记忆。</p>
+            <p className="muted">{t('agentSettings.copyHint')}</p>
             <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setCopyOpen(false)}>取消</button>
-              <button type="submit" disabled={busy || !copyName.trim()}>{busy ? '复制中…' : '确认复制'}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {folderCreateOpen && (
-        <div className="modal-mask" onClick={() => !busy && setFolderCreateOpen(false)}>
-          <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={createFolder}>
-            <h2>创建工作组</h2>
-            <label>
-              工作组名称
-              <input
-                value={folderCreateName}
-                onChange={(e) => setFolderCreateName(e.target.value)}
-                disabled={busy}
-                placeholder="例如：研发组"
-                autoFocus
-              />
-            </label>
-            <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setFolderCreateOpen(false)}>取消</button>
-              <button type="submit" disabled={busy || !folderCreateName.trim()}>{busy ? '创建中…' : '创建'}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {folderEdit && (
-        <div className="modal-mask" onClick={() => !busy && setFolderEdit(null)}>
-          <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={saveFolderEdit}>
-            <h2>编辑工作组</h2>
-            <label>
-              工作组名称
-              <input
-                value={folderEditName}
-                onChange={(e) => setFolderEditName(e.target.value)}
-                disabled={busy}
-                autoFocus
-              />
-            </label>
-            <h3 className="ma-policy-title">工作组内数字员工</h3>
-            <div className="ma-folder-agents">
-              {agents.filter((a) => Number(a.folder_id) === Number(folderEdit.id)).length === 0 ? (
-                <p className="ma-folder-empty">工作组还空着，从左侧拖入同事</p>
-              ) : (
-                agents
-                  .filter((a) => Number(a.folder_id) === Number(folderEdit.id))
-                  .map((a) => (
-                    <div key={a.id} className="ma-folder-member">
-                      <span className="ma-folder-member-name">{a.name}</span>
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy}
-                        onClick={() => removeAgentFromFolder(a.id)}
-                      >
-                        移出
-                      </button>
-                    </div>
-                  ))
-              )}
-            </div>
-            <p className="muted">移出后同事回到「未入组」。</p>
-            <div className="modal-actions">
-              <button type="button" disabled={busy} onClick={() => setFolderEdit(null)}>取消</button>
-              <button type="submit" disabled={busy || !folderEditName.trim()}>{busy ? '保存中…' : '保存名称'}</button>
+              <button type="button" disabled={busy} onClick={() => setCopyOpen(false)}>{t('agentSettings.cancel')}</button>
+              <button type="submit" disabled={busy || !copyName.trim()}>{busy ? t('agentSettings.copyBusy') : t('agentSettings.copySubmit')}</button>
             </div>
           </form>
         </div>
@@ -2622,61 +2854,108 @@ export default function ManagedAgentsPanel({
           setSettingsOpen(false)
           loadAgents(selected.id)
         }}>
-          <div className="modal-card ma-settings ma-settings-wide ma-settings-modern" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal-card ma-settings ma-settings-wide ma-settings-modern"
+            onClick={(e) => e.stopPropagation()}
+          >
             <header className="ma-settings-head">
               <div>
-                <h2>员工设置</h2>
-                <p className="ma-settings-sub">{selected.name}</p>
+                <h2>{t('agentSettings.title')}</h2>
+                <p className="ma-settings-sub">{t('agentSettings.subtitle', { name: selected.name })}</p>
               </div>
               <button
                 type="button"
                 className="ma-settings-close"
                 disabled={busy}
-                aria-label="关闭"
+                aria-label={t('agentSettings.close')}
                 onClick={() => { setSettingsOpen(false); loadAgents(selected.id) }}
               >
                 ×
               </button>
             </header>
             <div className="ma-settings-tabs" role="tablist">
-              <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>基本</button>
-              <button type="button" className={settingsTab === 'approval' ? 'active' : ''} onClick={() => setSettingsTab('approval')}>命令审批</button>
-              <button type="button" className={settingsTab === 'skills' ? 'active' : ''} onClick={() => setSettingsTab('skills')}>技能</button>
+              <button type="button" className={settingsTab === 'basic' ? 'active' : ''} onClick={() => setSettingsTab('basic')}>{t('agentSettings.tab.basic')}</button>
+              <button type="button" className={settingsTab === 'approval' ? 'active' : ''} onClick={() => setSettingsTab('approval')}>{t('agentSettings.tab.approval')}</button>
+              <button type="button" className={settingsTab === 'skills' ? 'active' : ''} onClick={() => setSettingsTab('skills')}>{t('agentSettings.tab.skills')}</button>
               <button
                 type="button"
                 className={settingsTab === 'legacy' ? 'active' : ''}
                 onClick={() => { setSettingsTab('legacy'); loadLegacyMounts(selected.id) }}
               >
-                继承记忆
+                {t('agentSettings.tab.legacy')}
               </button>
             </div>
             {settingsTab === 'basic' ? (
               <form className="ma-settings-form" onSubmit={(e) => { e.preventDefault(); saveRules() }}>
                 <section className="ma-settings-section">
-                  <div className="ma-avatar-edit">
-                    <JellyAvatar color={jellyColorDraft} size={56} state="idle" />
-                    <div className="ma-avatar-actions">
-                      <JellyColorPicker value={jellyColorDraft} onChange={setJellyColorDraft} disabled={busy} label="水母颜色" />
-                    </div>
-                  </div>
+                  <JellyColorPicker
+                    value={jellyColorDraft}
+                    onChange={setJellyColorDraft}
+                    disabled={busy}
+                    label={t('agentSettings.jellyColor')}
+                    previewSize={64}
+                  />
                   <div className="ma-settings-grid">
                     <label>
-                      名称
+                      {t('agentSettings.name')}
                       <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
                     </label>
                     <label>
-                      上下文窗口
+                      {t('agentSettings.jobRole')}
+                      <select value={jobRoleDraft} onChange={(e) => setJobRoleDraft(e.target.value)} disabled={busy}>
+                        <option value="">{t('agentSettings.jobRoleNone')}</option>
+                        {JOB_ROLES.map((role) => <option key={role.value} value={role.value}>{t(`agentSettings.role.${role.key}`)}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      {t('agentSettings.contextWindow')}
                       <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
                         <option value={262144}>256K</option>
                         <option value={524288}>512K</option>
                         <option value={1000000}>1M</option>
                       </select>
                     </label>
+                    <label>
+                      {t('agentSettings.model')}
+                      <select
+                        value={modelPick}
+                        disabled={busy || modelCatalogLoading}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setModelPick(v)
+                          if (v === '__custom__') return
+                          setModelDraft(v)
+                        }}
+                      >
+                        <option value="">{t('agentSettings.modelDefault')}</option>
+                        {(modelCatalog.items || []).map((it) => (
+                          <option key={it.id} value={it.id}>{compactModelOptionLabel(it)}</option>
+                        ))}
+                        {(modelCatalog.allow_custom !== false) ? (
+                          <option value="__custom__">{t('agentSettings.modelCustom')}</option>
+                        ) : null}
+                      </select>
+                    </label>
+                    {modelPick === '__custom__' ? (
+                      <label>
+                        {t('agentSettings.modelCustomId')}
+                        <input
+                          value={modelDraft}
+                          onChange={(e) => setModelDraft(e.target.value)}
+                          disabled={busy}
+                          placeholder={t('agentSettings.modelCustomPh')}
+                          spellCheck={false}
+                        />
+                      </label>
+                    ) : null}
                   </div>
+                  {modelCatalog.detail ? (
+                    <p className="ma-settings-tip" style={{ marginTop: 8 }}>{modelCatalog.detail}</p>
+                  ) : null}
                 </section>
                 <section className="ma-settings-section">
                   <div className="ma-settings-section-label">
-                    <span>系统提示词</span>
+                    <span>{t('agentSettings.systemPrompt')}</span>
                   </div>
                   <div className="ma-settings-prompt">
                     <textarea
@@ -2684,7 +2963,7 @@ export default function ManagedAgentsPanel({
                       value={rulesDraft}
                       onChange={(e) => setRulesDraft(e.target.value)}
                       disabled={busy}
-                      placeholder="角色、边界与协作方式…"
+                      placeholder={t('agentSettings.systemPromptPh')}
                       spellCheck={false}
                     />
                   </div>
@@ -2699,32 +2978,32 @@ export default function ManagedAgentsPanel({
                   onWorkspacesChange={setWorkspaces}
                 />
                 <div className="modal-actions">
-                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>取消</button>
-                  <button type="submit" disabled={busy}>{busy ? '保存中…' : '保存'}</button>
+                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>{t('agentSettings.cancel')}</button>
+                  <button type="submit" disabled={busy}>{busy ? t('agentSettings.saving') : t('agentSettings.save')}</button>
                 </div>
               </form>
             ) : settingsTab === 'approval' ? (
               <div className="ma-approval-settings-panel">
                 <CapsuleToggle
-                  label="命令全部审批通过"
-                  hint="自动通过；记录保留 7 天。Hard Deny 仍不可绕过"
+                  label={t('agentSettings.approveAll')}
+                  hint={t('agentSettings.approveAllHint')}
                   checked={approveAllOn}
                   disabled={approveAllSaving || workflowBusy}
                   onChange={toggleApproveAll}
                 />
                 <CapsuleToggle
-                  label="自动审核"
+                  label={t('agentSettings.autoReview')}
                   hint={
                     jevReady
-                      ? '本地 JEV 审核非常规命令'
-                      : `需先开启 JEV：${jevHint || '设置 · JEV'}`
+                      ? t('agentSettings.autoReviewHint')
+                      : t('agentSettings.autoReviewNeedJev', { hint: jevHint || 'Settings · JEV' })
                   }
                   checked={autoOn}
                   disabled={autoSaving || approveAllOn || workflowBusy || !jevReady}
                   onChange={toggleAuto}
                 />
                 <div className="modal-actions">
-                  <button type="button" disabled={autoSaving || approveAllSaving} onClick={() => setSettingsOpen(false)}>关闭</button>
+                  <button type="button" disabled={autoSaving || approveAllSaving} onClick={() => setSettingsOpen(false)}>{t('agentSettings.close')}</button>
                 </div>
               </div>
             ) : settingsTab === 'skills' ? (
@@ -2746,15 +3025,15 @@ export default function ManagedAgentsPanel({
                       loadAgents(selected.id)
                     }}
                   >
-                    关闭
+                    {t('agentSettings.close')}
                   </button>
                 </div>
               </>
             ) : (
               <div className="lm-mounts-panel">
-                <p className="ma-settings-tip">最多 5 本；正文可在「基本」编辑。</p>
+                <p className="ma-settings-tip">{t('agentSettings.legacyTip')}</p>
                 {legacyMounts.length === 0 ? (
-                  <p className="empty">尚未继承。可在「数字员工记忆」书架认领。</p>
+                  <p className="empty">{t('agentSettings.legacyEmpty')}</p>
                 ) : (
                   <ul className="lm-mount-list">
                     {legacyMounts.map((m) => (
@@ -2767,15 +3046,15 @@ export default function ManagedAgentsPanel({
                         />
                         <div>
                           <strong>{m.source_agent_name}</strong>
-                          <span>{m.source_job_title || '数字员工'}</span>
+                          <span>{m.source_job_title || t('agentSettings.digitalEmployee')}</span>
                         </div>
                       </li>
                     ))}
                   </ul>
                 )}
                 <div className="modal-actions">
-                  <button type="button" className="ghost" disabled={busy} onClick={() => loadLegacyMounts(selected.id)}>刷新</button>
-                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>关闭</button>
+                  <button type="button" className="ghost" disabled={busy} onClick={() => loadLegacyMounts(selected.id)}>{t('agentSettings.refresh')}</button>
+                  <button type="button" disabled={busy} onClick={() => setSettingsOpen(false)}>{t('agentSettings.close')}</button>
                 </div>
               </div>
             )}
@@ -2818,15 +3097,16 @@ function policyFromAgent(a) {
   }
 }
 
-/** 权限 / 工作区 / 定时表单块 */
+/** Permissions / workspace / schedule form block */
 function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders, onUnauthorized, onWorkspacesChange }) {
+  const { t } = useLocale()
   const v = value || emptyPolicy()
   const [pickingDir, setPickingDir] = useState(false)
   const [pickErr, setPickErr] = useState('')
   function patch(p) {
     onChange({ ...v, ...p })
   }
-  /** 调用本机 macOS 原生「选择文件夹」面板 */
+  /** Open the native macOS folder picker */
   async function pickDirectoryNative() {
     if (disabled || pickingDir || !authHeaders) return
     setPickingDir(true)
@@ -2835,29 +3115,28 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
       const res = await fetch(`${API}/admin/pick-directory`, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ prompt: '选择数字员工工作区目录' }),
+        body: JSON.stringify({ prompt: t('agentSettings.pickPrompt') }),
       })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setPickErr(d.error || '无法打开系统选目录面板，请改用下方手动输入')
+        setPickErr(d.error || t('agentSettings.pickFail'))
         return
       }
       if (d.cancelled) return
       const path = String(d.path || '').trim()
       if (!path) {
-        setPickErr('未选择目录')
+        setPickErr(t('agentSettings.pickEmpty'))
         return
       }
       patch({ workspace_path: path })
-      // 刷新授权列表，便于下拉里看到刚选的路径（若已登记）
       try {
         const wr = await fetch(`${API}/workspaces`)
         const wd = await wr.json().catch(() => ({}))
         if (Array.isArray(wd.items)) onWorkspacesChange?.(wd.items)
       } catch { /* ignore */ }
     } catch (e) {
-      setPickErr(String(e.message || e) || '选目录失败')
+      setPickErr(String(e.message || e) || t('agentSettings.pickError'))
     } finally {
       setPickingDir(false)
     }
@@ -2865,18 +3144,18 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
   return (
     <div className="ma-policy">
       <section className="ma-settings-section">
-        <h3 className="ma-policy-title">权限</h3>
-        <CapsuleToggle label="允许写入文件" checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
-        <CapsuleToggle label="允许联网搜索" checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
-        <CapsuleToggle label="允许执行 rm" checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
-        <p className="ma-settings-tip">浏览器请到「技能 → 浏览器操作」安装。</p>
+        <h3 className="ma-policy-title">{t('agentSettings.permissions')}</h3>
+        <CapsuleToggle label={t('agentSettings.allowWrite')} checked={!!v.allow_write} disabled={disabled} onChange={(c) => patch({ allow_write: c })} />
+        <CapsuleToggle label={t('agentSettings.allowNetwork')} checked={!!v.allow_network} disabled={disabled} onChange={(c) => patch({ allow_network: c })} />
+        <CapsuleToggle label={t('agentSettings.allowRm')} checked={!!v.allow_rm} disabled={disabled} onChange={(c) => patch({ allow_rm: c })} />
+        <p className="ma-settings-tip">{t('agentSettings.browserTip')}</p>
       </section>
 
       <section className="ma-settings-section">
-        <h3 className="ma-policy-title">工作区</h3>
+        <h3 className="ma-policy-title">{t('agentSettings.workspace')}</h3>
         <CapsuleToggle
-          label="限制工作区"
-          hint="关闭=默认可全盘读写；开启=仅指定目录。换目录保留对话与引擎会话，并尽量迁移 projects/"
+          label={t('agentSettings.workspaceBound')}
+          hint={t('agentSettings.workspaceBoundHint')}
           checked={!!v.workspace_bound}
           disabled={disabled}
           onChange={(c) => patch({ workspace_bound: c, workspace_path: c ? v.workspace_path : '' })}
@@ -2889,28 +3168,28 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
                 className="ghost"
                 disabled={disabled || pickingDir || !authHeaders}
                 onClick={pickDirectoryNative}
-                title="打开 macOS 系统文件夹选择面板"
+                title={t('agentSettings.browseTitle')}
               >
-                {pickingDir ? '选择中…' : '浏览选择目录…'}
+                {pickingDir ? t('agentSettings.browsing') : t('agentSettings.browseDir')}
               </button>
-              <span className="ma-ws-pick-hint">Mac 系统弹窗</span>
+              <span className="ma-ws-pick-hint">{t('agentSettings.macPicker')}</span>
             </div>
             {pickErr ? <p className="ma-ws-pick-err">{pickErr}</p> : null}
             <label>
-              已授权目录
+              {t('agentSettings.authorizedDirs')}
               <select
                 value={workspaces.some((w) => w.path === v.workspace_path) ? v.workspace_path : ''}
                 disabled={disabled}
                 onChange={(e) => patch({ workspace_path: e.target.value })}
               >
-                <option value="">请选择…</option>
+                <option value="">{t('agentSettings.selectPlease')}</option>
                 {(workspaces || []).map((w) => (
                   <option key={w.id || w.path} value={w.path}>{w.name || w.path}</option>
                 ))}
               </select>
             </label>
             <label>
-              绝对路径
+              {t('agentSettings.absPath')}
               <input
                 value={v.workspace_path || ''}
                 disabled={disabled}
@@ -2924,7 +3203,7 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
 
       <section className="ma-settings-section">
         <CapsuleToggle
-          label="开启定时执行"
+          label={t('agentSettings.schedule')}
           checked={!!v.schedule_enabled}
           disabled={disabled}
           onChange={(c) => patch({ schedule_enabled: c })}
@@ -2932,27 +3211,28 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
         {v.schedule_enabled && (
           <div className="ma-policy-sub ma-schedule">
             <label>
-              常用计划
+              {t('agentSettings.schedulePreset')}
               <select
                 value={v.schedule_preset || ''}
                 disabled={disabled}
                 onChange={(e) => {
                   const id = e.target.value
                   const p = SCHEDULE_PRESETS.find((x) => x.id === id)
+                  const label = p ? t(`agentSettings.preset.${p.labelKey}`) : ''
                   patch({
                     schedule_preset: id,
                     schedule_cron: p?.cron || v.schedule_cron,
-                    schedule_label: p?.label && id ? p.label : v.schedule_label,
+                    schedule_label: id ? label : v.schedule_label,
                   })
                 }}
               >
                 {SCHEDULE_PRESETS.map((p) => (
-                  <option key={p.id || 'custom'} value={p.id}>{p.label}</option>
+                  <option key={p.id || 'custom'} value={p.id}>{t(`agentSettings.preset.${p.labelKey}`)}</option>
                 ))}
               </select>
             </label>
             <label>
-              Cron（分 时 日 月 周）
+              {t('agentSettings.cron')}
               <input
                 value={v.schedule_cron || ''}
                 disabled={disabled}
@@ -2961,11 +3241,11 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled, authHeaders,
               />
             </label>
             <label>
-              计划名称
+              {t('agentSettings.scheduleName')}
               <input
                 value={v.schedule_label || ''}
                 disabled={disabled}
-                placeholder="例行巡检"
+                placeholder={t('agentSettings.scheduleNamePh')}
                 onChange={(e) => patch({ schedule_label: e.target.value })}
               />
             </label>
@@ -3158,20 +3438,59 @@ function CopyTextButton({ text, className = 'ma-copy-btn' }) {
   )
 }
 
+/** 思考过程折叠区：默认收起，点击展开；内容仅来自本轮 SSE，不落库 */
+function ThinkingFold({ text, live }) {
+  const { t } = useLocale()
+  const bodyRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  const chars = (text || '').length
+  // 展开时跟到底部，方便看最新思考
+  useEffect(() => {
+    if (!open || !live) return
+    const el = bodyRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [text, open, live])
+  if (!text) return null
+  return (
+    <details
+      className={`ma-think-fold${live ? ' is-live' : ''}`}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary>
+        <span className="ma-think-caret" aria-hidden="true">›</span>
+        <span className={`ma-think-title${live ? ' is-shimmer' : ''}`}>
+          {live ? t('chat.thinking.live') : t('chat.thinking.done')}
+        </span>
+        <span className="ma-think-chars">{t('chat.thinking.chars', { n: chars })}</span>
+      </summary>
+      <div className="ma-think-body" ref={bodyRef}>{text}</div>
+    </details>
+  )
+}
+
 /** 运行态：跳动水母 + thinking 文案 + token + 工具活动条 */
-function RunStatus({ interrupting, activity, runSec, taskTokens, jellyColor = 'blue' }) {
+function RunStatus({ interrupting, activity, runSec, taskTokens, phase = '', jellyColor = 'blue' }) {
+  const { locale, t } = useLocale()
+  const phrases = THINKING_PHRASES[locale] || THINKING_PHRASES['zh-CN']
   const [phraseIdx, setPhraseIdx] = useState(0)
   useEffect(() => {
-    const t = setInterval(() => {
-      setPhraseIdx((i) => (i + 1) % THINKING_PHRASES.length)
+    const timer = setInterval(() => {
+      setPhraseIdx((i) => (i + 1) % phrases.length)
     }, 2400)
-    return () => clearInterval(t)
-  }, [])
-  const phrase = interrupting ? 'interrupting' : THINKING_PHRASES[phraseIdx]
+    return () => clearInterval(timer)
+  }, [phrases.length])
+  const phrase = interrupting
+    ? t('chat.thinking.interrupting')
+    : phrases[phraseIdx % phrases.length]
   return (
     <div className="ma-run-status">
       <div className="ma-thinking" aria-live="polite">
-        <JellyAvatar className="ma-thinking-jelly" color={jellyColor} size={18} state="typing" />
+        <JellyAvatar
+          className="ma-thinking-jelly"
+          color={jellyColor}
+          size={18}
+          state={jellyStateFromPhase(phase, 'working')}
+        />
         <span className="ma-thinking-text">{phrase}</span>
         {runSec > 0 && <span className="ma-thinking-sec">{fmtSec(runSec)}</span>}
         {taskTokens > 0 && <span className="ma-thinking-tokens">{fmtToken(taskTokens)} tokens</span>}
@@ -3186,64 +3505,54 @@ function RunStatus({ interrupting, activity, runSec, taskTokens, jellyColor = 'b
   )
 }
 
-/** 输入框右下角上下文占比圆环；百分比仅悬停 title 展示 */
+/** 上下文占比圆环：探测不到则整组件隐藏（不展示 — / !） */
 function ContextRing({ used, window: win, estimated = true, source = '', updatedAt = 0, anomaly = '' }) {
-  const size = 22
+  const src = String(source || '').trim().toLowerCase()
+  const known = win > 0 && src !== 'unavailable' && (src !== '' || used > 0)
+  if (!known) return null
+
+  const size = 32
   const stroke = 2.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
-  const rawPct = win > 0 ? (used / win) : 0
-	// SVG 只能画完整圆；原始占比不截断，异常仍在 title 与 class 中完整保留。
-  const dash = c * Math.min(1, Math.max(0, rawPct))
-  const pctNum = Math.round(rawPct * 100)
-	const sourceLabel = source === 'codex_session' ? 'Codex Session 快照' : source
-	const timeLabel = updatedAt > 0 ? `\n更新时间：${new Date(updatedAt * 1000).toLocaleString()}` : ''
-  const title = win > 0
-    ? `${estimated ? '约 ' : ''}${pctNum}%${sourceLabel ? `\n来源：${sourceLabel}` : ''}${timeLabel}${anomaly ? `\n异常：${anomaly}` : ''}`
-    : '上下文用量未知'
+  const rawPct = used / win
+  const over = rawPct > 1 || !!anomaly
+  // 环长始终封顶；超窗数字封顶 100，避免叹号/破环
+  const ringPct = Math.min(1, Math.max(0, rawPct))
+  const dash = c * ringPct
+  const labelPct = Math.min(100, Math.round(ringPct * 100))
+  const sourceLabel = src === 'codex_session'
+    ? 'Codex Session 快照'
+    : (src === 'probe' ? 'Claude /context' : source)
+  const timeLabel = updatedAt > 0 ? `\n更新时间：${new Date(updatedAt * 1000).toLocaleString()}` : ''
+  const overHint = over ? `\n原始占比 ${Math.round(rawPct * 100)}%（环内已按窗口封顶）` : ''
+  const title = `${estimated ? '约 ' : ''}${labelPct}%${overHint}${sourceLabel ? `\n来源：${sourceLabel}` : ''}${timeLabel}${anomaly ? `\n异常：${anomaly}` : ''}`
+  const tone = ringPct > 0.85 ? 'hot' : ringPct > 0.6 ? 'warm' : 'ok'
   return (
-    <div className={`ma-ctx-ring${estimated ? ' is-estimated' : ''}${anomaly || rawPct > 1 ? ' is-anomaly' : ''}`} title={title} aria-label={title}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#333" strokeWidth={stroke} />
+    <div
+      className={`ma-ctx-ring tone-${tone}${estimated ? ' is-estimated' : ''}${over ? ' is-anomaly' : ''}`}
+      title={title}
+      aria-label={title}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#3a3d45" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
           fill="none"
-          stroke="#fff"
+          stroke={tone === 'hot' ? '#ee7676' : tone === 'warm' ? '#e5b75a' : '#8eb4e8'}
           strokeWidth={stroke}
           strokeDasharray={`${dash} ${c - dash}`}
           strokeLinecap="round"
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
+      <span className={`ma-ctx-ring-pct${labelPct >= 100 ? ' is-full' : ''}`}>
+        {labelPct}<small>%</small>
+      </span>
     </div>
   )
-}
-
-function countFolderBusy(list) {
-  let direct = 0
-  let wf = 0
-  for (const a of list || []) {
-    if (isWorkflowBusy(a)) wf += 1
-    else if (getAgentSession(a.id).loading || a.status === 'running') direct += 1
-  }
-  return { direct, wf }
-}
-
-/** 未读完成时间毫秒；越早完成排序越靠后（倒序用） */
-function unreadAtMs(a) {
-  const raw = a?.task_unread_at
-  if (raw == null || raw === '') return 0
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw < 1e12 ? Math.floor(raw * 1000) : Math.floor(raw)
-  }
-  const n = Number(raw)
-  if (Number.isFinite(n) && n > 0) {
-    return n < 1e12 ? Math.floor(n * 1000) : Math.floor(n)
-  }
-  const ms = Date.parse(String(raw))
-  return Number.isFinite(ms) ? ms : 0
 }
 
 /** 是否「忙」（与移动端 agentBusy 对齐，并含本地 loading/compressing） */

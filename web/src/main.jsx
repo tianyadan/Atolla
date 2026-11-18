@@ -5,7 +5,6 @@ import './scrollbars.css'
 import { installAutoHideScrollbars } from './scrollbars.js'
 import App from './App.jsx'
 import JellyPreview from './JellyPreview.jsx'
-import './App.css'
 
 installAutoHideScrollbars()
 

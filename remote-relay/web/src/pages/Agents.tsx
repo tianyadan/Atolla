@@ -119,8 +119,9 @@ export function AgentsPage() {
     () => listUnreadAgents(agents, debouncedQuery),
     [agents, debouncedQuery],
   )
-  const hub = `/instances/${encodeURIComponent(instanceId)}`
-  const chatBase = `${hub}/agents`
+  /** Back goes to instance list (功能 hub removed) */
+  const agentsPath = `/instances/${encodeURIComponent(instanceId)}/agents`
+  const chatBase = agentsPath
 
   /** 渲染单个数字人卡片（运行中 / 未读区与分组列表共用） */
   function renderAgentCard(a: PublicMirrorAgent) {
@@ -264,7 +265,7 @@ export function AgentsPage() {
   )
 
   return (
-    <PageShell title="数字员工" backTo={hub} right={headerRight}>
+    <PageShell title="数字员工" backTo="/instances" right={headerRight}>
       {error ? <p className="error-banner">{error}</p> : null}
       {loading ? <p className="muted">加载中…</p> : null}
       {!loading && agents.length === 0 ? (

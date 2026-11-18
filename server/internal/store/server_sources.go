@@ -43,7 +43,7 @@ type ServerSourceInput struct {
 
 // EnsureServerSourceSchema creates agent_server_sources.
 func (s *Store) EnsureServerSourceSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	err := s.execDDL(ctx, `
 CREATE TABLE IF NOT EXISTS agent_server_sources (
   id BIGINT NOT NULL AUTO_INCREMENT,
   agent_id BIGINT NOT NULL,
@@ -228,7 +228,7 @@ UPDATE agent_server_sources SET name=?, host=?, port=?, username=?, password_enc
 // SetServerSourceTestResult updates reachability after a connection test.
 func (s *Store) SetServerSourceTestResult(ctx context.Context, agentID, id int64, ok bool, errMsg string) error {
 	_, err := s.db.ExecContext(ctx, `
-UPDATE agent_server_sources SET reachable=?, last_test_at=CURRENT_TIMESTAMP(3), last_test_error=?
+UPDATE agent_server_sources SET reachable=?, last_test_at=`+s.tsNow()+`, last_test_error=?
  WHERE agent_id=? AND id=?`, bool01(ok), truncateStr(errMsg, 500), agentID, id)
 	return err
 }

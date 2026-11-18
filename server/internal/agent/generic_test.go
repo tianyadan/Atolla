@@ -19,6 +19,25 @@ func TestParseCursorPrintOutput(t *testing.T) {
 	}
 }
 
+// Cursor result.usage 常为工具循环合计；占用应保留单步峰值，不能被合计冲掉。
+func TestFillCursorUsageKeepsPeakOverAggregatedResult(t *testing.T) {
+	meta := RunMeta{}
+	fillCursorUsage(&meta, map[string]interface{}{
+		"type":  "assistant",
+		"usage": map[string]interface{}{"inputTokens": 100000.0, "cacheReadTokens": 0.0},
+	})
+	fillCursorUsage(&meta, map[string]interface{}{
+		"type":  "result",
+		"usage": map[string]interface{}{"inputTokens": 600000.0, "cacheReadTokens": 0.0},
+	})
+	if meta.UsedTokens != 100000 {
+		t.Fatalf("used=%d want peak 100000", meta.UsedTokens)
+	}
+	if meta.InputTokens != 600000 {
+		t.Fatalf("billing input should follow latest result, got %d", meta.InputTokens)
+	}
+}
+
 func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
 	raw := `{"result":"ok","sessionId":"chat-xyz"}`
 	_, meta := ParseCursorPrintOutput(raw)
@@ -28,7 +47,7 @@ func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
 }
 
 func TestCursorCLIArgsTrust(t *testing.T) {
-	args := CursorCLIArgs("hi", "sess", "json", true)
+	args := CursorCLIArgs("hi", "sess", "json", true, "")
 	if len(args) < 2 || args[0] != "--trust" {
 		t.Fatalf("args=%v", args)
 	}
@@ -36,9 +55,13 @@ func TestCursorCLIArgsTrust(t *testing.T) {
 	if strings.Contains(joined, "--yolo") || strings.Contains(joined, " -f") {
 		t.Fatalf("must not skip all approvals: %v", args)
 	}
-	plain := CursorCLIArgs("hi", "", "json", false)
+	plain := CursorCLIArgs("hi", "", "json", false, "")
 	if plain[0] == "--trust" {
 		t.Fatalf("untrusted args=%v", plain)
+	}
+	withModel := CursorCLIArgs("hi", "sess", "json", false, "composer-2.5")
+	if !strings.Contains(strings.Join(withModel, " "), "--model composer-2.5") {
+		t.Fatalf("model args=%v", withModel)
 	}
 }
 
@@ -78,7 +101,7 @@ func TestCursorAnswerIgnoresPlainSyntaxError(t *testing.T) {
 }
 
 func TestCursorCLIArgsStreamJSON(t *testing.T) {
-	args := CursorCLIArgs("hi", "", "stream-json", false)
+	args := CursorCLIArgs("hi", "", "stream-json", false, "")
 	if !strings.Contains(strings.Join(args, " "), "--output-format stream-json") {
 		t.Fatalf("args=%v", args)
 	}
@@ -150,6 +173,16 @@ func TestCursorResultAppendFuzzyOverlap(t *testing.T) {
 	}
 }
 
+func TestCursorResultAppendShortProgressThenLongFinal(t *testing.T) {
+	// 短进度被长终稿包含时仍须补推，否则前端只见命令、刷新才见回复
+	prev := "先复现：查 SSE 与落库链路。"
+	final := prev + "\n\n根因是 coalesce 把无 id 命令挂在最终回复后；Ask 结束后 preferDb，并放宽 result 补推。"
+	g := cursorResultAppend(prev, final)
+	if g == "" || !strings.Contains(g, "根因是 coalesce") {
+		t.Fatalf("long final after short progress must append, got %q", g)
+	}
+}
+
 func TestCursorAlreadyStreamed(t *testing.T) {
 	streamed := "先查移动端水母头像的渲染条件和显示入口。\n**App 里要重新装一次才会看到。**\n请用 Xcode Run 覆盖安装。"
 	piece := "**App 里要重新装一次才会看到。**\n请用 Xcode Run 覆盖安装。"
@@ -158,5 +191,14 @@ func TestCursorAlreadyStreamed(t *testing.T) {
 	}
 	if cursorAlreadyStreamed(streamed, "好的，已记下。") {
 		t.Fatal("short new sentence must not be treated as duplicate")
+	}
+}
+
+func TestCursorResultAppendHighOverlap(t *testing.T) {
+	prev := "已修好。轮询 force 校准时会冲掉乐观气泡。\n\n改动\n- pending\n- coalesce 保留乐观 user\n\n建议提交：\nfix(pc-chat): 修复发送后用户消息被冲掉"
+	// result 与流式高度重叠但非整段包含时，旧逻辑会 `\n`+全文再贴一次
+	final := "说明：根因是 coalesce。\n" + prev
+	if g := cursorResultAppend(prev, final); g != "" {
+		t.Fatalf("high overlap must not append full final: %q", g)
 	}
 }

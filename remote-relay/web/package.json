@@ -1,7 +1,7 @@
 {
   "name": "web",
   "private": true,
-  "version": "0.0.25",
+  "version": "0.0.26",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,9 +9,11 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
+    "cap:copy": "bash scripts/build-and-copy-ios.sh",
     "cap:sync": "npm run build && npx cap sync ios",
     "cap:open": "npx cap open ios",
     "ios:widget": "ruby ios/scripts/ensure_island_widget.rb",
+    "ios:device": "bash scripts/ios-build-and-run-device.sh",
     "ios": "npm run cap:sync && npm run ios:widget && npx cap open ios"
   },
   "dependencies": {

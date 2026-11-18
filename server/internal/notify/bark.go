@@ -2,12 +2,18 @@
 package notify
 
 import (
+	"errors"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	errNotifyUnavailable = errors.New("bark 未启用或脚本不可用")
+	errNotifyDeduped     = errors.New("bark 已去重跳过")
 )
 
 // PermissionPendingText 待审批固定文案。
@@ -58,13 +64,26 @@ func New(bin string, enabled bool) *Notifier {
 
 // Push 推送完整 Bark 卡片。同一 DedupeKey 只发一次。
 func (n *Notifier) Push(card Card) bool {
-	if n == nil || !n.enabled || n.bin == "" || card.DedupeKey == "" {
+	if err := n.enqueue(card, false); err != nil {
 		return false
+	}
+	return true
+}
+
+// PushSync 同步推送 Bark（用于验证码等需立刻知道成败的场景）；仍按 DedupeKey 去重。
+func (n *Notifier) PushSync(card Card) error {
+	return n.enqueue(card, true)
+}
+
+// enqueue 组装参数并推送；sync=false 时后台执行。
+func (n *Notifier) enqueue(card Card, sync bool) error {
+	if n == nil || !n.enabled || n.bin == "" || card.DedupeKey == "" {
+		return errNotifyUnavailable
 	}
 	n.mu.Lock()
 	if _, ok := n.seen[card.DedupeKey]; ok {
 		n.mu.Unlock()
-		return false
+		return errNotifyDeduped
 	}
 	n.seen[card.DedupeKey] = time.Now()
 	if len(n.seen) > 500 {
@@ -86,12 +105,16 @@ func (n *Notifier) Push(card Card) bool {
 		group = "Atolla"
 	}
 	bin := n.bin
+	args := []string{title, body, icon, group, strings.TrimSpace(card.URL), strings.TrimSpace(card.Sound), strings.TrimSpace(card.Level)}
+	if sync {
+		return n.runner(bin, args...)
+	}
 	go func() {
-		if err := n.runner(bin, title, body, icon, group, strings.TrimSpace(card.URL), strings.TrimSpace(card.Sound), strings.TrimSpace(card.Level)); err != nil {
+		if err := n.runner(bin, args...); err != nil {
 			log.Printf("bark notify failed: %v", err)
 		}
 	}()
-	return true
+	return nil
 }
 
 // PushCard 兼容旧调用；新代码应使用 Push 传递 Atolla 分组和深链。

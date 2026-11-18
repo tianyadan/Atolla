@@ -9,11 +9,13 @@ import (
 // Config 汇总后端所需配置。全部用环境变量覆盖,可用 .env 或 scripts/start.sh 注入。
 type Config struct {
 	Addr          string   // HTTP 监听地址
-	DBDSN         string   // MySQL DSN(本地 MySQL 库 colleague_avatar（历史库名，保持兼容）)
+	DBDriver      string   // 平台主库驱动：sqlite | mysql（默认 sqlite，免 Docker）
+	DBDSN         string   // sqlite 为文件路径；mysql 为 DSN（历史库名 colleague_avatar 保持兼容）
 	DataDBDSN     string   // 数据查询库 DSN;为空时禁用 /api/db 查询能力
 	ClaudeBin     string   // claude CLI 路径
 	AllowedIPs    []string // 局域网 IP 白名单
 	WorkspaceRoot string   // 授权工作区根(用于 resolve 绝对路径)
+	WebDir        string   // 生产环境 Web 静态资源目录；为空时仅提供 API
 	TimeoutSec    int      // 分身单次回答超时(秒)
 
 	PermissionEnabled bool   // 是否启用工具授权代理(默认 true)
@@ -48,6 +50,10 @@ type Config struct {
 	ContextWindowClaude int64
 	ContextWindowCodex  int64
 	ContextWindowCursor int64
+
+	// 会话运行时：空闲进程短时保温；达到内存阈值时统一释放空闲实例。
+	SessionWarmTTLSeconds int
+	SessionWarmMemoryMB   int
 }
 
 func getenv(key, def string) string {
@@ -63,13 +69,26 @@ func Load() Config {
 	if raw := os.Getenv("AVATAR_ALLOWED_IPS"); raw != "" {
 		ips = strings.Split(raw, ",")
 	}
+	driver := strings.ToLower(strings.TrimSpace(getenv("AVATAR_DB_DRIVER", "sqlite")))
+	if driver != "mysql" && driver != "sqlite" && driver != "sqlite3" {
+		driver = "sqlite"
+	}
+	if driver == "sqlite3" {
+		driver = "sqlite"
+	}
+	defaultDSN := "./data/atolla.db"
+	if driver == "mysql" {
+		defaultDSN = "root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local"
+	}
 	return Config{
 		Addr:          getenv("AVATAR_ADDR", ":8080"),
-		DBDSN:         getenv("AVATAR_DB_DSN", "root:root@tcp(127.0.0.1:3307)/colleague_avatar?parseTime=true&charset=utf8mb4&loc=Local"),
+		DBDriver:      driver,
+		DBDSN:         getenv("AVATAR_DB_DSN", defaultDSN),
 		DataDBDSN:     getenv("AVATAR_DATA_DB_DSN", ""),
 		ClaudeBin:     getenv("AVATAR_CLAUDE_BIN", "claude"),
 		AllowedIPs:    ips,
 		WorkspaceRoot: getenv("AVATAR_WORKSPACE_ROOT", "/Users/tianhaowen/Desktop/code_work_space"),
+		WebDir:        strings.TrimSpace(getenv("AVATAR_WEB_DIR", "")),
 		TimeoutSec:    clampTimeoutSec(atoi(getenv("AVATAR_TIMEOUT_SEC", "28800"))),
 
 		PermissionEnabled: getenv("AVATAR_PERMISSION_ENABLED", "1") != "0",
@@ -102,7 +121,29 @@ func Load() Config {
 		ContextWindowClaude: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "1000000"))),
 		ContextWindowCodex:  int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CODEX", "200000"))),
 		ContextWindowCursor: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CURSOR", "200000"))),
+
+		SessionWarmTTLSeconds: clampWarmTTLSeconds(atoi(getenv("AVATAR_SESSION_WARM_TTL_SEC", "60"))),
+		SessionWarmMemoryMB:   clampWarmMemoryMB(atoi(getenv("AVATAR_SESSION_WARM_MEMORY_MB", "2048"))),
 	}
+}
+
+const (
+	DefaultSessionWarmTTLSeconds = 60
+	DefaultSessionWarmMemoryMB   = 2048
+)
+
+func clampWarmTTLSeconds(n int) int {
+	if n < 0 || n > 3600 {
+		return DefaultSessionWarmTTLSeconds
+	}
+	return n
+}
+
+func clampWarmMemoryMB(n int) int {
+	if n < 128 || n > 32768 {
+		return DefaultSessionWarmMemoryMB
+	}
+	return n
 }
 
 // ContextWindowForEngine 返回引擎默认上下文窗口；未知引擎回退 Claude 窗口。

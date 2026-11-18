@@ -1,28 +1,48 @@
 import { useEffect } from 'react'
 
 /**
- * 发送前图片预览条：缩略图 + 删除。
+ * 发送前图片预览条：缩略图可点放大 + 删除。
  */
-export function ChatAttachPreview({ items, onRemove }) {
+export function ChatAttachPreview({ items, onRemove, onOpen }) {
   if (!items?.length) return null
   return (
     <div className="chat-attach-preview" aria-label="待发送图片">
-      {items.map((it) => (
-        <div key={it.localId} className={`chat-attach-thumb ${it.uploading ? 'uploading' : ''} ${it.error ? 'err' : ''}`}>
-          <img src={it.previewUrl || it.uploaded?.url} alt="" />
-          {it.uploading && <span className="chat-attach-spin" aria-hidden />}
-          {it.error && <span className="chat-attach-err" title={it.error}>!</span>}
-          <button
-            type="button"
-            className="chat-attach-rm"
-            aria-label="移除图片"
-            title="移除"
-            onClick={() => onRemove?.(it.localId)}
+      {items.map((it) => {
+        const src = it.previewUrl || it.uploaded?.url || ''
+        return (
+          <div
+            key={it.localId}
+            className={`chat-attach-thumb ${it.uploading ? 'uploading' : ''} ${it.error ? 'err' : ''}`}
           >
-            ×
-          </button>
-        </div>
-      ))}
+            <button
+              type="button"
+              className="chat-attach-thumb-open"
+              title="查看大图"
+              aria-label="查看大图"
+              disabled={!src}
+              onClick={() => {
+                if (src) onOpen?.(src)
+              }}
+            >
+              <img src={src} alt="" draggable={false} />
+            </button>
+            {it.uploading && <span className="chat-attach-spin" aria-hidden />}
+            {it.error && <span className="chat-attach-err" title={it.error}>!</span>}
+            <button
+              type="button"
+              className="chat-attach-rm"
+              aria-label="移除图片"
+              title="移除"
+              onClick={(e) => {
+                e.stopPropagation()
+                onRemove?.(it.localId)
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )
+      })}
     </div>
   )
 }

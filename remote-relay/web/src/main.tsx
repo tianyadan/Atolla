@@ -4,11 +4,13 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { forceHideNativeSplash, hideNativeSplashOnce } from './components/SplashOverlay'
 import './index.css'
+import { initLocale } from './i18n/locale'
 import { initNativeShell } from './nativeShell'
 import { initTheme } from './utils/theme'
 
-// Apply persisted theme before first paint of React tree
+// Apply persisted theme / locale before first paint of React tree
 initTheme()
+initLocale()
 void initNativeShell()
 
 createRoot(document.getElementById('root')!).render(

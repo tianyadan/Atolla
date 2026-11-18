@@ -1,0 +1,18 @@
+{
+  "id": "ponder",
+  "label": "思考",
+  "frames": 8,
+  "frame_px": 48,
+  "sheet_size": "384x48 (stitched as row 7 of jelly-{color}@{16,32,48}.png)",
+  "loop": true,
+  "fps": 8,
+  "durationMs": 1000,
+  "cssHint": null,
+  "trigger": "frontend or future SSE thinking (not typing)",
+  "notes": "左右轻摇、眼睛上望、触手摆动、偶尔1-2问号；与 typing 跳动区分。已缝合进 web/public/jelly-sprites 主表第 8 行，不单独保留 *-ponder@*.png。",
+  "row": 7,
+  "preview": [
+    "think-purple.gif",
+    "think-purple-labeled.png"
+  ]
+}

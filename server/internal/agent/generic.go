@@ -22,12 +22,23 @@ func GenericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // history 保留参数以兼容旧调用；v0.2.18 起调用方应传空，由引擎 resume 维护上下文。
 // extraEnv：AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承，避免同工作区串台。
 func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, false, extraEnv)
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, false, "", extraEnv)
+}
+
+// GenericAskMetaPhase 同 GenericAskMeta，并转发 Cursor 原生运行阶段。
+// model 非空时传 --model。
+func GenericAskMetaPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession, model string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, false, model, extraEnv)
 }
 
 // GenericAskMetaTrusted 在用户已确认工作区信任后，为 Cursor Agent 附加 --trust 再执行。
 func GenericAskMetaTrusted(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, extraEnv ...string) (string, int, error) {
-	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeSession, true, extraEnv)
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeSession, true, "", extraEnv)
+}
+
+// GenericAskMetaTrustedPhase 同 GenericAskMetaTrusted，并转发 Cursor 原生运行阶段。
+func GenericAskMetaTrustedPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession, model string, extraEnv ...string) (string, int, error) {
+	return genericAsk(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, onPhase, resumeSession, true, model, extraEnv)
 }
 
 // IsCursorWorkspaceTrustRequired 判断 CLI 是否因工作区未信任而中止（无交互模式无法自行确认）。
@@ -36,8 +47,9 @@ func IsCursorWorkspaceTrustRequired(msg string) bool {
 }
 
 // CursorCLIArgs 构造 agent 打印模式参数。trust 为真时只追加 --trust，不使用 --yolo / -f。
-func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
-	args := make([]string, 0, 8)
+// model 非空时追加 --model（在 prompt 前）。
+func CursorCLIArgs(prompt, resume, mode string, trust bool, model string) []string {
+	args := make([]string, 0, 10)
 	if trust {
 		args = append(args, "--trust")
 	}
@@ -53,10 +65,13 @@ func CursorCLIArgs(prompt, resume, mode string, trust bool) []string {
 	if rs := strings.TrimSpace(resume); rs != "" {
 		args = append(args, "--resume", rs)
 	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "--model", m)
+	}
 	return append(args, prompt)
 }
 
-func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeSession string, trust bool, extraEnv []string) (string, int, error) {
+func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeSession string, trust bool, model string, extraEnv []string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -83,7 +98,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 
 	start := time.Now()
 	// 先真流式读 stream-json：中途 assistant 行立刻 onChunk，避免命令已展示而思考压到收尾。
-	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust), onChunk, onMeta, extraEnv)
+	text, meta, streamErr := runCursorStreamJSON(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, "stream-json", trust, model), onChunk, onMeta, onPhase, extraEnv)
 	if streamErr != nil && IsCursorWorkspaceTrustRequired(streamErr.Error()) {
 		return "", int(time.Since(start).Milliseconds()), streamErr
 	}
@@ -98,7 +113,7 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 	var lastErr error
 	var out string
 	for _, mode := range []string{"json", "text", "bare"} {
-		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust), extraEnv)
+		out, lastErr = runOnce(cctx, bin, dir, CursorCLIArgs(prompt, resumeSession, mode, trust, model), extraEnv)
 		if lastErr != nil && IsCursorWorkspaceTrustRequired(lastErr.Error()) {
 			return "", int(time.Since(start).Milliseconds()), lastErr
 		}
@@ -125,14 +140,14 @@ func genericAsk(ctx context.Context, bin, dir, systemPrompt, question, history s
 // runCursorStreamJSON 边读边推送 assistant；result 优先作为最终落库正文。
 func runCursorStreamJSON(
 	ctx context.Context, bin, dir string, args []string,
-	onChunk func(string), onMeta MetaFn, extraEnv []string,
+	onChunk func(string), onMeta MetaFn, onPhase PhaseFn, extraEnv []string,
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "cursor")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
@@ -162,6 +177,11 @@ func runCursorStreamJSON(
 		var m map[string]interface{}
 		if json.Unmarshal([]byte(line), &m) != nil {
 			continue
+		}
+		if onPhase != nil {
+			if phase, ok := ParseCursorPhase([]byte(line)); ok {
+				onPhase(phase)
+			}
 		}
 		if sid := ExtractSessionID(m); sid != "" {
 			meta.SessionID = sid
@@ -344,9 +364,53 @@ func cursorResultAppend(prev, final string) string {
 	}
 	// 空白/标点不一致时的「过程说明 + 近似结论」→ 勿整段补推
 	if cursorMostlyCovered(prev, final) {
+		// 短进度句被长终稿包含：仍须补推终稿，否则前端只剩命令气泡、刷新才见回复
+		if len([]rune(final)) > len([]rune(prev))+80 {
+			return "\n" + final
+		}
+		return ""
+	}
+	// result 尾段已在流式中出现过（常见：改动/提交说明又整节回来）→ 不补
+	if cursorAlreadyStreamed(prev, final) {
+		return ""
+	}
+	// 高重叠时禁止「\n+全文」兜底，否则 PC 必现重复章节
+	if cursorOverlapRatio(prev, final) >= 0.55 {
 		return ""
 	}
 	return "\n" + final
+}
+
+// cursorOverlapRatio 粗估两段重叠比例（按较短串）。
+func cursorOverlapRatio(a, b string) float64 {
+	a, b = cursorCollapseWS(a), cursorCollapseWS(b)
+	if a == "" || b == "" {
+		return 0
+	}
+	short, long := a, b
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	if strings.Contains(long, short) {
+		return 1
+	}
+	// 取 short 中段探测
+	step := 24
+	if len(short) < step*2 {
+		return 0
+	}
+	hits := 0
+	total := 0
+	for i := 0; i+step <= len(short); i += step {
+		total++
+		if strings.Contains(long, short[i:i+step]) {
+			hits++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(hits) / float64(total)
 }
 
 // deliverCursor 把解析后的正文交给调用方，并回传 session/usage。
@@ -408,8 +472,10 @@ func ParseCursorPrintOutput(raw string) (text string, meta RunMeta) {
 		}
 		meta.CacheWrite = jsonInt64(u["cacheWriteTokens"])
 	}
-	// Cursor 仅有本轮 usage，无 active context API → 估算。
-	meta.UsedTokens = meta.InputTokens + meta.CacheRead
+	// 无逐步事件时退回单次 usage；NormalizeRunMetaContext 会再按窗口校正。
+	if meta.UsedTokens <= 0 {
+		meta.UsedTokens, _ = EstimateTurnOccupancy(meta.InputTokens, meta.CacheRead, meta.ContextWindow)
+	}
 	meta.Estimated = true
 	if text == "" {
 		text = raw
@@ -488,31 +554,52 @@ func cursorAssistantText(m map[string]interface{}) string {
 	return b.String()
 }
 
-// fillCursorUsage 从 result.usage 填本轮 token。
+// fillCursorUsage 从 stream 事件填本轮 token。
+// 注意：Cursor result.usage 常为「多轮工具循环合计」，≠ 当前上下文占用；
+// UsedTokens 只取单步峰值（更接近真实 occupancy），Input/Output 仍跟最新事件（供任务消耗统计）。
 func fillCursorUsage(meta *RunMeta, m map[string]interface{}) {
 	u, _ := m["usage"].(map[string]interface{})
 	if u == nil || meta == nil {
 		return
 	}
-	if n := jsonInt64(u["inputTokens"]); n != 0 {
-		meta.InputTokens = n
-	} else if n := jsonInt64(u["input_tokens"]); n != 0 {
-		meta.InputTokens = n
+	in := jsonInt64(u["inputTokens"])
+	if in == 0 {
+		in = jsonInt64(u["input_tokens"])
 	}
-	if n := jsonInt64(u["outputTokens"]); n != 0 {
-		meta.OutputTokens = n
-	} else if n := jsonInt64(u["output_tokens"]); n != 0 {
-		meta.OutputTokens = n
+	out := jsonInt64(u["outputTokens"])
+	if out == 0 {
+		out = jsonInt64(u["output_tokens"])
 	}
-	if n := jsonInt64(u["cacheReadTokens"]); n != 0 {
-		meta.CacheRead = n
-	} else if n := jsonInt64(u["cache_read_input_tokens"]); n != 0 {
-		meta.CacheRead = n
+	cr := jsonInt64(u["cacheReadTokens"])
+	if cr == 0 {
+		cr = jsonInt64(u["cache_read_input_tokens"])
 	}
-	if n := jsonInt64(u["cacheWriteTokens"]); n != 0 {
-		meta.CacheWrite = n
+	cw := jsonInt64(u["cacheWriteTokens"])
+	if cw == 0 {
+		cw = jsonInt64(u["cache_write_input_tokens"])
 	}
-	meta.UsedTokens = meta.InputTokens + meta.CacheRead
+	if in != 0 {
+		meta.InputTokens = in
+	}
+	if out != 0 {
+		meta.OutputTokens = out
+	}
+	if cr != 0 {
+		meta.CacheRead = cr
+	}
+	if cw != 0 {
+		meta.CacheWrite = cw
+	}
+	step, _ := EstimateTurnOccupancy(in, cr, meta.ContextWindow)
+	typ := strAny(m["type"])
+	// result 上的合计用量若明显高于已观测单步峰值，视为 loop 聚合，不覆盖占用。
+	if typ == "result" && meta.UsedTokens > 0 && step > meta.UsedTokens*3/2 {
+		meta.Estimated = true
+		return
+	}
+	if step > meta.UsedTokens {
+		meta.UsedTokens = step
+	}
 	meta.Estimated = true
 }
 
@@ -539,7 +626,7 @@ func runOnce(ctx context.Context, bin, dir string, args []string, extraEnv []str
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "cursor")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}

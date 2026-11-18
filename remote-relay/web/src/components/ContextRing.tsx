@@ -1,6 +1,7 @@
 import {
   contextRingFillRatio,
   contextRingLabel,
+  contextUsageKnown,
   type AgentContextUsage,
 } from '../utils/agentStatus'
 
@@ -8,27 +9,26 @@ type Props = {
   usage: AgentContextUsage
 }
 
-/** Compact PC-like context ring; stroke capped at 100%, label never shows overflow % */
+/** Compact PC-like context ring; hide entirely when occupancy unknown */
 export function ContextRing({ usage }: Props) {
+  if (!contextUsageKnown(usage)) return null
+
   const size = 22
   const stroke = 2.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const fill = contextRingFillRatio(usage)
   const dash = c * fill
-  const pctNum = Math.round(usage.pct)
-  const anomaly = !!usage.anomaly || usage.pct > 100
+  const pctNum = Math.round(Math.min(100, Math.max(0, usage.pct)))
+  const over = usage.pct > 100 || !!usage.anomaly
   const label = contextRingLabel(usage)
-  const title =
-    usage.window > 0
-      ? `${usage.estimated ? '约 ' : ''}${pctNum}%（${usage.used}/${usage.window}）${
-          anomaly ? '\n占用超过窗口（与 PC 一致，环内显示 !）' : ''
-        }`
-      : '上下文用量未知'
+  const title = `${usage.estimated ? '约 ' : ''}${pctNum}%（${usage.used}/${usage.window}）${
+    over ? '\n占用已按窗口封顶展示' : ''
+  }`
 
   return (
     <div
-      className={`ctx-ring${usage.estimated ? ' is-estimated' : ''}${anomaly ? ' is-anomaly' : ''}`}
+      className={`ctx-ring${usage.estimated ? ' is-estimated' : ''}${over ? ' is-anomaly' : ''}`}
       title={title}
       aria-label={title}
     >

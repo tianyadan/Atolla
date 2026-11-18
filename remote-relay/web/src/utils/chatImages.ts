@@ -116,3 +116,31 @@ export function attachmentsFromPayload(
   }
   return out
 }
+
+/**
+ * A relative attachment path belongs to the Mac, not to Capacitor's local
+ * WebView origin. When this instance is actively using LAN, convert it to a
+ * short-lived signed LAN URL; otherwise retain the existing cloud resolution.
+ */
+export async function resolveChatImageDisplayURL(instanceId: string, rawURL: string): Promise<string> {
+  const url = String(rawURL || '').trim()
+  if (!url || /^(?:https?:|data:|blob:)/i.test(url)) return url
+  const connection = getLanConnection(instanceId)
+  const route = getLanRouteState(instanceId)
+  if (
+    route.channel === 'lan' &&
+    connection.strategy !== 'cloud_only' &&
+    connection.baseUrl &&
+    connection.deviceId &&
+    connection.deviceSecret
+  ) {
+    try {
+      return await createLanImageURL(connection, url)
+    } catch {
+      // An old/non-chat relative URL should retain the established cloud path.
+    }
+  }
+  return resolveApiUrl(url)
+}
+import { resolveApiUrl } from './apiBase'
+import { createLanImageURL, getLanConnection, getLanRouteState } from './lanConnection'

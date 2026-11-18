@@ -27,7 +27,7 @@ function tone(pct: number): string {
 
 /** 引擎标签旁的小用量条；点击打开详情弹窗 */
 export function EngineUsageChip({ instanceId, engine }: Props) {
-  const [data, setData] = useState<EnginesUsageResponse | null>(() => peekEnginesUsageCache())
+  const [data, setData] = useState<EnginesUsageResponse | null>(() => peekEnginesUsageCache(instanceId))
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -35,14 +35,18 @@ export function EngineUsageChip({ instanceId, engine }: Props) {
   /** 拉取用量；默认吃 5 分钟缓存 */
   async function load(force = false) {
     if (!instanceId) return
-    if (!force && enginesUsageCacheFresh() && peekEnginesUsageCache()) {
-      setData(peekEnginesUsageCache())
+    if (!force && enginesUsageCacheFresh(60_000, instanceId) && peekEnginesUsageCache(instanceId)) {
+      setData(peekEnginesUsageCache(instanceId))
       return
     }
+    // 避免切换实例时短暂显示另一台 Mac 的订阅额度。
+    setData(null)
     setBusy(true)
     setErr(null)
     try {
-      const next = rememberEnginesUsage(await fetchEnginesUsage(instanceId, { fresh: force }))
+      const next = rememberEnginesUsage(await fetchEnginesUsage(instanceId, { fresh: force }), {
+        instanceId,
+      })
       setData(next)
     } catch (e) {
       setErr(e instanceof Error ? e.message : '用量加载失败')
@@ -151,7 +155,7 @@ export function EngineUsageChip({ instanceId, engine }: Props) {
           </>
         )}
         <p className="engine-usage-detail-note muted">
-          Codex 优先看 5 小时窗；Cursor 优先看 Auto；Claude 优先看 5 小时。默认缓存约 5 分钟。
+          Codex 优先看 5h 窗；Cursor 优先看全量月度（非 Auto）；Claude 侧栏视为无限。客户端缓存约 1 分钟。
         </p>
       </Modal>
     </>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import SettingsFold from './SettingsFold.jsx'
+import { useLocale } from './i18n/useLocale.js'
 
 const API = '/api'
 const DEPLOY_HOST_HISTORY_KEY = 'atolla_relay_deploy_hosts'
@@ -17,6 +18,7 @@ function guessDeployHost() {
 
 /** 设置 · 后台守护：本机后端 / 移动端中继 两个独立胶囊开关 */
 export default function WatchdogSettings({ authHeaders, onUnauthorized, active }) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(true)
   const [busyLocal, setBusyLocal] = useState(false)
   const [busyRelay, setBusyRelay] = useState(false)
@@ -117,7 +119,7 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
   async function toggleRelay(next) {
     if (next && !String(relay.host || '').trim()) {
       setShowRelayForm(true)
-      setErr('请先填写移动端部署主机')
+      setErr(t('settings.watchdog.needHost'))
       return
     }
     const prev = relay
@@ -175,8 +177,8 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
 
   return (
     <SettingsFold
-      title="后台守护"
-      desc="防止意外退出：本机与移动端中继分开开关，宽限期避免更新重启叠进程"
+      title={t('settings.watchdog')}
+      desc={t('settings.watchdogDesc')}
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >
@@ -184,13 +186,13 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
         <div className="ma-capsule-text">
           <span className="ma-capsule-label">
             {local.enabled && local.status === 'active' ? (
-              <span className="engine-dot ok" title="守护运行中" style={{ marginRight: 8, verticalAlign: 'middle' }} />
+              <span className="engine-dot ok" title={t('settings.watchdog.runningTitle')} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             ) : null}
-            本机后端守护
+            {t('settings.watchdog.localLabel')}
           </span>
           <p className="ma-capsule-hint">
-            macOS LaunchAgent，约 60s 探测 /health；连续不健康满 {local.grace_sec || 180}s 才拉起 Go 后端。
-            {local.detail ? ` 当前：${local.detail}` : ''}
+            {t('settings.watchdog.localHint', { sec: local.grace_sec || 180 })}
+            {local.detail ? ` ${t('settings.common.currentPrefix', { detail: local.detail })}` : ''}
           </p>
         </div>
         <label className={`auto-switch ma-capsule ${busyLocal ? 'busy' : ''}`}>
@@ -208,13 +210,13 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
         <div className="ma-capsule-text">
           <span className="ma-capsule-label">
             {relay.enabled && relay.status === 'active' ? (
-              <span className="engine-dot ok" title="守护运行中" style={{ marginRight: 8, verticalAlign: 'middle' }} />
+              <span className="engine-dot ok" title={t('settings.watchdog.runningTitle')} style={{ marginRight: 8, verticalAlign: 'middle' }} />
             ) : null}
-            移动端中继守护
+            {t('settings.watchdog.relayLabel')}
           </span>
           <p className="ma-capsule-hint">
-            远端 systemd timer，约 60s 探测 /api/health；连续不健康满 {relay.grace_sec || 300}s 才 restart 中继。
-            {relay.detail ? ` 当前：${relay.detail}` : ''}
+            {t('settings.watchdog.relayHint', { sec: relay.grace_sec || 300 })}
+            {relay.detail ? ` ${t('settings.common.currentPrefix', { detail: relay.detail })}` : ''}
           </p>
         </div>
         <label className={`auto-switch ma-capsule ${busyRelay ? 'busy' : ''}`}>
@@ -234,23 +236,23 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
         style={{ marginTop: 12 }}
         onClick={() => setShowRelayForm((v) => !v)}
       >
-        {showRelayForm ? '收起中继 SSH 参数' : '中继 SSH 参数'}
+        {showRelayForm ? t('settings.watchdog.sshToggleOn') : t('settings.watchdog.sshToggleOff')}
       </button>
 
       {showRelayForm ? (
         <div className="watchdog-relay-form" style={{ marginTop: 10, display: 'grid', gap: 8 }}>
           <label className="ma-capsule-hint">
-            主机
+            {t('settings.watchdog.host')}
             <input
               className="ma-search"
               style={{ marginTop: 4, marginBottom: 0 }}
               value={relay.host}
               onChange={(e) => setRelay({ ...relay, host: e.target.value })}
-              placeholder="例如 1.2.3.4"
+              placeholder={t('settings.watchdog.hostPlaceholder')}
             />
           </label>
           <label className="ma-capsule-hint">
-            SSH 用户
+            {t('settings.watchdog.sshUser')}
             <input
               className="ma-search"
               style={{ marginTop: 4, marginBottom: 0 }}
@@ -259,7 +261,7 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
             />
           </label>
           <label className="ma-capsule-hint">
-            SSH 端口
+            {t('settings.watchdog.sshPort')}
             <input
               className="ma-search"
               style={{ marginTop: 4, marginBottom: 0 }}
@@ -269,7 +271,7 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
             />
           </label>
           <label className="ma-capsule-hint">
-            远端目录
+            {t('settings.watchdog.remoteDir')}
             <input
               className="ma-search"
               style={{ marginTop: 4, marginBottom: 0 }}
@@ -278,7 +280,7 @@ export default function WatchdogSettings({ authHeaders, onUnauthorized, active }
             />
           </label>
           <label className="ma-capsule-hint">
-            SSH 密码（可选；有密钥可留空，开/关时使用，不落盘）
+            {t('settings.watchdog.sshPassword')}
             <input
               className="ma-search"
               style={{ marginTop: 4, marginBottom: 0 }}

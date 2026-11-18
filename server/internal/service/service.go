@@ -8,14 +8,17 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"atolla/server/config"
 	"atolla/server/internal/agent"
 	"atolla/server/internal/auth"
 	"atolla/server/internal/dbquery"
+	"atolla/server/internal/lanrelay"
 	"atolla/server/internal/notify"
 	"atolla/server/internal/permission"
+	"atolla/server/internal/plugin/githubidea"
 	"atolla/server/internal/remotebridge"
 	"atolla/server/internal/store"
 	"atolla/server/internal/testsrv"
@@ -40,6 +43,8 @@ type Service struct {
 	Cfg          config.Config
 	Store        *store.Store
 	Agent        *agent.Runner
+	runnerMu     sync.Mutex
+	agentRunners map[string]*agent.Runner
 	DBQuery      *dbquery.Client
 	Perms        *permission.Hub
 	Reviewer     *permission.Reviewer
@@ -50,6 +55,11 @@ type Service struct {
 	WF           *WorkflowEngine
 	Gateway      *permission.Gateway
 	RemoteBridge *remotebridge.Bridge
+	// LanRelay is separate from the desktop admin listener and only serves paired LAN clients.
+	LanRelay   *lanrelay.Server
+	GitHubIdea *githubidea.Manager
+	// DispatchClassifier 仅在规则无法归类时调用；不得直接选择执行者。
+	DispatchClassifier DispatchClassificationFallback
 	// remoteBridgeParent cancels when StopRemoteBridge/Shutdown runs.
 	remoteBridgeParent   context.Context
 	remoteBridgeCancel   context.CancelFunc
@@ -59,6 +69,9 @@ type Service struct {
 
 	deployJobOnce sync.Once
 	deployJobs    *deployJobHub
+
+	iosBuildJobOnce sync.Once
+	iosBuildJobs    *iosBuildJobHub
 
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
@@ -70,6 +83,12 @@ type Service struct {
 	pcViewMu    sync.Mutex
 	pcViewAgent int64
 	pcViewAt    time.Time
+
+	notifyOTPMu sync.Mutex
+	notifyOTP   *notifyBarkOTP
+
+	tqLocksOnce sync.Once
+	tqLocks     *taskQueueLocks
 
 	cloneJobMap    *sync.Map
 	compactPending *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
@@ -85,6 +104,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		Cfg:                   cfg,
 		Store:                 st,
 		Agent:                 agent.NewRunner(cfg.ClaudeBin),
+		agentRunners:          map[string]*agent.Runner{},
 		DBQuery:               mustDBQuery(cfg.DataDBDSN),
 		Perms:                 permission.NewHub(cfg.PermissionWaitSeconds()),
 		Reviewer:              newReviewer(cfg),
@@ -96,8 +116,11 @@ func New(cfg config.Config, st *store.Store) *Service {
 		compactPending:        &sync.Map{},
 		liveAssist:            &sync.Map{},
 		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
+		GitHubIdea:            githubidea.NewManager(cfg.WorkspaceRoot),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
+	svc.Agent.ConfigureWarmRuntime(time.Duration(cfg.SessionWarmTTLSeconds)*time.Second, cfg.SessionWarmMemoryMB)
+	svc.agentRunners[cfg.ClaudeBin] = svc.Agent
 	svc.Sched = NewScheduler(svc)
 	svc.Memory = NewMemoryService(st)
 	svc.WF = newWorkflowEngine(svc)
@@ -115,8 +138,46 @@ func New(cfg config.Config, st *store.Store) *Service {
 	}
 	_ = st.ClearAllOccupancy(context.Background())
 	svc.BeginWorkflowRecoveryWindow()
+	svc.RepairAgentTaskQueueOnBoot(context.Background())
 	svc.startRemoteBridge(cfg.WorkspaceRoot)
+	// 已显式启用过的 LAN Relay 在重启后恢复；失败仅记录，不能阻断主服务启动。
+	if err := svc.ApplyLanRelayConfig(context.Background()); err != nil {
+		log.Printf("restore LAN relay: %v", err)
+	}
 	return svc
+}
+
+// claudeRunner 按 CLI 路径复用 Runner，确保托管数字员工也进入同一会话保温池。
+func (s *Service) claudeRunner(bin string) *agent.Runner {
+	bin = strings.TrimSpace(bin)
+	if bin == "" {
+		bin = strings.TrimSpace(s.Cfg.ClaudeBin)
+	}
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if s.agentRunners == nil {
+		s.agentRunners = map[string]*agent.Runner{}
+	}
+	if r := s.agentRunners[bin]; r != nil {
+		return r
+	}
+	r := agent.NewRunner(bin)
+	r.ConfigureWarmRuntime(time.Duration(s.Cfg.SessionWarmTTLSeconds)*time.Second, s.Cfg.SessionWarmMemoryMB)
+	s.agentRunners[bin] = r
+	return r
+}
+
+func (s *Service) closeAgentRunners() {
+	s.runnerMu.Lock()
+	runners := make([]*agent.Runner, 0, len(s.agentRunners))
+	for _, r := range s.agentRunners {
+		runners = append(runners, r)
+	}
+	s.agentRunners = map[string]*agent.Runner{}
+	s.runnerMu.Unlock()
+	for _, r := range runners {
+		r.Close()
+	}
 }
 
 // HandlePermissionRequest 统一 Permission Gateway：Hard Deny → Safe → Session → JEVOS → 人工。
@@ -620,7 +681,21 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 	onMeta := func(m agent.RunMeta) {
 		s.RememberEngineMeta(context.WithoutCancel(ctx), 0, convID, m)
 	}
-	full, ms, aerr := s.Agent.AskStream(ctx, dir, sysPrompt, req.Question, history, onChunk, timeout, hook, nil, onMeta, resume)
+	// 对外接待不展示思考：按运行阶段丢 thinking 增量（正文本身已不含思考）
+	var thinkingPhase atomic.Bool
+	onPhase := func(p agent.PhaseEvent) {
+		thinkingPhase.Store(p.Phase == agent.PhaseThinking)
+	}
+	streamChunk := onChunk
+	if onChunk != nil {
+		streamChunk = func(chunk string) {
+			if thinkingPhase.Load() {
+				return
+			}
+			onChunk(chunk)
+		}
+	}
+	full, ms, aerr := s.Agent.AskStreamWithImagesPhase(ctx, dir, sysPrompt, req.Question, history, streamChunk, timeout, hook, nil, onMeta, onPhase, resume, "", nil)
 
 	status := "ok"
 	content := full

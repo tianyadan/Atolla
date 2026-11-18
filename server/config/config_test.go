@@ -69,3 +69,19 @@ func TestNormalizeOSSPublicBaseRewritesBrokenCNAME(t *testing.T) {
 		t.Fatal("official base should stay")
 	}
 }
+
+func TestLoadSessionWarmRuntime(t *testing.T) {
+	t.Setenv("AVATAR_SESSION_WARM_TTL_SEC", "90")
+	t.Setenv("AVATAR_SESSION_WARM_MEMORY_MB", "3072")
+	cfg := Load()
+	if cfg.SessionWarmTTLSeconds != 90 || cfg.SessionWarmMemoryMB != 3072 {
+		t.Fatalf("warm runtime = %ds/%dMB", cfg.SessionWarmTTLSeconds, cfg.SessionWarmMemoryMB)
+	}
+
+	t.Setenv("AVATAR_SESSION_WARM_TTL_SEC", "3601")
+	t.Setenv("AVATAR_SESSION_WARM_MEMORY_MB", "64")
+	cfg = Load()
+	if cfg.SessionWarmTTLSeconds != DefaultSessionWarmTTLSeconds || cfg.SessionWarmMemoryMB != DefaultSessionWarmMemoryMB {
+		t.Fatalf("invalid values did not fall back: %+v", cfg)
+	}
+}

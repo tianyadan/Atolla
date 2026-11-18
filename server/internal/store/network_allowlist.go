@@ -19,7 +19,7 @@ type NetworkAllowlistRow struct {
 
 // EnsureNetworkAllowlistSchema creates table and seeds Amap defaults.
 func (s *Store) EnsureNetworkAllowlistSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `
+	err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS network_allowlist (
 		  id         BIGINT       NOT NULL AUTO_INCREMENT,
 		  pattern    VARCHAR(255) NOT NULL,
@@ -32,11 +32,12 @@ func (s *Store) EnsureNetworkAllowlistSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO network_allowlist (pattern, source) VALUES
-		  ('restapi.amap.com', 'admin'),
-		  ('*.amap.com', 'admin')
-		ON DUPLICATE KEY UPDATE pattern = VALUES(pattern)`)
+	q := s.insertOnConflictDoNothing(
+		`network_allowlist (pattern, source)`,
+		`('restapi.amap.com', 'admin'), ('*.amap.com', 'admin')`,
+		`pattern`,
+	)
+	_, err = s.db.ExecContext(ctx, q)
 	return err
 }
 
@@ -128,10 +129,13 @@ func (s *Store) UpsertNetworkAllowlistPattern(ctx context.Context, pattern, sour
 	if agentID > 0 {
 		agent = agentID
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO network_allowlist (pattern, source, agent_id) VALUES (?, ?, ?)
-		ON DUPLICATE KEY UPDATE source = VALUES(source),
-		  agent_id = COALESCE(VALUES(agent_id), agent_id)`,
-		pattern, source, agent)
+	q := s.insertOnConflictUpdate(
+		`network_allowlist (pattern, source, agent_id)`,
+		`(?, ?, ?)`,
+		`pattern`,
+		`source = VALUES(source), agent_id = COALESCE(VALUES(agent_id), agent_id)`,
+		`source = excluded.source, agent_id = COALESCE(excluded.agent_id, network_allowlist.agent_id)`,
+	)
+	_, err := s.db.ExecContext(ctx, q, pattern, source, agent)
 	return err
 }

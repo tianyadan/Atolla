@@ -62,9 +62,13 @@ EOF
   fi
 }
 
-# Build SSH command array: "${SSH_PREFIX[@]}" ssh "${SSH_BASE[@]}" user@host
+# Build SSH command array. Avoid "${empty[@]}" under bash 3.2 + set -u (unbound variable).
 build_ssh_cmd() {
-  SSH=("${SSH_PREFIX[@]}" ssh "${SSH_BASE[@]}" "${USER}@${HOST}")
+  if [[ ${#SSH_PREFIX[@]} -gt 0 ]]; then
+    SSH=("${SSH_PREFIX[@]}" ssh "${SSH_BASE[@]}" "${USER}@${HOST}")
+  else
+    SSH=(ssh "${SSH_BASE[@]}" "${USER}@${HOST}")
+  fi
 }
 
 # Build rsync -e string for the same SSH options
@@ -87,7 +91,13 @@ build_rsync_cmd() {
 # 建立 ControlMaster。注意：sshpass 与 ssh -f 不兼容，因此用远程 true + ControlPersist，绝不用 -fN。
 open_ssh_master() {
   echo "==> Opening SSH session to ${USER}@${HOST}"
-  if ! "${SSH_PREFIX[@]}" ssh "${SSH_BASE[@]}" -o ControlMaster=yes "${USER}@${HOST}" true; then
+  local ssh_cmd=()
+  if [[ ${#SSH_PREFIX[@]} -gt 0 ]]; then
+    ssh_cmd=("${SSH_PREFIX[@]}" ssh "${SSH_BASE[@]}" -o ControlMaster=yes "${USER}@${HOST}" true)
+  else
+    ssh_cmd=(ssh "${SSH_BASE[@]}" -o ControlMaster=yes "${USER}@${HOST}" true)
+  fi
+  if ! "${ssh_cmd[@]}"; then
     local ec=$?
     echo "SSH auth failed (exit ${ec})." >&2
     if [[ -n "${ATOLLA_SSH_PASSWORD:-}" ]]; then

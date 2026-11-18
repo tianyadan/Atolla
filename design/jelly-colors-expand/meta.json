@@ -1,0 +1,30 @@
+{
+  "existing": [
+    "orange",
+    "yellow",
+    "blue",
+    "green",
+    "purple",
+    "red"
+  ],
+  "new": {
+    "cyan": 185,
+    "teal": 168,
+    "pink": 330,
+    "lime": 88,
+    "coral": 14,
+    "sky": 198
+  },
+  "actions": [
+    "idle",
+    "typing",
+    "sleep",
+    "eat",
+    "alert",
+    "error",
+    "celebrate",
+    "ponder",
+    "coding"
+  ],
+  "note": "No black/near-black; chosen for dark theme contrast"
+}

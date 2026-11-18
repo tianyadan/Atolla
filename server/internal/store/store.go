@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
-
-	_ "github.com/go-sql-driver/mysql"
 )
 
 // Conversation 一个会话(按 user_ip 分组)。
@@ -41,44 +39,85 @@ type Workspace struct {
 	Enabled bool   `json:"enabled"`
 }
 
-// Store 封装 MySQL 访问。
+// Store 封装平台主库访问（MySQL 或 SQLite）。
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
 }
 
-// New 建立连接池。
+// New 建立连接池（兼容旧调用：默认 MySQL）。
 func New(dsn string) (*Store, error) {
-	db, err := sql.Open("mysql", dsn)
+	return NewWithDriver(DriverMySQL, dsn)
+}
+
+// NewWithDriver 按驱动建立连接并执行迁移。
+func NewWithDriver(driver, dsn string) (*Store, error) {
+	driver = NormalizeDriver(driver)
+	db, err := openDB(driver, dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	s := &Store{db: db}
+	s := &Store{db: db, driver: driver}
 	if err := s.Migrate(context.Background()); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// Driver 返回当前驱动名。
+func (s *Store) Driver() string {
+	if s == nil {
+		return DriverMySQL
+	}
+	return s.driver
+}
+
+// SQLDB 返回底层连接（迁库等内部用途）。
+func (s *Store) SQLDB() *sql.DB {
+	if s == nil {
+		return nil
+	}
+	return s.db
+}
+
+// DSNHint 不暴露密码；仅用于状态展示。
+func (s *Store) HasData(ctx context.Context) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM managed_agents`).Scan(&n)
+	if err != nil {
+		// 表可能尚未创建
+		return false, nil
+	}
+	if n > 0 {
+		return true, nil
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations`).Scan(&n)
+	if err != nil {
+		return false, nil
+	}
+	return n > 0, nil
 }
 
 // Migrate 幂等地把 authorized_workspaces 升级到 v0.0.4 结构:
 // 补 type 列(缺省 code)、回填旧行、并种子「数据查询」db 项目。
 // 不依赖手工执行 schema.sql,对旧库(v0.0.3)与新库均可安全运行。
 func (s *Store) Migrate(ctx context.Context) error {
-	// 1) type 列是否存在
-	var cnt int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'authorized_workspaces' AND COLUMN_NAME = 'type'`,
-	).Scan(&cnt); err != nil {
+	// 0) SQLite 空库灌全量 schema
+	if err := s.bootstrapSQLite(ctx); err != nil {
 		return err
 	}
-	if cnt == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE authorized_workspaces ADD COLUMN type VARCHAR(16) NOT NULL DEFAULT 'code' AFTER path`,
+	// MySQL 旧库若缺基表，仍依赖 docker init / schema.sql；此处只做增量。
+
+	// 1) type 列是否存在
+	if ok, err := s.hasColumn(ctx, "authorized_workspaces", "type"); err != nil {
+		return err
+	} else if !ok {
+		if err := s.execDDL(ctx,
+			`ALTER TABLE authorized_workspaces ADD COLUMN type VARCHAR(16) NOT NULL DEFAULT 'code'`,
 		); err != nil {
 			return err
 		}
@@ -90,15 +129,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	// 3) 种子「数据查询」db 项目(并入授权工作区)
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO authorized_workspaces (name, path, type, enabled)
-		 VALUES ('数据查询', 'db://data-query', 'db', 1)
-		 ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), type = VALUES(type)`,
-	); err != nil {
+	if err := s.seedDataQueryWorkspace(ctx); err != nil {
 		return err
 	}
 	// 4) v0.2.14 数字员工工作组（表 agent_folders）
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_folders (
 		  id         BIGINT       NOT NULL AUTO_INCREMENT,
 		  name       VARCHAR(128) NOT NULL,
@@ -108,16 +143,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
-	var folderCol int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'folder_id'`,
-	).Scan(&folderCol); err != nil {
+	if ok, err := s.hasColumn(ctx, "managed_agents", "folder_id"); err != nil {
 		return err
-	}
-	if folderCol == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE managed_agents ADD COLUMN folder_id BIGINT NULL AFTER name`,
+	} else if !ok {
+		if err := s.execDDL(ctx,
+			`ALTER TABLE managed_agents ADD COLUMN folder_id BIGINT NULL`,
 		); err != nil {
 			return err
 		}
@@ -134,34 +164,33 @@ func (s *Store) Migrate(ctx context.Context) error {
 		{"pinned", `ALTER TABLE conversations ADD COLUMN pinned TINYINT NOT NULL DEFAULT 0`},
 		{"archived", `ALTER TABLE conversations ADD COLUMN archived TINYINT NOT NULL DEFAULT 0`},
 	} {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations' AND COLUMN_NAME = ?`, col.name,
-		).Scan(&n); err != nil {
+		ok, err := s.hasColumn(ctx, "conversations", col.name)
+		if err != nil {
 			return err
 		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
+		if !ok {
+			if err := s.execDDL(ctx, col.ddl); err != nil {
 				return err
 			}
 		}
 	}
-	// 加宽已有 VARCHAR(128) 的 engine_session_id，避免超长 id 写入失败导致无法 resume。
-	var sidLen int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT IFNULL(CHARACTER_MAXIMUM_LENGTH,0) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations' AND COLUMN_NAME = 'engine_session_id'`,
-	).Scan(&sidLen); err != nil {
-		return err
-	}
-	if sidLen > 0 && sidLen < 512 {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE conversations MODIFY COLUMN engine_session_id VARCHAR(512) NULL`); err != nil {
+	// 加宽已有 VARCHAR(128) 的 engine_session_id（仅 MySQL）
+	if s.IsMySQL() {
+		var sidLen int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT IFNULL(CHARACTER_MAXIMUM_LENGTH,0) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations' AND COLUMN_NAME = 'engine_session_id'`,
+		).Scan(&sidLen); err != nil {
 			return err
+		}
+		if sidLen > 0 && sidLen < 512 {
+			if err := s.execDDL(ctx, `ALTER TABLE conversations MODIFY COLUMN engine_session_id VARCHAR(512) NULL`); err != nil {
+				return err
+			}
 		}
 	}
 	// 6) v0.2.17：一次性清除曾被任务拆分污染的 Claude engine_session
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_patches (
 		  id         VARCHAR(64) NOT NULL,
 		  applied_at DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -177,12 +206,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	if patched == 0 {
 		if _, err := s.db.ExecContext(ctx, `
-			UPDATE conversations c
-			INNER JOIN managed_agents a ON a.conversation_id = c.id
-			SET c.engine_session_id = NULL
-			WHERE LOWER(IFNULL(a.engine, '')) = 'claude'
-			  AND c.engine_session_id IS NOT NULL
-			  AND TRIM(c.engine_session_id) <> ''`); err != nil {
+			UPDATE conversations SET engine_session_id = NULL
+			WHERE id IN (
+			  SELECT conversation_id FROM managed_agents
+			  WHERE LOWER(IFNULL(engine, '')) = 'claude'
+			    AND conversation_id IS NOT NULL
+			)
+			AND engine_session_id IS NOT NULL
+			AND TRIM(engine_session_id) <> ''`); err != nil {
 			return err
 		}
 		if _, err := s.db.ExecContext(ctx,
@@ -191,65 +222,50 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	// 7) v0.2.20 任务规划开关
-	var taskPlanCol int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'task_plan_enabled'`,
-	).Scan(&taskPlanCol); err != nil {
+	if ok, err := s.hasColumn(ctx, "managed_agents", "task_plan_enabled"); err != nil {
 		return err
-	}
-	if taskPlanCol == 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`ALTER TABLE managed_agents ADD COLUMN task_plan_enabled TINYINT NOT NULL DEFAULT 1 AFTER auto_review`,
+	} else if !ok {
+		if err := s.execDDL(ctx,
+			`ALTER TABLE managed_agents ADD COLUMN task_plan_enabled TINYINT NOT NULL DEFAULT 1`,
 		); err != nil {
 			return err
 		}
 	}
 	// 8) v0.2.21 压缩后需重带系统提示
-	var reinjectCol int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations' AND COLUMN_NAME = 'needs_system_reinject'`,
-	).Scan(&reinjectCol); err != nil {
+	if ok, err := s.hasColumn(ctx, "conversations", "needs_system_reinject"); err != nil {
 		return err
-	}
-	if reinjectCol == 0 {
-		if _, err := s.db.ExecContext(ctx,
+	} else if !ok {
+		if err := s.execDDL(ctx,
 			`ALTER TABLE conversations ADD COLUMN needs_system_reinject TINYINT NOT NULL DEFAULT 0`,
 		); err != nil {
 			return err
 		}
 	}
 	// 9) v0.2.23 项目协作持久会话（项目×数字员工）
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS workflow_agent_sessions (
 		  id              BIGINT   NOT NULL AUTO_INCREMENT,
 		  definition_id   BIGINT   NOT NULL,
 		  agent_id        BIGINT   NOT NULL,
 		  conversation_id BIGINT   NOT NULL,
 		  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		  PRIMARY KEY (id),
-		  UNIQUE KEY uk_def_agent (definition_id, agent_id),
-		  KEY idx_agent (agent_id),
-		  CONSTRAINT fk_was_def FOREIGN KEY (definition_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE
-		) ENGINE=InnoDB`); err != nil {
+		  UNIQUE (definition_id, agent_id)
+		)`); err != nil {
 		return err
 	}
 	// 10) v0.2.24 复制数字员工：头像预留 + 来源 id
 	for _, col := range []struct{ name, ddl string }{
-		{"avatar_url", `ALTER TABLE managed_agents ADD COLUMN avatar_url VARCHAR(512) NULL AFTER name`},
+		{"avatar_url", `ALTER TABLE managed_agents ADD COLUMN avatar_url VARCHAR(512) NULL`},
 		{"cloned_from_id", `ALTER TABLE managed_agents ADD COLUMN cloned_from_id BIGINT NULL`},
 	} {
-		var n int
-		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = ?`, col.name,
-		).Scan(&n); err != nil {
+		ok, err := s.hasColumn(ctx, "managed_agents", col.name)
+		if err != nil {
 			return err
 		}
-		if n == 0 {
-			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
+		if !ok {
+			if err := s.execDDL(ctx, col.ddl); err != nil {
 				return err
 			}
 		}
@@ -267,12 +283,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	// 13) v0.3.5 每位数字员工独立设置上下文窗口
-	var contextColCount int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'context_window_tokens'`).Scan(&contextColCount); err != nil {
+	if ok, err := s.hasColumn(ctx, "managed_agents", "context_window_tokens"); err != nil {
 		return err
+	} else if !ok {
+		if err := s.execDDL(ctx, `ALTER TABLE managed_agents ADD COLUMN context_window_tokens BIGINT NOT NULL DEFAULT 1000000`); err != nil {
+			return err
+		}
 	}
-	if contextColCount == 0 {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE managed_agents ADD COLUMN context_window_tokens BIGINT NOT NULL DEFAULT 1000000 AFTER engine`); err != nil {
+	// 13b) 数字员工引擎模型（空=CLI 默认；Ask 时传 --model/-m）
+	if ok, err := s.hasColumn(ctx, "managed_agents", "model"); err != nil {
+		return err
+	} else if !ok {
+		if err := s.execDDL(ctx, `ALTER TABLE managed_agents ADD COLUMN model VARCHAR(191) NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
@@ -320,7 +342,39 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.EnsureTaskUnreadSchema(ctx); err != nil {
 		return err
 	}
+	// 25) 数字人 PC 任务队列（持久化，禁止仅缓存）
+	if err := s.EnsureAgentTaskQueueSchema(ctx); err != nil {
+		return err
+	}
+	// 26) 规则调度：员工单选岗位 + 调度建议/审计记录。
+	if err := s.EnsureTaskDispatchSchema(ctx); err != nil {
+		return err
+	}
+	// 28) 局域网中继配置与配对设备。
+	if err := s.EnsureLanRelaySchema(ctx); err != nil {
+		return err
+	}
+	// 27) MySQL→SQLite 迁库曾把 VARCHAR 写成 BLOB，修回 TEXT 以免 role='user' 等比较失败
+	if err := s.repairSQLiteTextAffinity(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+// seedDataQueryWorkspace 种子「数据查询」虚拟工作区。
+func (s *Store) seedDataQueryWorkspace(ctx context.Context) error {
+	if s.IsSQLite() {
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO authorized_workspaces (name, path, type, enabled)
+			VALUES ('数据查询', 'db://data-query', 'db', 1)
+			ON CONFLICT(name) DO UPDATE SET enabled=1, type='db'`)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO authorized_workspaces (name, path, type, enabled)
+		VALUES ('数据查询', 'db://data-query', 'db', 1)
+		ON DUPLICATE KEY UPDATE enabled = VALUES(enabled), type = VALUES(type)`)
+	return err
 }
 
 // Workspaces 返回启用的授权工作区。type 缺省值为 code(兼容旧表)。
@@ -506,16 +560,14 @@ func (s *Store) UpsertAgentTask(ctx context.Context, r AgentTaskReport) (int64, 
 			payload = b
 		}
 	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO agent_tasks (agent_type, agent_id, task_id, task_name, status, progress, message, payload)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON DUPLICATE KEY UPDATE
-		   agent_id   = VALUES(agent_id),
-		   task_name = VALUES(task_name),
-		   status    = VALUES(status),
-		   progress = VALUES(progress),
-		   message  = VALUES(message),
-		   payload  = VALUES(payload)`,
+	q := s.insertOnConflictUpdate(
+		`agent_tasks (agent_type, agent_id, task_id, task_name, status, progress, message, payload)`,
+		`(?, ?, ?, ?, ?, ?, ?, ?)`,
+		`agent_type, task_id`,
+		`agent_id=VALUES(agent_id), task_name=VALUES(task_name), status=VALUES(status), progress=VALUES(progress), message=VALUES(message), payload=VALUES(payload)`,
+		`agent_id=excluded.agent_id, task_name=excluded.task_name, status=excluded.status, progress=excluded.progress, message=excluded.message, payload=excluded.payload`,
+	)
+	res, err := s.db.ExecContext(ctx, q,
 		r.AgentType, r.AgentID, r.TaskID, r.TaskName, r.Status, r.Progress, r.Message, payload)
 	if err != nil {
 		return 0, err
@@ -608,7 +660,7 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) (int64, error) {
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO messages (conversation_id, role, content, status, workspace_path, reply_ms, exclude_from_context, meta_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS JSON))`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, `+s.jsonParam()+`)`,
 		m.ConversationID, m.Role, m.Content, m.Status, m.WorkspacePath, m.ReplyMs, ex, meta)
 	if err != nil {
 		// 兼容未迁移库:回退旧列
@@ -625,6 +677,20 @@ func (s *Store) InsertMessage(ctx context.Context, m *Message) (int64, error) {
 	id, _ := res.LastInsertId()
 	m.ID = id
 	return id, nil
+}
+
+// UpdateMessageMeta 覆盖消息 meta_json（如 assistant attachments）。
+func (s *Store) UpdateMessageMeta(ctx context.Context, id int64, metaJSON string) error {
+	if id <= 0 {
+		return nil
+	}
+	meta := metaJSON
+	if meta == "" {
+		meta = "null"
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE messages SET `+s.jsonColAssign("meta_json")+` WHERE id = ?`, meta, id)
+	return err
 }
 
 // Messages 返回某会话的全部消息(按创建顺序)。

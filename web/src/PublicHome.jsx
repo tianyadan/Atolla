@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
 import JellyAvatar from './JellyAvatar.jsx'
+import StaticHtml from './staticHtml.jsx'
 import { resolveJellyColor } from './jellyColor.js'
 import {
   MAX_CHAT_IMAGES,
@@ -468,7 +469,7 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
                     {m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1 ? (
                       <JellyAvatar color={recvJellyColor} size={18} state="typing" />
                     ) : m.content ? (
-                      <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content || '') }} />
+                      <StaticHtml html={marked.parse(m.content || '')} />
                     ) : null}
                   </div>
                 </div>
@@ -495,7 +496,11 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
               onDragOver={onComposerDragOver}
               onDrop={onComposerDrop}
             >
-              <ChatAttachPreview items={pendingImages} onRemove={removePendingImage} />
+              <ChatAttachPreview
+                items={pendingImages}
+                onRemove={removePendingImage}
+                onOpen={setLightboxSrc}
+              />
               <textarea
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
@@ -507,9 +512,11 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin, guideLogin
                 rows={2}
               />
               <div className="ph-composer-bar">
-                <div className="ph-ctx" title={ctxTip} aria-label={ctxTip}>
-                  <div className="ph-ring" style={{ '--p': ctxPct }} />
-                </div>
+                {ctxWindow > 0 ? (
+                  <div className="ph-ctx" title={ctxTip} aria-label={ctxTip}>
+                    <div className="ph-ring" style={{ '--p': ctxPct }} />
+                  </div>
+                ) : null}
                 <div className="ph-actions">
                   {loading ? (
                     <button

@@ -1,5 +1,10 @@
 import { useState, type MouseEvent } from 'react'
-import { byLabel, parseCommandMessage, riskText } from '../utils/commandMessage'
+import { copyToClipboard } from '../utils/clipboard'
+import {
+  formatCmdRiskCaption,
+  parseCommandMessage,
+  riskText,
+} from '../utils/commandMessage'
 
 type Props = {
   content: string | null | undefined
@@ -21,22 +26,37 @@ export function CmdBlock({ content, payload, startExpanded = false }: Props) {
   const denied = parsed.decision === 'deny'
   const risk = parsed.risk || (denied ? 'high' : 'mid')
   const [open, setOpen] = useState(startExpanded)
+  const [copied, setCopied] = useState(false)
 
-  /** Copy command text */
-  async function copy(e: MouseEvent) {
-    e.stopPropagation()
-    const text = parsed.command || ''
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      ta.remove()
+  /** 解析出的命令正文（payload / JSON content） */
+  const commandText = (() => {
+    const fromParsed = String(parsed.command || '').trim()
+    if (fromParsed && !fromParsed.startsWith('{')) return fromParsed
+    const raw = String(content || '').trim()
+    if (raw.startsWith('{')) {
+      try {
+        const cmd = JSON.parse(raw) as { command?: string }
+        if (typeof cmd.command === 'string' && cmd.command.trim()) return cmd.command.trim()
+      } catch {
+        /* plain */
+      }
     }
+    return fromParsed || raw
+  })()
+
+  /** Copy command text + 「已复制」反馈 */
+  async function copy(e: MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!commandText) return
+    const ok = await copyToClipboard(commandText)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
+
+  const riskCaption = formatCmdRiskCaption(parsed)
+  const showRiskBar = !!(parsed.meaning || parsed.risk || parsed.by || parsed.note)
 
   if (!open) {
     return (
@@ -50,7 +70,7 @@ export function CmdBlock({ content, payload, startExpanded = false }: Props) {
         <span className="cmd-fold-tri" aria-hidden>
           ▶
         </span>
-        <code className="cmd-preview">{previewCmd(parsed.command || '')}</code>
+        <code className="cmd-preview">{previewCmd(commandText)}</code>
         <span className="cmd-risk-dot">{riskText(risk)}</span>
       </button>
     )
@@ -71,21 +91,22 @@ export function CmdBlock({ content, payload, startExpanded = false }: Props) {
         <span className="cmd-fold-hint">命令</span>
       </button>
       <div className="cmd-block-main">
-        <code>{parsed.command}</code>
-        <button type="button" className="cmd-copy" onClick={(e) => void copy(e)} title="复制命令">
-          复制
+        <code>{commandText}</code>
+        <button
+          type="button"
+          className={`cmd-copy${copied ? ' is-copied' : ''}`}
+          onClick={(e) => void copy(e)}
+          title="复制命令"
+        >
+          {copied ? '已复制' : '复制'}
         </button>
       </div>
-      {(parsed.meaning || parsed.risk || parsed.by || parsed.note) && (
+      {showRiskBar ? (
         <div className="cmd-meaning-bar">
           <span className="cmd-risk-dot">{riskText(risk)}</span>
-          <span>
-            {parsed.meaning || `风险等级：${riskText(risk)}`}
-            {parsed.by ? ` · ${byLabel(parsed.by)}` : ''}
-            {parsed.note ? ` · ${parsed.note}` : ''}
-          </span>
+          <span>{riskCaption}</span>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

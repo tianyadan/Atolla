@@ -25,10 +25,11 @@ type CodexCommandFn func(CodexCommandEvent)
 
 // CodexEvent 一行 JSONL 解析结果。
 type CodexEvent struct {
-	Activity *Activity
-	Chunk    string
-	Meta     *RunMeta
-	Command  *CodexCommandEvent
+	Activity  *Activity
+	Chunk     string
+	Reasoning bool // Chunk 来自 reasoning/thought 事件：仅前端折叠展示，不写入正文
+	Meta      *RunMeta
+	Command   *CodexCommandEvent
 }
 
 // CodexSandboxMode 按是否绑定工作区选择 Codex 沙箱：
@@ -52,20 +53,44 @@ func NormalizeCodexSandbox(s string) string {
 
 // CodexArgs 构造非交互 `codex exec` 参数(禁止 -p:那是 profile)。
 // sandbox 为空时默认 workspace-write（兼容旧调用）。
-func CodexArgs(dir, prompt string, jsonMode bool, sandbox string) []string {
+// model 非空时追加 -m（resume / 新会话均生效）。
+func CodexArgs(dir, prompt string, jsonMode bool, sandbox, model string) []string {
 	args := []string{
 		"exec",
+		"-c", "check_for_update_on_startup=false",
 		"--skip-git-repo-check",
 		"-s", NormalizeCodexSandbox(sandbox),
 	}
 	if jsonMode {
 		args = append(args, "--json")
 	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "-m", m)
+	}
 	if strings.TrimSpace(dir) != "" {
 		args = append(args, "-C", dir)
 	}
 	args = append(args, prompt)
 	return args
+}
+
+// codexResumeArgs 构造 `codex exec … resume <thread> <prompt>`（-m 在 resume 子命令前）。
+func codexResumeArgs(dir, prompt, sandbox, model, thread string, jsonMode bool) []string {
+	args := []string{
+		"exec", "-c", "check_for_update_on_startup=false",
+		"--skip-git-repo-check", "-s", NormalizeCodexSandbox(sandbox),
+	}
+	if jsonMode {
+		args = append(args, "--json")
+	}
+	if m := strings.TrimSpace(model); m != "" {
+		args = append(args, "-m", m)
+	}
+	args = append(args, "--dangerously-bypass-hook-trust")
+	if strings.TrimSpace(dir) != "" {
+		args = append(args, "-C", dir)
+	}
+	return append(args, "resume", strings.TrimSpace(thread), prompt)
 }
 
 // ParseCodexJSONLLine 解析 codex exec --json 的一行。
@@ -160,6 +185,7 @@ func ParseCodexJSONLLine(line []byte) (CodexEvent, bool) {
 			}
 			if strings.TrimSpace(text) != "" && (typ == "item.completed" || typ == "item.started") {
 				ev.Chunk = text
+				ev.Reasoning = true
 				ok = true
 			} else if typ == "item.started" {
 				ev.Activity = &Activity{Tool: "codex", Summary: "思考中…"}
@@ -211,6 +237,12 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 // sandbox：Codex -s 模式；未限制工作区时应传 danger-full-access。
 // extraEnv：授权路由 AVATAR_CONV_ID 等，挂到引擎进程供 hook 继承。
 func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox string, extraEnv ...string) (string, int, error) {
+	return CodexAskMetaExPhase(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, nil, resumeThread, onCommand, onCompact, sandbox, "", extraEnv...)
+}
+
+// CodexAskMetaExPhase 同 CodexAskMetaEx，并转发 Codex JSONL 原生运行阶段。
+// model 非空时传 -m（含 resume）。
+func CodexAskMetaExPhase(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, resumeThread string, onCommand CodexCommandFn, onCompact func(), sandbox, model string, extraEnv ...string) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -236,24 +268,12 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 	// resume：codex exec --json … resume <thread_id> <prompt>
 	var args []string
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
-		args = []string{
-			"exec", "--json", "--skip-git-repo-check", "-s", sb,
-			"--dangerously-bypass-hook-trust",
-			"resume", rs, prompt,
-		}
-		if strings.TrimSpace(dir) != "" {
-			// -C 需在 resume 子命令前
-			args = []string{
-				"exec", "--json", "--skip-git-repo-check", "-s", sb,
-				"--dangerously-bypass-hook-trust",
-				"-C", dir, "resume", rs, prompt,
-			}
-		}
+		args = codexResumeArgs(dir, prompt, sb, model, rs, true)
 	} else {
-		args = CodexArgs(dir, prompt, true, sb)
+		args = CodexArgs(dir, prompt, true, sb, model)
 	}
 
-	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand, onCompact, extraEnv)
+	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onPhase, onCommand, onCompact, extraEnv)
 	if err == nil {
 		return text, int(time.Since(start).Milliseconds()), nil
 	}
@@ -261,20 +281,16 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 	if onActivity != nil {
 		onActivity(Activity{Tool: "codex", Summary: "Codex 执行中…"})
 	}
-	fallbackArgs := CodexArgs(dir, prompt, false, sb)
+	fallbackArgs := CodexArgs(dir, prompt, false, sb, model)
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
-		fallbackArgs = []string{"exec", "--skip-git-repo-check", "-s", sb, "--dangerously-bypass-hook-trust"}
-		if strings.TrimSpace(dir) != "" {
-			fallbackArgs = append(fallbackArgs, "-C", dir)
-		}
-		fallbackArgs = append(fallbackArgs, "resume", rs, prompt)
+		fallbackArgs = codexResumeArgs(dir, prompt, sb, model, rs, false)
 	}
 	cmd := exec.CommandContext(cctx, bin, fallbackArgs...)
 	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "codex")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
@@ -306,7 +322,7 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 
 func runCodexJSONStream(
 	ctx context.Context, bin, dir string, args []string,
-	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onCommand CodexCommandFn, onCompact func(),
+	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onPhase PhaseFn, onCommand CodexCommandFn, onCompact func(),
 	extraEnv []string,
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -314,7 +330,7 @@ func runCodexJSONStream(
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = CleanEnv(os.Environ())
+	cmd.Env = CLIChildEnv(CleanEnv(os.Environ()), "codex")
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
@@ -342,6 +358,11 @@ func runCodexJSONStream(
 		line := sc.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
+		}
+		if onPhase != nil {
+			if phase, ok := ParseCodexPhase(line); ok {
+				onPhase(phase)
+			}
 		}
 		if IsCodexCompactionLine(line) {
 			sawJSON = true
@@ -378,7 +399,19 @@ func runCodexJSONStream(
 				onActivity(*ev.Activity)
 			}
 		}
+		if ev.Chunk != "" && ev.Reasoning {
+			// 思考正文只给前端折叠展示，不进入本轮正文（否则会写进数据库）
+			if onChunk != nil {
+				onChunk(ev.Chunk)
+			}
+			continue
+		}
 		if ev.Chunk != "" {
+			raw := strings.TrimSpace(ev.Chunk)
+			// 与已推送正文重复的 agent_message（修订尾段）不再拼接，避免 PC 出现「改动」贴两次
+			if raw != "" && cursorAlreadyStreamed(full.String(), raw) {
+				continue
+			}
 			// 时间线：每条 agent 消息前加换行 + ·
 			piece := ev.Chunk
 			if msgCount == 0 {

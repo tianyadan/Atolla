@@ -65,6 +65,35 @@ func TestAgentConversationActivateRejectsForeignAgent(t *testing.T) {
 	}
 }
 
+// 回归目标：SQLite 不支持 MySQL 的 UPDATE JOIN，切换本人历史线程仍必须成功。
+func TestAgentConversationActivateOwnPreviousThread(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	agentID := createTestAgent(t, st, "modern-thread-activate-own")
+	first, err := st.CreateAndActivateAgentConversation(ctx, agentID, "第一段对话")
+	if err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	second, err := st.CreateAndActivateAgentConversation(ctx, agentID, "第二段对话")
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("expected two distinct conversations")
+	}
+
+	if err := st.ActivateAgentConversation(ctx, agentID, first.ID); err != nil {
+		t.Fatalf("activate own previous thread: %v", err)
+	}
+	agent, err := st.GetManagedAgent(ctx, agentID)
+	if err != nil || agent == nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if agent.ConversationID != first.ID {
+		t.Fatalf("active conversation=%d want %d", agent.ConversationID, first.ID)
+	}
+}
+
 // 回归目标：最近列表必须按活跃时间排序，并为无标题会话提供可读回退。
 func TestAgentConversationListOrdersAndFallsBackTitle(t *testing.T) {
 	st := openTestStore(t)
