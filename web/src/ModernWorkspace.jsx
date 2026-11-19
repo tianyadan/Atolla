@@ -18,6 +18,7 @@ import {
   uniqueLatestAgentConversations,
 } from './modernWorkspaceModel.js'
 import { useLocale } from './i18n/useLocale.js'
+import { POLL_IDLE_MS, createSingleFlight, subscribePageVisible } from './pollScheduler.js'
 
 const API = '/api'
 
@@ -168,10 +169,29 @@ export default function ModernWorkspace({
     if (openHire) setHireGroupOpen(true)
   }, [openHire])
 
-  // 最近活跃、终态未读和排序需要跟随任务进度更新，侧栏保持轻量轮询。
+  const sidebarFlightRef = useRef(null)
+  if (!sidebarFlightRef.current) sidebarFlightRef.current = createSingleFlight()
+
+  // 最近活跃、终态未读和排序需要跟随任务进度更新；隐藏窗口暂停，空闲 8s。
   useEffect(() => {
-    const timer = window.setInterval(loadConversations, 5000)
-    return () => window.clearInterval(timer)
+    let stopped = false
+    let visible = document.visibilityState === 'visible'
+    const pull = () => {
+      if (stopped || !visible) return
+      void sidebarFlightRef.current('sidebar', async () => {
+        try { await loadConversations() } catch { /* ignore */ }
+      })
+    }
+    const timer = window.setInterval(pull, POLL_IDLE_MS)
+    const unsub = subscribePageVisible((v) => {
+      visible = v
+      if (v) pull()
+    })
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+      unsub()
+    }
   }, [loadConversations])
 
   useEffect(() => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocale } from './i18n/useLocale.js'
+import { POLL_BUSY_MS, POLL_IDLE_MS, createSingleFlight, subscribePageVisible } from './pollScheduler.js'
 
 const API = '/api'
 const SIZE_KEY = 'atolla.tq.drawerSize'
@@ -156,13 +157,42 @@ export default function TaskQueueRail({
     }
   }
 
+  const queueFlightRef = useRef(null)
+  if (!queueFlightRef.current) queueFlightRef.current = createSingleFlight()
+
   useEffect(() => {
     if (!active || !agentId) return undefined
-    void load()
-    const timer = window.setInterval(() => void load(), 4000)
-    return () => window.clearInterval(timer)
+    let stopped = false
+    let timer = 0
+    let visible = document.visibilityState === 'visible'
+    const pull = () => {
+      if (stopped || !visible) return
+      void queueFlightRef.current('queue', async () => {
+        try { await load() } catch { /* ignore */ }
+      })
+    }
+    const arm = () => {
+      window.clearTimeout(timer)
+      if (stopped) return
+      const ms = agentBusy ? POLL_BUSY_MS : POLL_IDLE_MS
+      timer = window.setTimeout(() => {
+        pull()
+        arm()
+      }, ms)
+    }
+    pull()
+    arm()
+    const unsub = subscribePageVisible((v) => {
+      visible = v
+      if (v) pull()
+    })
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+      unsub()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, agentId, refreshKey])
+  }, [active, agentId, refreshKey, agentBusy])
 
   // 入队已 claim、但页面刷新或运行时异常发生在 Ask 发出前时，会遗留 running 占位。
   // 数字人重新空闲后自动调用幂等 continue；后端会拒绝重复派发 executing 项。

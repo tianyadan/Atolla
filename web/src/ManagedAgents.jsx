@@ -53,6 +53,17 @@ import {
   runtimeFromAudit,
   selectRuntimeDetail,
 } from './agentRuntime.js'
+import {
+  PC_VIEWER_HIDDEN_MS,
+  PC_VIEWER_VISIBLE_MS,
+  POLL_BUSY_MS,
+  POLL_IDLE_MS,
+  POLL_SSE_BACKUP_MS,
+  POLL_TASK_PLAN_AWAITING_MS,
+  POLL_TASK_PLAN_IDLE_MS,
+  createSingleFlight,
+  subscribePageVisible,
+} from './pollScheduler.js'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -376,6 +387,8 @@ export default function ManagedAgentsPanel({
   const lastPinnedHeightRef = useRef(-1)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
+  /** 主轮询 effect 写入：发送 / 终止 / 切员工时立刻补拉一轮 */
+  const kickPollRef = useRef(() => {})
 
   const selected = agents.find((a) => a.id === selectedId) || null
   const initializing = selected?.status === 'initializing'
@@ -411,25 +424,62 @@ export default function ManagedAgentsPanel({
     if (!selectedId || !active) return undefined
     // 当前 fetch SSE 会直接更新 runtimeDetail；此时读取数据库 processing 快照会覆盖实时轨迹。
     if (getAgentSession(selectedId).loading && getAgentSession(selectedId).abort) return undefined
-    void loadLatestRuntime(selectedId)
+    let stopped = false
+    let timer = 0
+    let visible = document.visibilityState === 'visible'
+    const pull = () => {
+      if (stopped || !visible) return
+      void deskFlightRef.current('runtime', async () => {
+        try { await loadLatestRuntime(selectedId) } catch { /* ignore */ }
+      })
+    }
+    pull()
     const serverRunning = ['running', 'busy', 'waiting', '插话中'].includes(selected?.status)
-    if (!serverRunning || loading) return undefined
-    const timer = window.setInterval(() => void loadLatestRuntime(selectedId), 3000)
-    return () => window.clearInterval(timer)
+    const arm = () => {
+      window.clearTimeout(timer)
+      if (stopped || !serverRunning || loading) return
+      const sse = !!getAgentSession(selectedId).abort
+      const ms = sse ? POLL_SSE_BACKUP_MS : 3000
+      timer = window.setTimeout(() => {
+        pull()
+        arm()
+      }, ms)
+    }
+    arm()
+    const unsub = subscribePageVisible((v) => {
+      visible = v
+      if (v) pull()
+    })
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+      unsub()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, active, selected?.status, loading])
 
-  // 上下文圆环：空闲/运行中每 5s 刷新真实占用
+  // 上下文圆环：空闲时刷新真实占用；隐藏窗口暂停
   useEffect(() => {
     if (!selectedId || !active) return undefined
+    let stopped = false
+    let visible = document.visibilityState === 'visible'
     // 对话进行中不要探测 /context：会 resume 同一 session，把本地命令插进当前回合
     const poll = () => {
+      if (!visible || stopped) return
       if (getAgentSession(selectedId).loading) return
       refreshAgentContext(selectedId, false)
     }
     poll()
-    const t = setInterval(poll, 5000)
-    return () => clearInterval(t)
+    const t = setInterval(poll, POLL_IDLE_MS)
+    const unsub = subscribePageVisible((v) => {
+      visible = v
+      if (v) poll()
+    })
+    return () => {
+      stopped = true
+      clearInterval(t)
+      unsub()
+    }
   }, [selectedId, active])
 
   // 授权倒计时本地出队
@@ -497,15 +547,26 @@ export default function ManagedAgentsPanel({
     const needPull = loading || waitingLike || !!focusApprovalRequestId
     if (!needPull) return undefined
     let stopped = false
+    let visible = document.visibilityState === 'visible'
     const pull = () => {
-      if (stopped || viewRef.current.selectedId !== agentId) return
-      void pullPendingForAgent(agentId, { promoteRequestId: focusApprovalRequestId })
+      if (stopped || !visible || viewRef.current.selectedId !== agentId) return
+      void deskFlightRef.current('pending', async () => {
+        try {
+          await pullPendingForAgent(agentId, { promoteRequestId: focusApprovalRequestId })
+        } catch { /* ignore */ }
+      })
     }
     pull()
-    const t = window.setInterval(pull, 2000)
+    const sse = !!getAgentSession(agentId).abort
+    const t = window.setInterval(pull, sse ? POLL_SSE_BACKUP_MS : 2000)
+    const unsub = subscribePageVisible((v) => {
+      visible = v
+      if (v) pull()
+    })
     return () => {
       stopped = true
       window.clearInterval(t)
+      unsub()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, selectedId, active, selected?.conversation_id, selected?.status, focusApprovalRequestId])
@@ -515,34 +576,51 @@ export default function ManagedAgentsPanel({
     if (!selectedId || !active) return undefined
     const agentId = selectedId
     let stopped = false
+    let timer = 0
+    let visible = document.visibilityState === 'visible'
+    let awaiting = !!getAgentSession(agentId).activeTaskPlan
 
     const pull = async () => {
-      try {
-        const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
-          headers: authHeaders(),
-        })
-        if (res.status === 401) {
-          onUnauthorized?.()
-          return
+      if (stopped || !visible) return
+      await deskFlightRef.current('task-plan', async () => {
+        try {
+          const res = await fetch(`${API}/admin/agents/${agentId}/task-plan/active`, {
+            headers: authHeaders(),
+          })
+          if (res.status === 401) {
+            onUnauthorized?.()
+            return
+          }
+          if (!res.ok) return
+          const data = await res.json().catch(() => ({}))
+          if (stopped || viewRef.current.selectedId !== agentId) return
+          const plan = data?.plan
+          awaiting = plan?.phase === 'awaiting_confirm' && !plan?.frozen
+          patchAgentSession(agentId, { activeTaskPlan: awaiting ? plan : null })
+          if (awaiting) setTqChoice(null)
+        } catch {
+          // 临时离线时保留当前编辑内容，恢复连接后再同步服务端状态。
         }
-        if (!res.ok) return
-
-        const data = await res.json().catch(() => ({}))
-        if (stopped || viewRef.current.selectedId !== agentId) return
-        const plan = data?.plan
-        const awaiting = plan?.phase === 'awaiting_confirm' && !plan?.frozen
-        patchAgentSession(agentId, { activeTaskPlan: awaiting ? plan : null })
-        if (awaiting) setTqChoice(null)
-      } catch {
-        // 临时离线时保留当前编辑内容，恢复连接后再同步服务端状态。
-      }
+      })
     }
 
-    void pull()
-    const timer = window.setInterval(() => void pull(), 2000)
+    const arm = () => {
+      window.clearTimeout(timer)
+      if (stopped) return
+      const ms = awaiting ? POLL_TASK_PLAN_AWAITING_MS : POLL_TASK_PLAN_IDLE_MS
+      timer = window.setTimeout(() => {
+        void pull().finally(arm)
+      }, ms)
+    }
+    void pull().finally(arm)
+    const unsub = subscribePageVisible((v) => {
+      visible = v
+      if (v) void pull()
+    })
     return () => {
       stopped = true
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
+      unsub()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, active])
@@ -667,6 +745,11 @@ export default function ManagedAgentsPanel({
 
   const authHeadersRef = useRef(authHeaders)
   authHeadersRef.current = authHeaders
+  /** 主轮询单飞：同 key 飞行中不叠请求 */
+  const deskFlightRef = useRef(null)
+  if (!deskFlightRef.current) deskFlightRef.current = createSingleFlight()
+  /** 操作后立刻补拉名单/详情（由主轮询 effect 赋值） */
+  const deskKickRef = useRef(() => {})
   /** 告诉后端电脑是否正打开这个数字人的对话（含挂机未关页面）；仅存在感，不清未读 */
   useEffect(() => {
     const send = (agentId) => {
@@ -681,10 +764,24 @@ export default function ManagedAgentsPanel({
       return undefined
     }
     send(selectedId)
-    // 终态跳过未读依赖 pc-viewer 心跳；略缩短以免任务结束时 TTL 误判已离开
-    const timer = window.setInterval(() => send(selectedId), 8000)
+    let timer = 0
+    /** 可见 8s；窗口隐藏改为 30s 慢心跳，挂机仍算在看 */
+    const arm = () => {
+      window.clearTimeout(timer)
+      const ms = document.visibilityState === 'visible' ? PC_VIEWER_VISIBLE_MS : PC_VIEWER_HIDDEN_MS
+      timer = window.setTimeout(() => {
+        send(selectedId)
+        arm()
+      }, ms)
+    }
+    arm()
+    const unsub = subscribePageVisible(() => {
+      window.clearTimeout(timer)
+      arm()
+    })
     return () => {
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
+      unsub()
       send(0)
     }
   }, [active, selectedId])
@@ -696,6 +793,12 @@ export default function ManagedAgentsPanel({
       method: 'POST',
       headers: authHeadersRef.current(),
     }).catch(() => {})
+  }, [active, selectedId])
+
+  /** 切换正在看的数字人：立刻补拉，不等空闲 8s */
+  useEffect(() => {
+    if (!active || !selectedId) return
+    deskKickRef.current()
   }, [active, selectedId])
 
   /**
@@ -798,11 +901,23 @@ export default function ManagedAgentsPanel({
     }
   }
 
-  useEffect(() => { loadAgents() /* eslint-disable-next-line */ }, [])
+  useEffect(() => {
+    // 文档隐藏时不打首屏名单；回到前台由主轮询 kick 补拉
+    if (document.visibilityState !== 'visible') return
+    loadAgents()
+    /* eslint-disable-next-line */
+  }, [])
 
   // 切换数字人时先清理旧队列徽标，等待新队列状态回传。
   useEffect(() => {
     setTaskQueueBadge(0)
+  }, [selectedId])
+
+  // 切员工后立刻 kick，不等空闲 8s / 忙碌 2s 的下一拍
+  useEffect(() => {
+    if (!selectedId) return undefined
+    kickPollRef.current()
+    return undefined
   }, [selectedId])
 
   // 从「数字人管理」卡片 / 灵动岛跳转：选中并打开设置 / 招聘；顺带补拉审批
@@ -874,7 +989,8 @@ export default function ManagedAgentsPanel({
     setRenameDraft(selected.name || '')
     setRulesDraft(selected.rules_prompt || '')
     setPolicyDraft(policyFromAgent(selected))
-    loadDetail(selected.id)
+    // 隐藏时不拉详情；回到前台由 kick 补上
+    if (document.visibilityState === 'visible') loadDetail(selected.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, conversationRefreshKey, selected?.id])
 
@@ -949,6 +1065,15 @@ export default function ManagedAgentsPanel({
         a.status === 'initializing'
       // 本页正挂着 Ask SSE（有 abort）时不干涉
       if (local.abort) continue
+      // 用户刚点终止：保持 userStopped 直到再次发送；勿被轮询拉回「后台运行中」
+      if (local.userStopped) {
+        if (local.loading || local.liveActivity || local.agentPhase) {
+          patchAgentSession(id, {
+            loading: false, runStartedAt: 0, liveActivity: null, agentPhase: '', abort: null,
+          })
+        }
+        continue
+      }
       if (remoteBusy && (!local.loading || !local.runtimeDetail)) {
         const restoredRuntime = local.runtimeDetail || runtimeFromActiveAgent(a)
         const startedMs = restoredRuntime?.startedAt || Date.now()
@@ -972,8 +1097,14 @@ export default function ManagedAgentsPanel({
     if (!active) return undefined
     let stopped = false
     let timer = 0
+    let detailTimer = 0
+    let pageVisible = document.visibilityState === 'visible'
+    const flight = deskFlightRef.current
     const pollMs = () => {
       const { selectedId: sid, agents: list } = viewRef.current
+      const local = sid ? getAgentSession(sid) : null
+      // 本机 SSE 仍在：名单降为 3s 备份，详情由 tick 直接跳过
+      if (local?.abort) return 3000
       const selectedViewing = list.some((a) => a.id === sid && a.mobile_viewing)
       const busy =
         anyAgentLoading() ||
@@ -985,36 +1116,63 @@ export default function ManagedAgentsPanel({
             a.status === 'initializing' ||
             a.occupancy?.source_type === 'CLONE_INIT',
         )
-      return busy ? 2000 : 4000
+      return busy ? POLL_BUSY_MS : POLL_IDLE_MS
     }
     const tick = () => {
+      if (!pageVisible) return
       const headers = authHeaders()
       if (!hasBearerToken(headers)) return
       const sid = viewRef.current.selectedId
-      // 只刷新名单，不改选中（避免状态变更时对话窗跳到别人）
-      Promise.resolve(loadAgents()).then(() => {
-        syncLoadingFromAgentStatus(viewRef.current.agents)
-      }).catch(() => {})
-      if (sid) {
-        const local = getAgentSession(sid)
-        // 本机 SSE 流式中跳过；刷新后恢复的 loading（无 abort）仍要轮询消息
-        if (!local.loading || !local.abort) {
-          void loadDetail(sid, { force: true })
-        }
-      }
+      void flight('agents', async () => {
+        try {
+          await loadAgents()
+          syncLoadingFromAgentStatus(viewRef.current.agents)
+        } catch { /* 单飞补跑不得变成未处理拒绝 */ }
+      })
+      if (!sid) return
+      const local = getAgentSession(sid)
+      // 用户刚终止：跳过详情，避免 DB 未收尾把「已终止」冲掉
+      if (local.userStopped) return
+      // 本机 SSE 流式中禁止拉详情（正文已由 SSE 推送）
+      if (local.abort) return
+      window.clearTimeout(detailTimer)
+      // 与名单错开约 400ms，避免同一帧双请求尖峰
+      detailTimer = window.setTimeout(() => {
+        if (stopped || !pageVisible) return
+        const now = getAgentSession(sid)
+        if (now.userStopped || now.abort) return
+        void flight(`detail:${sid}`, async () => {
+          try {
+            await loadDetail(sid, { force: true })
+          } catch { /* ignore */ }
+        })
+      }, 400)
     }
     const schedule = () => {
-      clearTimeout(timer)
+      window.clearTimeout(timer)
       if (stopped) return
       timer = window.setTimeout(() => {
         tick()
         schedule()
       }, pollMs())
     }
-    schedule()
+    const kick = () => {
+      window.clearTimeout(timer)
+      tick()
+      schedule()
+    }
+    deskKickRef.current = kick
+    const unsub = subscribePageVisible((visible) => {
+      pageVisible = visible
+      if (visible && !stopped) kick()
+    })
+    kick()
     return () => {
       stopped = true
-      clearTimeout(timer)
+      deskKickRef.current = () => {}
+      window.clearTimeout(timer)
+      window.clearTimeout(detailTimer)
+      unsub()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
@@ -1468,6 +1626,14 @@ export default function ManagedAgentsPanel({
 
   function applyEvents(agentId, events) {
     for (const ev of events) {
+      // 用户已点终止：忽略活动/正文/队列续跑，避免 UI 又变「忙碌」
+      if (getAgentSession(agentId).userStopped) {
+        if (ev.type === 'activity' || ev.type === 'chunk' || ev.type === 'reasoning'
+          || ev.type === 'agent_phase' || ev.type === 'task_queue_next'
+          || ev.type === 'done' || ev.type === 'error') {
+          continue
+        }
+      }
       if (ev.type === 'task_queue_next') {
         pendingQueueNextRef.current = {
           task_id: ev.task_id,
@@ -1784,6 +1950,7 @@ export default function ManagedAgentsPanel({
     resetThinking(agentId)
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
+      userStopped: false,
       agentPhase: 'working',
       liveThinking: '',
       taskTokens: 0,
@@ -1791,6 +1958,8 @@ export default function ManagedAgentsPanel({
       runtimeDetail: beginAgentRuntime(startedAt),
       lastRuntimeDetail: null,
     })
+    // abort 已挂上：kick 只刷名单，不会在 SSE 存活时拉 loadDetail
+    kickPollRef.current()
     // pending: 轮询 force 校准时由 coalesce 保留，避免乐观气泡被冲掉
     setAgentChatLog(agentId, (prev) => [
       ...prev,
@@ -1798,6 +1967,7 @@ export default function ManagedAgentsPanel({
     ])
     scrollChatToBottom()
     pendingQueueNextRef.current = null
+    deskKickRef.current()
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/ask`, {
         method: 'POST',
@@ -1844,17 +2014,22 @@ export default function ManagedAgentsPanel({
         patchAgentSession(agentId, {
           runtimeDetail: finishAgentRuntime(getAgentSession(agentId).runtimeDetail, 'interrupted'),
         })
-        const isInterrupt = !!getAgentSession(agentId).pendingInterrupt
-        if (!isInterrupt) {
+        const sess = getAgentSession(agentId)
+        // stopRun 已写入「已终止」；插话/用户终止都不再追加「已停止」
+        const isInterrupt = !!sess.pendingInterrupt
+        if (!isInterrupt && !sess.userStopped) {
           setAgentChatLog(agentId, (prev) => {
             const n = [...prev]
+            const mark = '⏹ 已停止'
             for (let i = n.length - 1; i >= 0; i--) {
               if (n[i].role === 'assistant') {
-                n[i] = { ...n[i], content: (n[i].content || '') + '\n\n⏹ 已停止' }
+                const body = String(n[i].content || '')
+                if (body.includes('已终止本次对话') || body.includes(mark)) return n
+                n[i] = { ...n[i], content: `${body}\n\n${mark}` }
                 return n
               }
             }
-            n.push({ role: 'assistant', content: '⏹ 已停止', error: true, time: Date.now(), uid: localMsgUid() })
+            n.push({ role: 'assistant', content: mark, error: true, time: Date.now(), uid: localMsgUid() })
             return n
           })
         }
@@ -1870,19 +2045,23 @@ export default function ManagedAgentsPanel({
       if (currentSession.abort !== ac) {
         return
       }
-      const pending = currentSession.pendingInterrupt
-      const pendingAtts = currentSession.pendingAttachments || []
-      const queueNext = pendingQueueNextRef.current
+      const userStopped = !!currentSession.userStopped
+      const pending = userStopped ? '' : currentSession.pendingInterrupt
+      const pendingAtts = userStopped ? [] : (currentSession.pendingAttachments || [])
+      // 用户终止：丢弃队列续跑，避免「终止」后立刻又开下一轮
+      const queueNext = userStopped ? null : pendingQueueNextRef.current
       pendingQueueNextRef.current = null
       patchAgentSession(agentId, {
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
         interrupting: false, liveActivity: null, agentPhase: '',
-        runtimeDetail: finishAgentRuntime(currentSession.runtimeDetail, currentSession.error ? 'failed' : 'completed'),
+        userStopped: userStopped,
+        runtimeDetail: finishAgentRuntime(currentSession.runtimeDetail, userStopped || currentSession.error ? (userStopped ? 'interrupted' : 'failed') : 'completed'),
       })
       setTqRefreshKey((k) => k + 1)
       // fresh=true：空闲时拉 Claude /context 或 Codex session 真值，避免一直停在 turn usage 估算
       await refreshAgentContext(agentId, true)
       await loadLatestRuntime(agentId)
+      if (userStopped) return
       // 旧插话路径兼容；优先走服务端 task_queue_next
       if (queueNext?.task_id) {
         const nextAtts = Array.isArray(queueNext.attachments) ? queueNext.attachments : []
@@ -2178,31 +2357,62 @@ export default function ManagedAgentsPanel({
     }
   }
 
+  /** 用户点「终止」：先打 /stop（hold+杀进程），再断 SSE，避免 finally 误续跑队列。 */
   async function stopRun() {
     if (!selected) return
     const id = selected.id
-    patchAgentSession(id, { pendingInterrupt: '', pendingAttachments: [], interrupting: false })
-    getAgentSession(id).abort?.abort()
+    const prev = getAgentSession(id)
+    const alreadyStopped = !!prev.userStopped
+    // 禁止本轮 SSE finally 再吃 task_queue_next / 插话续跑
+    pendingQueueNextRef.current = null
+    patchAgentSession(id, {
+      pendingInterrupt: '',
+      pendingAttachments: [],
+      interrupting: false,
+      userStopped: true,
+      loading: false,
+      liveActivity: null,
+      agentPhase: '',
+    })
+    // userStopped 已置位：kick 刷新名单并跳过详情，避免终止后干等下一拍
+    kickPollRef.current()
+    const prevAbort = prev.abort
     try {
       await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
     } catch { /* ignore */ }
+    // 先服务端停稳再 abort，减少「前端以为停了、引擎还在跑」的窗口
+    prevAbort?.abort()
     setTqRefreshKey((k) => k + 1)
-    patchAgentSession(id, { loading: false, abort: null, runStartedAt: 0, liveActivity: null })
-    setAgentChatLog(id, (prev) => {
-      const n = [...prev]
-      const last = n[n.length - 1]
-      if (last?.role === 'assistant') {
-        n[n.length - 1] = {
-          ...last,
-          content: `${(last.content || '').trim() ? `${last.content}\n\n` : ''}⏹ 已终止本次对话`,
-          error: true,
-        }
-      } else {
-        n.push({ role: 'assistant', content: '⏹ 已终止本次对话', error: true, time: Date.now(), uid: localMsgUid() })
-      }
-      return n
+    patchAgentSession(id, {
+      loading: false,
+      abort: null,
+      runStartedAt: 0,
+      liveActivity: null,
+      agentPhase: '',
+      userStopped: true,
     })
+    // 重复点击只打 /stop，不再叠「已终止」
+    if (!alreadyStopped) {
+      setAgentChatLog(id, (prevLog) => {
+        const n = [...prevLog]
+        const mark = '⏹ 已终止本次对话'
+        const last = n[n.length - 1]
+        if (last?.role === 'assistant') {
+          const body = String(last.content || '')
+          if (body.includes('已终止本次对话')) return n
+          n[n.length - 1] = {
+            ...last,
+            content: `${body.trim() ? `${body.trim()}\n\n` : ''}${mark}`,
+            error: true,
+          }
+        } else {
+          n.push({ role: 'assistant', content: mark, error: true, time: Date.now(), uid: localMsgUid() })
+        }
+        return n
+      })
+    }
     await loadAgents(id)
+    deskKickRef.current()
   }
 
   function onKeyDown(e) {
