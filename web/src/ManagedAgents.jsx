@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
 import AgentMarkdown from './agentMarkdown.jsx'
 import StaticHtml from './staticHtml.jsx'
@@ -39,6 +39,7 @@ import { ModernIcon } from './modernWorkspaceIcons.jsx'
 import EngineUsageChip from './EngineUsageChip.jsx'
 import { runningElapsedSec } from './taskTiming.js'
 import { useLocale } from './i18n/useLocale.js'
+import { sameChatTranscriptProps } from './chatTranscriptMemo.js'
 import TaskQueueRail from './TaskQueueRail.jsx'
 import TaskQueueChoiceSheet from './TaskQueueChoiceSheet.jsx'
 import TaskPlanConfirmSheet from './TaskPlanConfirmSheet.jsx'
@@ -162,7 +163,6 @@ function shortErrorText(raw, max = 140) {
 /** 运行中轮换文案（参考 Claude thinking，夹杂一点幽默）；跟随系统语言 */
 const THINKING_PHRASES = {
   'zh-CN': [
-    '思考中',
     '琢磨中',
     '构思中',
     '翻找线索',
@@ -176,7 +176,6 @@ const THINKING_PHRASES = {
     '酝酿灵感',
   ],
   en: [
-    'thinking',
     'pondering',
     'brewing ideas',
     'consulting the rubber duck',
@@ -1179,6 +1178,7 @@ export default function ManagedAgentsPanel({
       }
       if (!stopped) kick()
     })
+
     return () => {
       stopped = true
       deskKickRef.current = () => {}
@@ -2635,91 +2635,14 @@ export default function ManagedAgentsPanel({
                 {chatLog.length === 0 && !loading && (
                   <p className="empty-chat">给同事下达任务后，需授权的命令会在此确认</p>
                 )}
-                {buildChatDisplayRows(chatLog, loading).map((row) => (
-                  row.kind === 'process' ? (
-                    <ProcessFold
-                      key={`${selectedId}-${row.key}`}
-                      commands={row.cmds}
-                    />
-                  ) : (
-                    <div key={`${selectedId}-${row.key}`} className={`msg ${row.m.role} ${row.m.decision === 'deny' ? 'cmd-denied' : ''} ${row.m.role === 'assistant' ? 'ma-flat' : ''}`}>
-                      <div className="msg-label">
-                        <span>
-                          {row.m.role === 'invoke_quote' && (
-                            <JellyAvatar
-                              className="ma-msg-jelly"
-                              color={resolveJellyColor(selected)}
-                              size={16}
-                              state={jellyStateFromAgent(selected)}
-                            />
-                          )}
-                          {row.m.role === 'user' ? '你'
-                            : row.m.role === 'auto' ? '自动审核'
-                              : row.m.role === 'system' ? '系统'
-                              : row.m.role === 'status' ? '状态'
-                              : row.m.role === 'command'
-                                ? (row.m.decision === 'deny' ? '已拒绝命令' : '已执行命令')
-                                : row.m.role === 'invoke_quote' ? `引用 · ${row.m.calleeName || '同事'}`
-                                  : row.m.role === 'invoke_divider' ? '调用记录'
-                                    : selected.name}
-                        </span>
-                        {row.m.role === 'command' && row.m.decidedBy && (
-                          <span className="cmd-by">{byLabel(row.m.decidedBy)}</span>
-                        )}
-                        {row.m.role === 'assistant' && (row.m.content || '').trim() && (
-                          <CopyTextButton text={row.m.content} />
-                        )}
-                        {row.m.replySec > 0 && <span className="reply-sec">{fmtSec(row.m.replySec)}</span>}
-                      </div>
-                      {row.m.role === 'auto' ? (
-                        <div className="auto-trace">{row.m.note || 'AI 已自动放行'} <code>{row.m.content}</code></div>
-                      ) : row.m.role === 'command' ? (
-                        <div className="ma-timeline-item ma-timeline-cmd">
-                          <span className="ma-tl-mark" aria-hidden="true">·</span>
-                          <div className="ma-tl-body">
-                            <CmdBlock
-                              content={row.m.content}
-                              decision={row.m.decision}
-                              risk={row.m.risk}
-                              meaning={row.m.meaning}
-                              note={row.m.note}
-                              live={loading}
-                            />
-                          </div>
-                        </div>
-                      ) : row.m.role === 'system' ? (
-                        <div className="ma-system-note">{row.m.content}</div>
-                      ) : row.m.role === 'status' ? (
-                        <div className="ma-status-snap">
-                          <pre>{row.m.content}</pre>
-                        </div>
-                      ) : row.m.role === 'invoke_quote' ? (
-                        <details className="ma-quote" open={false}>
-                          <summary>{row.m.calleeName || '同事'} 的结果</summary>
-                          <AgentMarkdown content={row.m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
-                        </details>
-                      ) : row.m.role === 'invoke_divider' ? (
-                        <div className="ma-divider-msg">{row.m.content}</div>
-                      ) : row.m.role === 'assistant' ? (
-                        <div className="ma-timeline-assistant">
-                          <AgentMarkdown content={row.m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
-                          {(row.m.attachments || []).length > 0 && (
-                            <ChatMessageImages attachments={row.m.attachments} onOpen={setLightboxSrc} />
-                          )}
-                        </div>
-                      ) : (
-                        <div className="msg-body">
-                          {(row.m.attachments || []).length > 0 && (
-                            <ChatMessageImages attachments={row.m.attachments} onOpen={setLightboxSrc} />
-                          )}
-                          {row.m.content ? (
-                            <StaticHtml html={escapeHtml(row.m.content)} />
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                  )
-                ))}
+                <ChatTranscriptRows
+                  chatLog={chatLog}
+                  loading={loading}
+                  selected={selected}
+                  selectedId={selectedId}
+                  authHeaders={authHeaders}
+                  onOpenImage={setLightboxSrc}
+                />
                 {permQueue[0] && (
                   <PermCard
                     p={permQueue[0]}
@@ -2728,15 +2651,15 @@ export default function ManagedAgentsPanel({
                     onDecide={decide}
                   />
                 )}
-                {liveThinking ? <ThinkingFold text={liveThinking} live={loading} /> : null}
+                {!loading && liveThinking ? <ThinkingFold text={liveThinking} live={false} /> : null}
                 {loading && (
                   <RunStatus
                     interrupting={interrupting}
-                    activity={sess.liveActivity}
                     runSec={liveRunSec(selected)}
                     taskTokens={sess.taskTokens || 0}
                     phase={sess.agentPhase}
                     jellyColor={resolveJellyColor(selected)}
+                    thinking={liveThinking}
                   />
                 )}
               </div>
@@ -2922,6 +2845,14 @@ export default function ManagedAgentsPanel({
                         anomaly={sess.contextAnomaly || ''}
                       />
                       <span className="ma-composer-kbd">{t('composer.kbdSend')}</span>
+                      {import.meta.env.DEV && (
+                        <div className="ma-composer-dev-mode" aria-label={t('composer.devModeHint')}>
+                          <ModernIcon name="monitor" size={14} />
+                          <span>{t('composer.devMode')}</span>
+                          <strong>DEV</strong>
+                          <span className="ma-composer-dev-hint">{t('composer.devModeHint')}</span>
+                        </div>
+                      )}
                     </div>
                     <div className="ma-composer-actions">
                       {!loading ? (
@@ -3576,6 +3507,90 @@ function commandPreview(content, max = 72) {
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine
 }
 
+/** 聊天记录只随消息/运行态更新；输入框逐字变化不再重建整段历史 DOM。 */
+const ChatTranscriptRows = memo(function ChatTranscriptRows({
+  chatLog, loading, selected, selectedId, authHeaders, onOpenImage,
+}) {
+  return buildChatDisplayRows(chatLog, loading).map((row) => (
+    row.kind === 'process' ? (
+      <ProcessFold key={`${selectedId}-${row.key}`} commands={row.cmds} />
+    ) : (
+      <div key={`${selectedId}-${row.key}`} className={`msg ${row.m.role} ${row.m.decision === 'deny' ? 'cmd-denied' : ''} ${row.m.role === 'assistant' ? 'ma-flat' : ''}`}>
+        <div className="msg-label">
+          <span>
+            {row.m.role === 'invoke_quote' && (
+              <JellyAvatar
+                className="ma-msg-jelly"
+                color={resolveJellyColor(selected)}
+                size={16}
+                state={jellyStateFromAgent(selected)}
+              />
+            )}
+            {row.m.role === 'user' ? '你'
+              : row.m.role === 'auto' ? '自动审核'
+                : row.m.role === 'system' ? '系统'
+                  : row.m.role === 'status' ? '状态'
+                    : row.m.role === 'command'
+                      ? (row.m.decision === 'deny' ? '已拒绝命令' : '已执行命令')
+                      : row.m.role === 'invoke_quote' ? `引用 · ${row.m.calleeName || '同事'}`
+                        : row.m.role === 'invoke_divider' ? '调用记录'
+                          : selected.name}
+          </span>
+          {row.m.role === 'command' && row.m.decidedBy && (
+            <span className="cmd-by">{byLabel(row.m.decidedBy)}</span>
+          )}
+          {row.m.role === 'assistant' && (row.m.content || '').trim() && (
+            <CopyTextButton text={row.m.content} />
+          )}
+          {row.m.replySec > 0 && <span className="reply-sec">{fmtSec(row.m.replySec)}</span>}
+        </div>
+        {row.m.role === 'auto' ? (
+          <div className="auto-trace">{row.m.note || 'AI 已自动放行'} <code>{row.m.content}</code></div>
+        ) : row.m.role === 'command' ? (
+          <div className="ma-timeline-item ma-timeline-cmd">
+            <span className="ma-tl-mark" aria-hidden="true">·</span>
+            <div className="ma-tl-body">
+              <CmdBlock
+                content={row.m.content}
+                decision={row.m.decision}
+                risk={row.m.risk}
+                meaning={row.m.meaning}
+                note={row.m.note}
+                live={loading}
+              />
+            </div>
+          </div>
+        ) : row.m.role === 'system' ? (
+          <div className="ma-system-note">{row.m.content}</div>
+        ) : row.m.role === 'status' ? (
+          <div className="ma-status-snap"><pre>{row.m.content}</pre></div>
+        ) : row.m.role === 'invoke_quote' ? (
+          <details className="ma-quote" open={false}>
+            <summary>{row.m.calleeName || '同事'} 的结果</summary>
+            <AgentMarkdown content={row.m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
+          </details>
+        ) : row.m.role === 'invoke_divider' ? (
+          <div className="ma-divider-msg">{row.m.content}</div>
+        ) : row.m.role === 'assistant' ? (
+          <div className="ma-timeline-assistant">
+            <AgentMarkdown content={row.m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
+            {(row.m.attachments || []).length > 0 && (
+              <ChatMessageImages attachments={row.m.attachments} onOpen={onOpenImage} />
+            )}
+          </div>
+        ) : (
+          <div className="msg-body">
+            {(row.m.attachments || []).length > 0 && (
+              <ChatMessageImages attachments={row.m.attachments} onOpen={onOpenImage} />
+            )}
+            {row.m.content ? <StaticHtml html={escapeHtml(row.m.content)} /> : null}
+          </div>
+        )}
+      </div>
+    )
+  ))
+}, sameChatTranscriptProps)
+
 /**
  * 将本轮（最近一条 user 之后）的连续 command 在回合结束后收成「运行过程」折叠块；
  * 运行中仍逐条展示，便于看命令执行。
@@ -3771,39 +3786,54 @@ function ProcessFold({ commands }) {
   )
 }
 
-/** 运行态：跳动水母 + thinking 文案 + token + 工具活动条 */
-function RunStatus({ interrupting, activity, runSec, taskTokens, phase = '', jellyColor = 'blue' }) {
+/** 运行态：水母 + 任务文案；有思考正文时折叠按钮就在这一行 */
+function RunStatus({ interrupting, runSec, taskTokens, phase = '', jellyColor = 'blue', thinking = '' }) {
   const { locale, t } = useLocale()
   const phrases = THINKING_PHRASES[locale] || THINKING_PHRASES['zh-CN']
   const [phraseIdx, setPhraseIdx] = useState(0)
+  const [thinkOpen, setThinkOpen] = useState(false)
+  const thinkBodyRef = useRef(null)
   useEffect(() => {
     const timer = setInterval(() => {
       setPhraseIdx((i) => (i + 1) % phrases.length)
     }, 2400)
     return () => clearInterval(timer)
   }, [phrases.length])
+  useEffect(() => {
+    if (!thinkOpen) return
+    const el = thinkBodyRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [thinking, thinkOpen])
   const phrase = interrupting
     ? t('chat.thinking.interrupting')
     : phrases[phraseIdx % phrases.length]
+  const statusRow = (
+    <div className="ma-thinking" aria-live="polite">
+      <JellyAvatar
+        className="ma-thinking-jelly"
+        color={jellyColor}
+        size={18}
+        state={jellyStateFromPhase(phase, 'working')}
+      />
+      <span className="ma-thinking-text">{phrase}</span>
+      {runSec > 0 && <span className="ma-thinking-sec">{fmtSec(runSec)}</span>}
+      {taskTokens > 0 && <span className="ma-thinking-tokens">{fmtToken(taskTokens)} tokens</span>}
+    </div>
+  )
   return (
     <div className="ma-run-status">
-      <div className="ma-thinking" aria-live="polite">
-        <JellyAvatar
-          className="ma-thinking-jelly"
-          color={jellyColor}
-          size={18}
-          state={jellyStateFromPhase(phase, 'working')}
-        />
-        <span className="ma-thinking-text">{phrase}</span>
-        {runSec > 0 && <span className="ma-thinking-sec">{fmtSec(runSec)}</span>}
-        {taskTokens > 0 && <span className="ma-thinking-tokens">{fmtToken(taskTokens)} tokens</span>}
-      </div>
-      {activity?.summary && (
-        <div className="ma-activity" title={activity.tool || ''}>
-          <span className="ma-activity-dot" />
-          <span className="ma-activity-text">{activity.summary}</span>
-        </div>
-      )}
+      {thinking ? (
+        <details
+          className="ma-think-fold ma-run-think"
+          onToggle={(e) => setThinkOpen(e.currentTarget.open)}
+        >
+          <summary>
+            <span className="ma-think-caret" aria-hidden="true">›</span>
+            {statusRow}
+          </summary>
+          <div className="ma-think-body" ref={thinkBodyRef}>{thinking}</div>
+        </details>
+      ) : statusRow}
     </div>
   )
 }

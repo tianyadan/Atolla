@@ -66,6 +66,24 @@ func (h *Handler) AdminDBSwitch(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+// AdminDBSQLitePath POST /api/admin/db/sqlite-path  body: {path, migrate?}
+func (h *Handler) AdminDBSQLitePath(c *gin.Context) {
+	var body struct {
+		Path    string `json:"path"`
+		Migrate bool   `json:"migrate"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	res, err := h.svc.AdminSetSQLitePath(c.Request.Context(), body.Path, body.Migrate)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 // AdminDBMigrateProgress GET /api/admin/db/migrate-progress
 func (h *Handler) AdminDBMigrateProgress(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.MigrateProgress())

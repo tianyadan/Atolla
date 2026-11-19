@@ -187,6 +187,65 @@ func WriteDriverChoice(repoRoot, driver string) error {
 	})
 }
 
+// NormalizeSQLitePath 规范化并校验 SQLite 文件绝对路径（须以 .db 结尾）。
+func NormalizeSQLitePath(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return "", fmt.Errorf("sqlite path required")
+	}
+	if strings.HasPrefix(p, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand home: %w", err)
+		}
+		if p == "~" {
+			p = home
+		} else if strings.HasPrefix(p, "~/") {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	if !filepath.IsAbs(p) {
+		return "", fmt.Errorf("sqlite path must be absolute")
+	}
+	p = filepath.Clean(p)
+	ext := strings.ToLower(filepath.Ext(p))
+	if ext != ".db" {
+		return "", fmt.Errorf("sqlite path must end with .db")
+	}
+	base := filepath.Base(p)
+	if base == "" || base == "." || base == ".." || base == ".db" {
+		return "", fmt.Errorf("invalid sqlite file name")
+	}
+	return p, nil
+}
+
+// WriteSQLitePath 将驱动固定为 sqlite 并写入自定义 DSN。
+func WriteSQLitePath(repoRoot, sqlitePath string) error {
+	p, err := NormalizeSQLitePath(sqlitePath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return UpsertEnvKeys(EnvPath(repoRoot), map[string]string{
+		EnvDriver: DriverSQLite,
+		EnvDSN:    p,
+		EnvChosen: "1",
+	})
+}
+
+// EffectiveSQLitePath 当前应展示的 SQLite 路径：优先有效 DSN，否则默认。
+func EffectiveSQLitePath(repoRoot, driver, dsn string) string {
+	if NormalizeDriver(driver) != DriverSQLite {
+		return SQLiteDSN(repoRoot)
+	}
+	if p, err := NormalizeSQLitePath(dsn); err == nil {
+		return p
+	}
+	return SQLiteDSN(repoRoot)
+}
+
 // Chosen 用户是否已确认过数据库选择。
 func Chosen(repoRoot string) bool {
 	m, err := ReadEnvFile(EnvPath(repoRoot))

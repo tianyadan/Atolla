@@ -5,6 +5,12 @@
     <link rel="icon" type="image/png" href="/brand-jellyfish-white.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Atolla</title>
+    <!-- Electron 尽早打标，避免首屏样式晚于 paint、红绿灯压住侧栏标题 -->
+    <script>
+      if (typeof navigator !== 'undefined' && /Electron/i.test(navigator.userAgent)) {
+        document.documentElement.classList.add('atolla-electron')
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

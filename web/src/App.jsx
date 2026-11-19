@@ -28,8 +28,14 @@ import AppPanel from './AppPanel.jsx'
 import ModernWorkspace from './ModernWorkspace.jsx'
 import { initLocale } from './i18n/locale.js'
 import { useLocale } from './i18n/useLocale.js'
+import { shouldSkipOnboarding } from './onboardGate.js'
 
 initLocale()
+
+/** Electron 壳：给 html 打标，便于顶栏拖拽区与红绿灯避让样式。 */
+if (typeof window !== 'undefined' && window.atollaDesktop) {
+  document.documentElement.classList.add('atolla-electron')
+}
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -77,7 +83,8 @@ export default function App() {
   const [loginUser, setLoginUser] = useState('')
   const [loginPass, setLoginPass] = useState('')
   const [loginConfirm, setLoginConfirm] = useState('')
-  const [showOnboard, setShowOnboard] = useState(() => !localStorage.getItem(ONBOARD_KEY) && !localStorage.getItem(AUTH_TOKEN_KEY))
+  const [showOnboard, setShowOnboard] = useState(false)
+  const [onboardChecking, setOnboardChecking] = useState(() => !localStorage.getItem(ONBOARD_KEY) && !localStorage.getItem(AUTH_TOKEN_KEY))
   const [guideLogin, setGuideLogin] = useState(false)
   const [loginErr, setLoginErr] = useState('')
   const [loginBusy, setLoginBusy] = useState(false)
@@ -106,6 +113,45 @@ export default function App() {
     setLoginOpen(false)
     if (msg) setLoginErr(msg)
   }
+
+  // 引导页：不以易丢的 localStorage 为唯一依据；服务端已初始化则静默跳过。
+  useEffect(() => {
+    if (!onboardChecking) return undefined
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [setupRes, dbRes] = await Promise.all([
+          fetch(`${API}/setup/status`),
+          fetch(`${API}/setup/db-status`),
+        ])
+        const setup = await setupRes.json().catch(() => ({}))
+        const db = dbRes.ok ? await dbRes.json().catch(() => ({})) : {}
+        if (cancelled) return
+        const localDone = !!(localStorage.getItem(ONBOARD_KEY) || localStorage.getItem(AUTH_TOKEN_KEY))
+        const skip = shouldSkipOnboarding({
+          needsRegister: setup.needs_register,
+          engines: setup.engines,
+          dbChosen: !!db.chosen,
+          localDone,
+        })
+        if (skip) {
+          localStorage.setItem(ONBOARD_KEY, '1')
+          setShowOnboard(false)
+        } else {
+          setShowOnboard(true)
+        }
+      } catch {
+        if (!cancelled) {
+          // 后端暂不可达时：有本地标记则跳过，否则仍显示引导
+          const localDone = !!(localStorage.getItem(ONBOARD_KEY) || localStorage.getItem(AUTH_TOKEN_KEY))
+          setShowOnboard(!localDone)
+        }
+      } finally {
+        if (!cancelled) setOnboardChecking(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [onboardChecking])
 
   // 启动时校验本地 token；并消费 ?agent= / #agent= 深链（灵动岛跳转）
   useEffect(() => {
@@ -314,8 +360,8 @@ export default function App() {
     return adminLabels[id] || ''
   }
 
-  if (authChecking) {
-    return <div className="app"><p className="empty">校验登录中…</p></div>
+  if (authChecking || onboardChecking) {
+    return <div className="app"><p className="empty">{authChecking ? '校验登录中…' : '准备中…'}</p></div>
   }
 
   // 管理台布局

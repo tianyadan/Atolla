@@ -137,6 +137,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		log.Printf("interrupted %d incomplete node executions", n)
 	}
 	_ = st.ClearAllOccupancy(context.Background())
+	svc.ResetStuckManagedAgentsOnBoot(context.Background())
 	svc.BeginWorkflowRecoveryWindow()
 	svc.RepairAgentTaskQueueOnBoot(context.Background())
 	svc.startRemoteBridge(cfg.WorkspaceRoot)

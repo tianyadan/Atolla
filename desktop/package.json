@@ -6,17 +6,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/runtime.test.mjs",
-    "dev": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "dev": "node scripts/patch-electron-app-name.mjs && node scripts/dev-runner.mjs",
+    "dev:go": "node scripts/patch-electron-app-name.mjs && node scripts/dev-runner.mjs --watch-go",
     "build:web": "npm --prefix ../web run build",
     "build:backend": "node scripts/build-backend.mjs",
     "prepare:resources": "node scripts/prepare-resources.mjs",
     "verify:resources": "node scripts/verify-resources.mjs",
-    "package": "npm run build:web && npm run build:backend && npm run prepare:resources && npm run verify:resources && electron-builder --mac --arm64"
+    "package": "npm run build:web && npm run build:backend && npm run prepare:resources && npm run verify:resources && node scripts/make-app-icon.mjs && electron-builder --mac --arm64",
+    "postinstall": "node scripts/patch-electron-app-name.mjs"
   },
   "devDependencies": {
     "electron": "^39.0.0",
     "electron-builder": "^26.0.12"
   },
-  "main": "main.mjs"
+  "main": "main.mjs",
+  "productName": "Atolla"
 }

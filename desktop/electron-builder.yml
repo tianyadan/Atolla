@@ -4,8 +4,9 @@ directories:
   output: ../dist/electron
 files:
   - main.mjs
-  - preload.mjs
+  - preload.cjs
   - runtime.mjs
+  - dev-bridge.mjs
 extraResources:
   - from: stage/bin/atolla-server
     to: bin/atolla-server
@@ -13,6 +14,8 @@ extraResources:
     to: web
 mac:
   category: public.app-category.productivity
+  # Atolla 水母品牌标（来自 iOS AppIcon / brand jellyfish）
+  icon: build/icon.png
   # 第一版仅交付本地测试包；避免本机重复开发证书触发自动签名歧义。
   identity: null
   target:

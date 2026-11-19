@@ -469,19 +469,19 @@ func (s *Service) stopManagedForInterrupt(agentID int64) {
 	s.ReleaseOccupancy(context.Background(), agentID)
 }
 
-// StopManagedAndHoldQueue 用户点终止：取消当前 running 队列项并 hold。
+// StopManagedAndHoldQueue 用户点终止：先 hold 再杀进程，避免收尾竞态又 claim 下一条。
 func (s *Service) StopManagedAndHoldQueue(agentID int64) bool {
-	stopped := s.StopManaged(agentID)
 	ctx := context.Background()
 	unlock := s.taskQueueLock(agentID)
-	defer unlock()
+	// 必须先 hold：Ask 收尾的 FinishAgentTaskAndPeekNext 会读 hold；若后写 hold 会误发 task_queue_next。
+	_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, true)
 	if cur, _ := s.Store.GetRunningAgentTask(ctx, agentID); cur != nil {
 		if completed, _ := s.Store.CompleteAgentTaskRunning(ctx, cur.ID, store.TaskCancelled, "stopped by user"); completed {
 			s.writeBackGitHubIdeaTask(cur.ID, store.TaskCancelled, "stopped by user")
 		}
 	}
-	_ = s.Store.SetAgentTaskQueueHold(ctx, agentID, true)
-	return stopped
+	unlock()
+	return s.StopManaged(agentID)
 }
 
 // TaskQueueAttsToChat 转 Ask 附件。

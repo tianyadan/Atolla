@@ -7,6 +7,7 @@
 #   ./scripts/build-electron.sh --version 0.6.8  # 先写入版本号再构建
 #   ./scripts/build-electron.sh --clean-install  # 强制 npm ci 重装依赖
 #   ./scripts/build-electron.sh --skip-test      # 跳过 desktop 运行时测试
+#   ./scripts/build-electron.sh --official-registry  # 不用 npmmirror，走官方源
 #   ./scripts/build-electron.sh --help
 #
 # 脚本内所有路径都基于脚本自身所在位置解析，因此可以在任意目录执行，
@@ -33,6 +34,7 @@ usage() {
 VERSION=""
 CLEAN_INSTALL=0
 SKIP_TEST=0
+USE_MIRROR=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-test)
       SKIP_TEST=1
+      shift
+      ;;
+    --official-registry)
+      USE_MIRROR=0
       shift
       ;;
     -h|--help)
@@ -96,6 +102,19 @@ PKG_VERSION="$(node -p 'require(process.argv[1]).version' "${DESKTOP_DIR}/packag
 info "仓库根目录：${ROOT_DIR}"
 info "App 版本：${PKG_VERSION}（来自 desktop/package.json）"
 info "构建目标：macOS arm64"
+
+# ---------- 国内镜像（npm + Electron 二进制） ----------
+# desktop/.npmrc / web/.npmrc 已默认指向 npmmirror；此处再导出环境变量，
+# 覆盖 electron postinstall 与 electron-builder 下载（常卡在 GitHub）。
+if [[ "${USE_MIRROR}" == "1" ]]; then
+  export npm_config_registry="${npm_config_registry:-https://registry.npmmirror.com}"
+  export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
+  export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
+  info "使用镜像：npm=${npm_config_registry}"
+  info "使用镜像：ELECTRON_MIRROR=${ELECTRON_MIRROR}"
+else
+  info "使用官方源（--official-registry）"
+fi
 
 # ---------- 依赖安装 ----------
 install_deps() {

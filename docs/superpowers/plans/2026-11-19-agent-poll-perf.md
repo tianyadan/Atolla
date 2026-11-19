@@ -1,0 +1,238 @@
+# 数字员工页轮询性能优化
+
+> **For agentic workers:** 推荐按下方「开发 TODO」分任务落地；每完成一项用 DevTools Network 对比忙碌 60s 请求数。可用 `superpowers:subagent-driven-development` 或本会话逐步执行。
+
+**Goal:** 在不砍功能、不伤「实时感」的前提下，降低数字员工对话页本机轮询密度，减轻 Electron CPU/发热与界面抖动。
+
+**Architecture:** 前端为主、后端可选增强。优先「页面不可见停轮询 + 同接口单飞去重 + 按场景自适应间隔 + SSE 存活时降级备份轮询」；不引入 WebSocket 大改，不合并破坏现有 SSE/终止/队列语义。
+
+**Tech Stack:** React（`ManagedAgents.jsx` / `TaskQueueRail.jsx` / `ModernWorkspace.jsx`）、本机 Gin HTTP、既有 Ask SSE。
+
+## Global Constraints
+
+- 不损失功能：授权弹窗、Task Plan 跨端确认、队列角标、后台 running 恢复、终止后状态收敛均须保留。
+- 尽可能少改：优先改前端调度；后端仅在「轻量状态接口 / 条件请求」有明确收益时再动。
+- 流式回合仍以 SSE 为准；轮询只做备份与跨端同步。
+- 本地 1s `setTick`（时长文案）保留，**禁止**把网络请求绑到 1s。
+- 不在本方案做全局状态管理重构或换长连接协议。
+
+---
+
+## 1. 背景
+
+数字员工对话页（`ManagedAgents.jsx`）同时挂多路 `setInterval` / 递归 `setTimeout`：
+
+| 轮询 | 典型间隔 | 目的 |
+|------|----------|------|
+| `loadAgents` + `loadDetail` | 忙 2s / 闲 4s | 名单状态、消息校准、幽灵 busy 恢复 |
+| `loadLatestRuntime` | 3s | 运行态审计恢复 |
+| `permissions/pending` | 2s（忙/等待时） | 审批漏推备份 |
+| `task-plan/active` | 2s（面板激活即跑） | 跨端确认后收起弹层 |
+| `refreshAgentContext` | 5s（空闲） | 上下文圆环 |
+| `pc-viewer` | 8s | 存在感心跳 |
+| `TaskQueueRail` | 4s | 队列轨 |
+| 本地 tick | 1s | 仅 UI 秒表，无网络 |
+
+忙碌时多路叠加，DevTools 出现持续密瀑布（约每 2s 多条并发），本机回环带宽不是瓶颈，但 **主线程 JSON + React 重渲染** 会造成发热与卡顿体感。
+
+## 2. 开发目标
+
+- **感官：** 对话流式、授权弹出、终止反馈、队列角标仍及时；用户盯着屏幕时不觉得「变钝」。
+- **系统：** 忙碌 60s 内同源 XHR/fetch 条数明显下降（目标：**≥40%**，以改前同场景 Network 计数为准）；窗口切到后台时网络轮询接近 0。
+- **兼容：** 刷新后仍能从 `running` 恢复 loading；手机确认 Task Plan 后 PC 仍能收起；终止竞态逻辑不被破坏。
+
+## 3. 实现范围
+
+### 本次实现
+
+1. **页面可见性门闩**：`document.visibilityState !== 'visible'` 时暂停所有网络轮询；可见时立即补拉一轮。
+2. **单飞（in-flight coalesce）**：`loadAgents` / `loadDetail` / `pullPending` / `task-plan` / `loadLatestRuntime` 各自「上一次未完成则跳过或合并为结束后再拉一次」。
+3. **统一调度心跳（轻量）**：对话页用一个 1s 本地时钟驱动，网络按「到期才发」；避免 5 个独立 interval 在同一时刻挤车（可交错 offset）。
+4. **SSE 存活降级**：存在 `abort`（本机 Ask SSE）时：跳过 `loadDetail`；`task-plan` / `pending` 备份间隔拉长（如 2s→6s）；名单 `loadAgents` 可保持 2–3s 或仅依赖终态事件后的显式刷新。
+5. **Task Plan 自适应**：无 active plan 时 8–10s；`awaiting_confirm` 时 2s；本地刚收到 SSE `task_plan_awaiting_confirm` 时可临时加密。
+6. **空闲再降频**：全员 idle 且无选中忙碌时，主轮询 4s→8s；侧栏会话列表（`ModernWorkspace` 5s）可与主轮询错开或共用一次 agents 结果（若已有数据）。
+
+### 本次暂不实现
+
+- 上 WebSocket / SSE 多路复用替换轮询。
+- 后端聚合「一接口返回 agents+messages+queue+plan」（改动面大）。
+- Workflow 画布 1.5s 轮询（独立面板，另开计划）。
+- 强依赖 ETag（可作为可选 Phase B）。
+
+## 4. 技术设计
+
+### 4.1 可见性门闩（收益最大、风险最低）
+
+```text
+visibilitychange / focus
+  hidden  → pausePolling = true（清掉 pending timer，不发新请求）
+  visible → pausePolling = false → kick() 立即 loadAgents +（按需）loadDetail / pending / plan
+```
+
+- `pc-viewer`：页面可见时 **8s**；`document.hidden` 时改为 **30s 慢心跳**（挂机未关页仍算在看）。
+- 与现有 `visibilitychange` 补拉审批逻辑合并，避免两套监听。
+
+### 4.2 单飞封装
+
+建议在 `web/src/` 增加小工具（或文件内 helper），风格与现有模块一致：
+
+```js
+/** 同 key 请求单飞：飞行中再触发则标记 pending，结束后补跑最后一次 */
+export function createSingleFlight() {
+  const flying = new Map() // key -> Promise
+  const pending = new Set()
+  return async function singleFlight(key, fn) {
+    if (flying.has(key)) {
+      pending.add(key)
+      return flying.get(key)
+    }
+    const run = (async () => {
+      try {
+        return await fn()
+      } finally {
+        flying.delete(key)
+        if (pending.has(key)) {
+          pending.delete(key)
+          void singleFlight(key, fn)
+        }
+      }
+    })()
+    flying.set(key, run)
+    return run
+  }
+}
+```
+
+接入点：`loadAgents`、`loadDetail`、`pullPendingForAgent`、`loadLatestRuntime`、Task Plan `pull`。
+
+### 4.3 自适应间隔（保留功能的前提下变稀）
+
+| 场景 | 现网 | 建议 |
+|------|------|------|
+| 本机 SSE 流式中 | 仍可能 force loadDetail | **禁止** loadDetail；agents 3s；pending/plan 6s |
+| 忙碌但无本机 SSE（刷新恢复） | agents+detail 2s | agents 2s + detail 3–4s（detail 略稀，因无流式） |
+| 空闲盯着对话 | 4s | **8s** |
+| 无 Task Plan | 2s | **8–10s** |
+| 有 awaiting_confirm | 2s | **保持 2s** |
+| 页面 hidden | 仍跑 | **停** |
+
+### 4.4 交错发车
+
+同一「忙 2s」节拍内：T+0 `loadAgents`，T+400ms `loadDetail`（若需要），T+800ms pending——降低同一帧多请求+多 setState 尖峰。
+
+### 4.5 感官不损的补偿
+
+- 用户操作（发送 / 终止 / 切员工 / 确认计划 / 审批）后 **立即 kick** 一轮，不靠等下个 interval。
+- SSE `done` / `error` / `task_queue_next` / 权限事件仍即时 UI；轮询只兜底。
+- 本地 1s tick 只更新秒表与授权倒计时文案。
+
+### 4.6 涉及文件
+
+- 主改：`web/src/ManagedAgents.jsx`（多处 `useEffect` 轮询）
+- 次改：`web/src/TaskQueueRail.jsx`（4s → 跟随 visible + 单飞；busy 时可 4s，idle 8s）
+- 可选：`web/src/ModernWorkspace.jsx`（会话列表 5s 与主面板错峰或 visible 门闩）
+- 新增（建议）：`web/src/pollScheduler.js`（singleFlight + 可见性订阅），配 `pollScheduler.test.js`
+- 后端：本次可不改；若 Phase B 再加 `GET /admin/agents/:id/desk-snapshot` 聚合接口。
+
+## 5. 变更影响
+
+| 模块 | 原设计 | 新设计 |
+|------|--------|--------|
+| 主轮询 | 独立 interval，忙 2s 双请求 | 可见性门闩 + 单飞 + 交错 + 自适应 |
+| Task Plan | 激活即 2s | 无 plan 降频，有 awaiting 保持 2s |
+| 隐藏窗口 | 继续打满 | 暂停网络轮询，回前台补拉 |
+| SSE 回合 | 部分跳过 detail | 明确跳过 detail，备份轮询变稀 |
+| 终止 / 队列 | 不在本方案改语义 | 保持；终止后仍可 kick 刷新 |
+
+风险：降频后「手机确认计划 → PC 收起」最坏多等数秒——用 awaiting 时 2s + 回前台 kick 对冲。
+风险：审批 SSE 丢事件——保留 pending 备份轮询（变稀但不删）+ focus/visible 补拉。
+
+## 6. 开发 TODO（可执行任务）
+
+### Task 1: pollScheduler 工具与单测
+
+**Files:**
+- Create: `web/src/pollScheduler.js`
+- Create: `web/src/pollScheduler.test.js`
+
+**Produces:**
+- `createSingleFlight()` → `(key, fn) => Promise`：同 key 飞行中再触发只标记 pending，结束后补跑最后一次
+- `subscribePageVisible(onChange)` → `unsubscribe`：监听 `visibilitychange`；回调参数为 `boolean`（`document.visibilityState === 'visible'`）；订阅时立即同步一次当前可见性
+- 导出常量：`POLL_IDLE_MS = 8000`，`POLL_BUSY_MS = 2000`，`POLL_SSE_BACKUP_MS = 6000`，`POLL_TASK_PLAN_IDLE_MS = 10000`，`POLL_TASK_PLAN_AWAITING_MS = 2000`，`PC_VIEWER_VISIBLE_MS = 8000`，`PC_VIEWER_HIDDEN_MS = 30000`
+
+- [ ] 写失败单测：`createSingleFlight` 并发三次同 key，`fn` 只执行 2 次（首次 + pending 补跑）
+- [ ] 实现 `pollScheduler.js` 使测试通过；再补 `subscribePageVisible` 基础断言
+- [ ] 运行 vitest：`cd web && npm test -- --run pollScheduler`
+- [ ] Commit：`feat(perf): 新增 pollScheduler 单飞与可见性订阅`
+
+### Task 2: ManagedAgents 主轮询门闩 + 单飞 + 三档间隔
+
+**Files:**
+- Modify: `web/src/ManagedAgents.jsx`（主轮询、`pc-viewer`、操作后 kick）
+
+**Consumes:** Task 1 的 API 与常量
+**Confirmed:** 空闲主轮询 **8s**；`pc-viewer` 可见 **8s** / 隐藏 **30s**
+
+- [ ] `hidden` 时不发 `loadAgents`/`loadDetail`；`visible` 立刻 kick
+- [ ] `loadAgents`/`loadDetail` 经 singleFlight；SSE 存活（有 `abort`）时禁止 `loadDetail`
+- [ ] 间隔：忙碌 `POLL_BUSY_MS`；空闲 `POLL_IDLE_MS`（8s）；SSE 时 agents 可 3s
+- [ ] agents 与 detail 错开约 400ms；`pc-viewer` 可见 8s / 隐藏 30s
+- [ ] 发送 / 终止 / 切员工后 `kick()`
+- [ ] Commit：`feat(perf): 数字员工主轮询可见性门闩与空闲8s`
+
+### Task 3: Task Plan / pending / runtime 接入门闩与自适应
+
+**Files:**
+- Modify: `web/src/ManagedAgents.jsx`
+
+**Consumes:** Task 1 工具；与 Task 2 共用 visible 门闩
+
+- [ ] 三路：hidden 暂停、singleFlight、visible 补拉
+- [ ] Task Plan：无 plan → 10s；`awaiting_confirm` → 2s
+- [ ] pending / runtime：SSE 存活时 6s 备份
+- [ ] Commit：`feat(perf): TaskPlan与审批备份轮询自适应降频`
+
+### Task 4: TaskQueueRail + ModernWorkspace 对齐门闩
+
+**Files:**
+- Modify: `web/src/TaskQueueRail.jsx`
+- Modify: `web/src/ModernWorkspace.jsx`
+
+- [ ] 可见性暂停/恢复；空闲对齐约 8s；单飞防叠
+- [ ] Commit：`feat(perf): 队列轨与侧栏会话列表跟随可见性降频`
+
+### Task 5: 验收清单
+
+- [ ] 忙碌 60s Network 对比（目标降 ≥40%）
+- [ ] 切后台：除 `pc-viewer` 30s 外停轮询；回前台补拉
+- [ ] 计划跨端收起、刷新恢复 running、终止无幽灵忙碌、授权卡仍出
+- [ ] 结果写入 `.superpowers/sdd/task-5-report.md`
+
+### Task 6: changelog
+
+**Files:**
+- Modify: `web/src/changelog.js`
+
+- [ ] 记一条轮询降频 / 隐藏窗口 30s 慢心跳（无功能删减）
+- [ ] Commit：`docs(changelog): 记录数字员工轮询性能优化`
+
+## 7. 待确认事项
+
+- [x] 窗口完全隐藏时，`pc-viewer`：**30s 慢心跳**
+- [x] 空闲主轮询：**8s**
+- [ ] Phase B desk-snapshot 聚合接口（本次不做）
+
+---
+
+## 推荐落地顺序
+
+```text
+P0  可见性暂停 + 回前台补拉（pc-viewer 例外 30s）
+P0  loadAgents/loadDetail 单飞
+P1  SSE 存活时禁 detail、备份变稀
+P1  Task Plan 自适应
+P2  交错调度 / 空闲 8s
+P2  侧栏与队列轨对齐门闩
+```
+
+**原则：** 先砍「看不见还在打」和「上一次没完又打」，再动间隔；关键路径靠事件 + kick 保感官。

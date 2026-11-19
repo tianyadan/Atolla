@@ -1056,6 +1056,31 @@ func applyCancelledAskOutput(ctxErr error, out string, runErr error) (string, er
 	return trimmed, nil
 }
 
+
+// ResetStuckManagedAgentsOnBoot 进程重启后无 live run：把残留 running/busy 等收回 idle，避免「终止无效」。
+func (s *Service) ResetStuckManagedAgentsOnBoot(ctx context.Context) {
+	if s == nil || s.Store == nil {
+		return
+	}
+	agents, err := s.Store.ListManagedAgents(ctx)
+	if err != nil {
+		log.Printf("boot reset agents: list failed: %v", err)
+		return
+	}
+	n := 0
+	for _, a := range agents {
+		st := strings.ToLower(strings.TrimSpace(a.Status))
+		switch st {
+		case "running", "busy", "waiting", "compressing", "initializing", "插话中":
+			_ = s.setManagedAgentStatus(ctx, a.ID, "idle", "reset on boot", 0, a.ConversationID)
+			n++
+		}
+	}
+	if n > 0 {
+		log.Printf("boot reset %d stuck managed agent status -> idle", n)
+	}
+}
+
 // StopManaged 终止该数字员工当前进行中的 Ask。
 func (s *Service) StopManaged(agentID int64) bool {
 	s.runMu.Lock()
@@ -1064,19 +1089,19 @@ func (s *Service) StopManaged(agentID int64) bool {
 		delete(s.runs, agentID)
 	}
 	s.runMu.Unlock()
-	if !ok || slot == nil {
-		return false
+	if ok && slot != nil {
+		slot.cancel()
 	}
-	slot.cancel()
 	a, _ := s.Store.GetManagedAgent(context.Background(), agentID)
 	convID := int64(0)
 	if a != nil {
 		convID = a.ConversationID
 	}
+	// 即使本进程无 live slot（幽灵 running / 跨进程），也强制回 idle 并释放占用。
 	_ = s.setManagedAgentStatus(context.Background(), agentID, "idle", "stopped by user", 0, convID)
 	s.notifyAgentTerminal(context.Background(), agentID)
 	s.ReleaseOccupancy(context.Background(), agentID)
-	return true
+	return ok && slot != nil
 }
 
 // SetAutoReview persists AI auto-review and updates the live Hub for the agent conversation.

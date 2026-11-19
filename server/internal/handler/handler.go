@@ -161,7 +161,9 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/db/status", h.AdminDBStatus)
 			adm.POST("/admin/db/switch", h.AdminDBSwitch)
+			adm.POST("/admin/db/sqlite-path", h.AdminDBSQLitePath)
 			adm.GET("/admin/db/migrate-progress", h.AdminDBMigrateProgress)
+			adm.POST("/admin/pick-sqlite-file", h.AdminPickSQLiteFile)
 
 			adm.GET("/admin/notify-prefs", h.AdminNotifyPrefsGet)
 			adm.PUT("/admin/notify-prefs", h.AdminNotifyPrefsPut)

@@ -16,11 +16,27 @@ cd web && npm install
 cd ../desktop && npm install
 ```
 
-Start Vite in one terminal, then start Electron in another. The development Electron runtime starts the Go backend at `127.0.0.1:8080` so Vite's existing `/api` proxy remains valid.
+### One-shot hot reload (recommended)
+
+```bash
+./scripts/dev-electron.sh
+# optional: also relaunch when server/*.go changes
+./scripts/dev-electron.sh --watch-go
+```
+
+This starts (or reuses) Vite on `http://127.0.0.1:5173` and Electron with:
+
+- **Web / React**: Vite HMR (edit `web/` without restarting the window)
+- **Electron main / preload / runtime**: file watch → automatic Electron relaunch
+- **Go backend**: started by Electron on `127.0.0.1:8080` (`go run`); use `--watch-go` to relaunch after `.go` edits
+
+Do **not** run `scripts/start.sh` at the same time (port `8080` / `5173` conflict).
+
+### Manual two-terminal flow
 
 ```bash
 cd web && npm run dev
-cd ../desktop && npm run dev
+cd ../desktop && npm run dev   # watches main/preload/runtime; expects Vite on :5173
 ```
 
 ## Package an arm64 DMG

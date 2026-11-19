@@ -428,3 +428,81 @@
   .ma-panel-focus .ma-chatbox { max-height: none; }
 }
 
+/*
+ * Electron macOS hiddenInset：
+ * - 侧栏顶栏自身 padding-top 把「数字员工」顶到红绿灯下方（padding 区域也可拖）
+ * - 聊天区顶部透明拖条，方便拖动窗口
+ */
+html.atolla-electron .modern-recents {
+  padding-top: 0;
+}
+html.atolla-electron .modern-sidebar-top {
+  box-sizing: border-box;
+  /* 红绿灯约占 12–52px 高；顶内边距留给拖拽与避让 */
+  padding: 44px 8px 8px;
+  min-height: 80px;
+  align-items: flex-end;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+html.atolla-electron .modern-sidebar-top button,
+html.atolla-electron .modern-sidebar-top a,
+html.atolla-electron .modern-sidebar-top input,
+html.atolla-electron .modern-sidebar-actions,
+html.atolla-electron .modern-more-wrap,
+html.atolla-electron .modern-more-menu {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+/* 折叠竖排时同样避让顶部红绿灯 */
+html.atolla-electron .modern-workspace.is-collapsed .modern-sidebar-top {
+  padding-top: 44px;
+  min-height: 120px;
+}
+/* 聊天主区顶部可拖（避开工具按钮） */
+html.atolla-electron .modern-chat-stage {
+  position: relative;
+}
+html.atolla-electron .modern-chat-stage::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  z-index: 6;
+  -webkit-app-region: drag;
+  app-region: drag;
+  pointer-events: auto;
+}
+html.atolla-electron .ma-detail-head,
+html.atolla-electron .ma-detail-tools,
+html.atolla-electron .ma-detail-head button,
+html.atolla-electron .ma-detail-tools button {
+  position: relative;
+  z-index: 7;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+html.atolla-electron .modern-module-bar {
+  box-sizing: border-box;
+  padding-top: 44px;
+  min-height: 72px;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+html.atolla-electron .modern-module-bar button {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* 输入区/终止按钮绝不可拖，避免误吞点击 */
+html.atolla-electron .ma-composer,
+html.atolla-electron .ma-composer-wrap,
+html.atolla-electron .ma-composer-actions,
+html.atolla-electron .ma-composer-stop,
+html.atolla-electron .ma-composer-interrupt,
+html.atolla-electron .ma-composer-send {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}

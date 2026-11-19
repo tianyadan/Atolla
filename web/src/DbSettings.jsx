@@ -11,6 +11,14 @@ const DRIVER_IDS = [
   { id: 'mysql', name: 'MySQL' },
 ]
 
+/** 路径是否可作为 SQLite 文件（绝对路径且以 .db 结尾）。 */
+function looksLikeSQLitePath(raw) {
+  const p = String(raw || '').trim()
+  if (!p) return false
+  if (!(p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p))) return false
+  return /\.db$/i.test(p)
+}
+
 /** 设置页「数据库」：紧凑列表 + 迁移切换，视觉对齐其它设置分组。 */
 export default function DbSettings({ authHeaders, onUnauthorized, active }) {
   const { t } = useLocale()
@@ -24,11 +32,13 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [hint, setHint] = useState('')
-  /** switch：迁移确认；mysql-config：未就绪时的连接配置说明 */
-  const [modal, setModal] = useState(null) // { kind: 'switch'|'mysql-config', driver? }
+  /** switch：迁移确认；mysql-config：未就绪时的连接配置说明；sqlite-path：路径切换确认 */
+  const [modal, setModal] = useState(null) // { kind, driver?, path? }
   const [ack, setAck] = useState(false)
   const [progress, setProgress] = useState(null)
   const [copiedKey, setCopiedKey] = useState('')
+  const [pathDraft, setPathDraft] = useState('')
+  const [pickingFile, setPickingFile] = useState(false)
 
   /** 拉取状态。 */
   async function load() {
@@ -48,6 +58,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
         throw new Error(data.error || res.statusText || `HTTP ${res.status}`)
       }
       setSt(data)
+      if (data?.sqlite_path) setPathDraft(data.sqlite_path)
     } catch (e) {
       setErr(String(e.message || e))
     }
@@ -116,21 +127,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || res.statusText)
       setModal(null)
-      if (data.restart === 'pending') {
-        setHint(t('settings.db.savedRestarting'))
-        const ok = await waitHealth(60000)
-        if (ok) {
-          setHint(t('settings.db.restartDone'))
-          await load()
-        } else {
-          setHint(t('settings.db.restartSlow', { cmd: data.command || './scripts/restart.sh' }))
-        }
-      } else if (data.restart === 'manual') {
-        setHint(t('settings.db.manualRestart', { cmd: data.command || './scripts/restart.sh' }))
-      } else {
-        setHint(data.message || t('settings.db.saved'))
-        await load()
-      }
+      await handleRestartResult(data)
     } catch (e) {
       setErr(String(e.message || e))
     } finally {
@@ -138,6 +135,148 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
       setBusy(false)
       setProgress(null)
     }
+  }
+
+  /** 应用路径：有数据时弹确认，否则直接提交。 */
+  function requestApplyPath() {
+    if (busy) return
+    const next = String(pathDraft || '').trim()
+    if (!looksLikeSQLitePath(next)) {
+      setErr(t('settings.db.pathNeedAbs'))
+      return
+    }
+    const cur = String(st?.sqlite_path || '').trim()
+    if (cur && next === cur) {
+      setHint(t('settings.db.pathUnchanged'))
+      setErr('')
+      return
+    }
+    setErr('')
+    setHint('')
+    if (st?.has_data) {
+      setAck(false)
+      setModal({ kind: 'sqlite-path', path: next })
+      return
+    }
+    void doSetSQLitePath(next, false)
+  }
+
+  /** 提交 SQLite 路径。 */
+  async function doSetSQLitePath(path, migrate) {
+    setBusy(true)
+    setErr('')
+    setHint(migrate ? t('settings.db.migrating') : t('settings.db.switching'))
+    setProgress(migrate ? { phase: 'preparing', percent: 0 } : null)
+    let poll
+    if (migrate) {
+      poll = setInterval(async () => {
+        try {
+          const res = await fetch(`${API}/admin/db/migrate-progress`, { headers: authHeaders() })
+          if (res.ok) setProgress(await res.json())
+        } catch {
+          /* ignore */
+        }
+      }, 400)
+    }
+    try {
+      const res = await fetch(`${API}/admin/db/sqlite-path`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, migrate: !!migrate }),
+      })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || res.statusText)
+      setModal(null)
+      await handleRestartResult(data)
+    } catch (e) {
+      setErr(String(e.message || e))
+    } finally {
+      if (poll) clearInterval(poll)
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+
+  /** 处理保存后的重启：Electron 整应用 relaunch；Web 走后端 restart.sh。 */
+  async function handleRestartResult(data) {
+    const needsRestart = data.restart === 'pending' || data.restart === 'manual' || data.restart === 'desktop'
+    const desktop = typeof window !== 'undefined' ? window.atollaDesktop : null
+    if (needsRestart && desktop && typeof desktop.relaunchApp === 'function') {
+      setHint(t('settings.db.restartingApp'))
+      try {
+        await desktop.relaunchApp()
+      } catch (e) {
+        setErr(String(e.message || e) || t('settings.db.relaunchFail'))
+        setHint('')
+      }
+      return
+    }
+    if (data.restart === 'pending') {
+      setHint(t('settings.db.savedRestarting'))
+      const ok = await waitHealth(60000)
+      if (ok) {
+        setHint(t('settings.db.restartDone'))
+        await load()
+      } else {
+        setHint(t('settings.db.restartSlow', { cmd: data.command || './scripts/restart.sh' }))
+      }
+    } else if (data.restart === 'manual') {
+      setHint(t('settings.db.manualRestart', { cmd: data.command || './scripts/restart.sh' }))
+    } else if (data.restart === 'desktop') {
+      // 非 Electron 渲染进程收到 desktop（少见）：提示用户自行重启应用
+      setHint(t('settings.db.restartDesktopManual'))
+    } else {
+      setHint(data.message || t('settings.db.saved'))
+      await load()
+    }
+  }
+
+  /** 原生选文件：优先 Electron IPC，其次本机 osascript API。 */
+  async function pickSQLiteFile(mode) {
+    if (busy || pickingFile) return
+    setPickingFile(true)
+    setErr('')
+    try {
+      const desktop = typeof window !== 'undefined' ? window.atollaDesktop : null
+      if (desktop && typeof desktop.pickSQLiteFile === 'function') {
+        const r = await desktop.pickSQLiteFile(mode)
+        if (r?.cancelled) return
+        if (r?.error) throw new Error(r.error)
+        const path = String(r?.path || '').trim()
+        if (path) setPathDraft(path)
+        return
+      }
+      const res = await fetch(`${API}/admin/pick-sqlite-file`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: mode === 'save' ? 'save' : 'open',
+          prompt: mode === 'save' ? t('settings.db.pickSavePrompt') : t('settings.db.pickOpenPrompt'),
+        }),
+      })
+      if (res.status === 401) {
+        onUnauthorized?.()
+        return
+      }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || res.statusText)
+      if (d.cancelled) return
+      const path = String(d.path || '').trim()
+      if (path) setPathDraft(path)
+    } catch (e) {
+      setErr(String(e.message || e))
+    } finally {
+      setPickingFile(false)
+    }
+  }
+
+  function useDefaultPath() {
+    const def = st?.sqlite_default_path
+    if (def) setPathDraft(def)
   }
 
   async function copyField(key, text) {
@@ -151,6 +290,7 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
   const mysqlReady = !!(st?.mysql_reachable || st?.docker_available)
   const sqlitePath = st?.sqlite_path || ''
   const dsn = st?.dsn_display || ''
+  const showPathEditor = current === 'sqlite'
 
   return (
     <SettingsFold
@@ -211,6 +351,42 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
             )
           })}
         </ul>
+
+        {showPathEditor ? (
+          <div className="db-path-editor">
+            <label className="db-path-label" htmlFor="db-sqlite-path">
+              {t('settings.db.sqlitePath')}
+            </label>
+            <p className="db-path-hint">{t('settings.db.sqlitePathHint')}</p>
+            <div className="db-path-row">
+              <input
+                id="db-sqlite-path"
+                className="db-path-input"
+                type="text"
+                value={pathDraft}
+                disabled={busy}
+                placeholder={t('settings.db.sqlitePathPh')}
+                onChange={(e) => setPathDraft(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </div>
+            <div className="db-path-actions">
+              <button type="button" className="ghost" disabled={busy || pickingFile} onClick={() => void pickSQLiteFile('open')}>
+                {t('settings.db.browseFile')}
+              </button>
+              <button type="button" className="ghost" disabled={busy || pickingFile} onClick={() => void pickSQLiteFile('save')}>
+                {t('settings.db.newFile')}
+              </button>
+              <button type="button" className="ghost" disabled={busy || !st?.sqlite_default_path} onClick={useDefaultPath}>
+                {t('settings.db.useDefault')}
+              </button>
+              <button type="button" className="gc-meet-btn" disabled={busy} onClick={requestApplyPath}>
+                {t('settings.db.applyPath')}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <button
           type="button"
@@ -349,6 +525,48 @@ export default function DbSettings({ authHeaders, onUnauthorized, active }) {
                 {copiedKey === 'restart' ? t('settings.db.copiedRestart') : t('settings.db.copyRestart')}
               </button>
             ) : null}
+            {err ? <p className="engine-hint" role="alert">{err}</p> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {modal?.kind === 'sqlite-path' ? (
+        <div className="db-modal-backdrop" role="presentation" onClick={() => !busy && setModal(null)}>
+          <div
+            className="db-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="db-path-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="db-path-modal-title">{t('settings.db.pathModalTitle')}</h2>
+            <p className="db-modal-risk">
+              {t('settings.db.pathMigrateHint')}
+            </p>
+            <p className="db-modal-risk">
+              <code>{modal.path}</code>
+            </p>
+            <div className="db-modal-actions">
+              <button
+                type="button"
+                className="engine-recheck"
+                disabled={busy}
+                onClick={() => void doSetSQLitePath(modal.path, false)}
+              >
+                {t('settings.db.pathUseAsIs')}
+              </button>
+              <button
+                type="button"
+                className="engine-copy"
+                disabled={busy}
+                onClick={() => void doSetSQLitePath(modal.path, true)}
+              >
+                {t('settings.db.pathCopySwitch')}
+              </button>
+              <button type="button" disabled={busy} onClick={() => setModal(null)}>
+                {t('settings.common.cancel')}
+              </button>
+            </div>
             {err ? <p className="engine-hint" role="alert">{err}</p> : null}
           </div>
         </div>
