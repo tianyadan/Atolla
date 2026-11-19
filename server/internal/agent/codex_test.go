@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseCodexJSONLCommandAndMessage(t *testing.T) {
@@ -73,8 +77,54 @@ func TestParseCodexJSONLInvalid(t *testing.T) {
 func TestParseCodexJSONLReasoningChunk(t *testing.T) {
 	line := `{"type":"item.completed","item":{"id":"r1","type":"reasoning","text":"先确认工作区再执行命令"}}`
 	ev, ok := ParseCodexJSONLLine([]byte(line))
-	if !ok || ev.Chunk != "先确认工作区再执行命令" {
+	if !ok || ev.Chunk != "先确认工作区再执行命令" || !ev.Reasoning {
 		t.Fatalf("ev=%+v ok=%v", ev, ok)
+	}
+}
+
+func TestCodexStreamKeepsOnlyLastAgentMessage(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-codex")
+	script := "#!/bin/sh\ncat <<'EOF'\n" +
+		`{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"先看目录"}}` + "\n" +
+		`{"type":"item.started","item":{"id":"2","type":"command_execution","command":"pwd","status":"in_progress"}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"2","type":"command_execution","command":"pwd","aggregated_output":"/tmp\n","exit_code":0,"status":"completed"}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"3","type":"agent_message","text":"最终结论"}}` + "\n" +
+		`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}` + "\n" +
+		"EOF\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var reasoned []string
+	var body []string
+	phaseThinking := false
+	text, _, err := CodexAskMetaExPhase(
+		context.Background(), bin, dir, "", "q", "",
+		func(chunk string) {
+			if phaseThinking {
+				reasoned = append(reasoned, chunk)
+			} else {
+				body = append(body, chunk)
+			}
+		},
+		time.Second*5, nil, nil,
+		func(p PhaseEvent) {
+			phaseThinking = p.Phase == PhaseThinking
+		},
+		"", nil, nil, "workspace-write", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "最终结论" {
+		t.Fatalf("final=%q", text)
+	}
+	if strings.Join(body, "") != "最终结论" {
+		t.Fatalf("body=%v", body)
+	}
+	joined := strings.Join(reasoned, "")
+	if !strings.Contains(joined, "先看目录") {
+		t.Fatalf("reasoned=%v", reasoned)
 	}
 }
 

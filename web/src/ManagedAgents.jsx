@@ -2414,82 +2414,90 @@ export default function ManagedAgentsPanel({
                 {chatLog.length === 0 && !loading && (
                   <p className="empty-chat">给同事下达任务后，需授权的命令会在此确认</p>
                 )}
-                {chatLog.map((m, i) => (
-                  <div key={`${selectedId}-${messageKey(m, i)}`} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
-                    <div className="msg-label">
-                      <span>
-                        {m.role === 'invoke_quote' && (
-                          <JellyAvatar
-                            className="ma-msg-jelly"
-                            color={resolveJellyColor(selected)}
-                            size={16}
-                            state={jellyStateFromAgent(selected)}
-                          />
+                {buildChatDisplayRows(chatLog, loading).map((row) => (
+                  row.kind === 'process' ? (
+                    <ProcessFold
+                      key={`${selectedId}-${row.key}`}
+                      commands={row.cmds}
+                    />
+                  ) : (
+                    <div key={`${selectedId}-${row.key}`} className={`msg ${row.m.role} ${row.m.decision === 'deny' ? 'cmd-denied' : ''} ${row.m.role === 'assistant' ? 'ma-flat' : ''}`}>
+                      <div className="msg-label">
+                        <span>
+                          {row.m.role === 'invoke_quote' && (
+                            <JellyAvatar
+                              className="ma-msg-jelly"
+                              color={resolveJellyColor(selected)}
+                              size={16}
+                              state={jellyStateFromAgent(selected)}
+                            />
+                          )}
+                          {row.m.role === 'user' ? '你'
+                            : row.m.role === 'auto' ? '自动审核'
+                              : row.m.role === 'system' ? '系统'
+                              : row.m.role === 'status' ? '状态'
+                              : row.m.role === 'command'
+                                ? (row.m.decision === 'deny' ? '已拒绝命令' : '已执行命令')
+                                : row.m.role === 'invoke_quote' ? `引用 · ${row.m.calleeName || '同事'}`
+                                  : row.m.role === 'invoke_divider' ? '调用记录'
+                                    : selected.name}
+                        </span>
+                        {row.m.role === 'command' && row.m.decidedBy && (
+                          <span className="cmd-by">{byLabel(row.m.decidedBy)}</span>
                         )}
-                        {m.role === 'user' ? '你'
-                          : m.role === 'auto' ? '自动审核'
-                            : m.role === 'system' ? '系统'
-                            : m.role === 'status' ? '状态'
-                            : m.role === 'command'
-                              ? (m.decision === 'deny' ? '已拒绝命令' : '已执行命令')
-                              : m.role === 'invoke_quote' ? `引用 · ${m.calleeName || '同事'}`
-                                : m.role === 'invoke_divider' ? '调用记录'
-                                  : selected.name}
-                      </span>
-                      {m.role === 'command' && m.decidedBy && (
-                        <span className="cmd-by">{byLabel(m.decidedBy)}</span>
-                      )}
-                      {m.role === 'assistant' && (m.content || '').trim() && (
-                        <CopyTextButton text={m.content} />
-                      )}
-                      {m.replySec > 0 && <span className="reply-sec">{fmtSec(m.replySec)}</span>}
-                    </div>
-                    {m.role === 'auto' ? (
-                      <div className="auto-trace">{m.note || 'AI 已自动放行'} <code>{m.content}</code></div>
-                    ) : m.role === 'command' ? (
-                      <div className="ma-timeline-item ma-timeline-cmd">
-                        <span className="ma-tl-mark" aria-hidden="true">·</span>
-                        <div className="ma-tl-body">
-                          <CmdBlock
-                            content={m.content}
-                            decision={m.decision}
-                            risk={m.risk}
-                            meaning={m.meaning}
-                            note={m.note}
-                          />
+                        {row.m.role === 'assistant' && (row.m.content || '').trim() && (
+                          <CopyTextButton text={row.m.content} />
+                        )}
+                        {row.m.replySec > 0 && <span className="reply-sec">{fmtSec(row.m.replySec)}</span>}
+                      </div>
+                      {row.m.role === 'auto' ? (
+                        <div className="auto-trace">{row.m.note || 'AI 已自动放行'} <code>{row.m.content}</code></div>
+                      ) : row.m.role === 'command' ? (
+                        <div className="ma-timeline-item ma-timeline-cmd">
+                          <span className="ma-tl-mark" aria-hidden="true">·</span>
+                          <div className="ma-tl-body">
+                            <CmdBlock
+                              content={row.m.content}
+                              decision={row.m.decision}
+                              risk={row.m.risk}
+                              meaning={row.m.meaning}
+                              note={row.m.note}
+                              live={loading}
+                            />
+                          </div>
                         </div>
-                      </div>
-                    ) : m.role === 'system' ? (
-                      <div className="ma-system-note">{m.content}</div>
-                    ) : m.role === 'status' ? (
-                      <div className="ma-status-snap">
-                        <pre>{m.content}</pre>
-                      </div>
-                    ) : m.role === 'invoke_quote' ? (
-                      <details className="ma-quote" open={false}>
-                        <summary>{m.calleeName || '同事'} 的结果</summary>
-                        <AgentMarkdown content={m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
-                      </details>
-                    ) : m.role === 'invoke_divider' ? (
-                      <div className="ma-divider-msg">{m.content}</div>
-                    ) : m.role === 'assistant' ? (
-                      <div className="ma-timeline-assistant">
-                        <AgentMarkdown content={m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
-                        {(m.attachments || []).length > 0 && (
-                          <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
-                        )}
-                      </div>
-                    ) : (
-                      <div className="msg-body">
-                        {(m.attachments || []).length > 0 && (
-                          <ChatMessageImages attachments={m.attachments} onOpen={setLightboxSrc} />
-                        )}
-                        {m.content ? (
-                          <StaticHtml html={escapeHtml(m.content)} />
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
+                      ) : row.m.role === 'system' ? (
+                        <div className="ma-system-note">{row.m.content}</div>
+                      ) : row.m.role === 'status' ? (
+                        <div className="ma-status-snap">
+                          <pre>{row.m.content}</pre>
+                        </div>
+                      ) : row.m.role === 'invoke_quote' ? (
+                        <details className="ma-quote" open={false}>
+                          <summary>{row.m.calleeName || '同事'} 的结果</summary>
+                          <AgentMarkdown content={row.m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
+                        </details>
+                      ) : row.m.role === 'invoke_divider' ? (
+                        <div className="ma-divider-msg">{row.m.content}</div>
+                      ) : row.m.role === 'assistant' ? (
+                        <div className="ma-timeline-assistant">
+                          <AgentMarkdown content={row.m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
+                          {(row.m.attachments || []).length > 0 && (
+                            <ChatMessageImages attachments={row.m.attachments} onOpen={setLightboxSrc} />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="msg-body">
+                          {(row.m.attachments || []).length > 0 && (
+                            <ChatMessageImages attachments={row.m.attachments} onOpen={setLightboxSrc} />
+                          )}
+                          {row.m.content ? (
+                            <StaticHtml html={escapeHtml(row.m.content)} />
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  )
                 ))}
                 {permQueue[0] && (
                   <PermCard
@@ -3347,11 +3355,46 @@ function commandPreview(content, max = 72) {
   return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine
 }
 
-/** 命令框：对话时间线默认折叠；审批卡保持展开，避免隐藏待确认内容。 */
-function CmdBlock({ content, risk, meaning, decision, note, startExpanded = false }) {
+/**
+ * 将本轮（最近一条 user 之后）的连续 command 在回合结束后收成「运行过程」折叠块；
+ * 运行中仍逐条展示，便于看命令执行。
+ */
+function buildChatDisplayRows(chatLog, loading) {
+  const list = Array.isArray(chatLog) ? chatLog : []
+  let lastUser = -1
+  for (let k = 0; k < list.length; k++) {
+    if (list[k]?.role === 'user') lastUser = k
+  }
+  const rows = []
+  let i = 0
+  while (i < list.length) {
+    const m = list[i]
+    if (!loading && m?.role === 'command' && i > lastUser) {
+      const cmds = []
+      let j = i
+      while (j < list.length && list[j]?.role === 'command') {
+        cmds.push(list[j])
+        j += 1
+      }
+      rows.push({ kind: 'process', cmds, key: `process-${i}-${cmds.length}` })
+      i = j
+      continue
+    }
+    rows.push({ kind: 'msg', m, key: messageKey(m, i) })
+    i += 1
+  }
+  return rows
+}
+
+/** 命令框：运行中展开；回合结束后自动折叠（仍可点开）。审批卡用 startExpanded。 */
+function CmdBlock({ content, risk, meaning, decision, note, startExpanded = false, live = false }) {
   const r = risk || (decision === 'deny' ? 'high' : 'mid')
   const riskText = ({ low: '无害', mid: '需注意', high: '高风险' })[r] || '需注意'
-  const [open, setOpen] = useState(startExpanded)
+  const [open, setOpen] = useState(!!startExpanded || !!live)
+  useEffect(() => {
+    if (live) setOpen(true)
+    else if (!startExpanded) setOpen(false)
+  }, [live, startExpanded])
   if (!open) {
     return (
       <button
@@ -3464,6 +3507,45 @@ function ThinkingFold({ text, live }) {
         <span className="ma-think-chars">{t('chat.thinking.chars', { n: chars })}</span>
       </summary>
       <div className="ma-think-body" ref={bodyRef}>{text}</div>
+    </details>
+  )
+}
+
+/** 本轮执行过程折叠：回合结束后收起命令块，避免压住最终回复 */
+function ProcessFold({ commands }) {
+  const { t } = useLocale()
+  const cmds = Array.isArray(commands) ? commands : []
+  if (!cmds.length) return null
+  return (
+    <details className="ma-think-fold ma-process-fold">
+      <summary>
+        <span className="ma-think-caret" aria-hidden="true">›</span>
+        <span className="ma-think-title">{t('chat.process.done')}</span>
+        <span className="ma-think-chars">{t('chat.process.count', { n: cmds.length })}</span>
+      </summary>
+      <div className="ma-process-body">
+        {cmds.map((m, idx) => (
+          <div key={messageKey(m, idx)} className={`msg command ${m.decision === 'deny' ? 'cmd-denied' : ''}`}>
+            <div className="msg-label">
+              <span>{m.decision === 'deny' ? t('chat.process.denied') : t('chat.process.ran')}</span>
+              {m.decidedBy ? <span className="cmd-by">{byLabel(m.decidedBy)}</span> : null}
+            </div>
+            <div className="ma-timeline-item ma-timeline-cmd">
+              <span className="ma-tl-mark" aria-hidden="true">·</span>
+              <div className="ma-tl-body">
+                <CmdBlock
+                  content={m.content}
+                  decision={m.decision}
+                  risk={m.risk}
+                  meaning={m.meaning}
+                  note={m.note}
+                  live={false}
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </details>
   )
 }

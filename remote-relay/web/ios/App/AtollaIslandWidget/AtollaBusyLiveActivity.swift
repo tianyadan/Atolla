@@ -16,6 +16,8 @@ struct AtollaBusyLiveActivity: Widget {
       IslandLockScreenBody(state: context.state)
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        // 仅在真实内容更新时执行一次短过渡，不依赖高频 Activity.update。
+        .animation(.easeInOut(duration: 0.24), value: context.state.updatedAt)
         .activityBackgroundTint(Color.black.opacity(0.92))
         .activitySystemActionForegroundColor(.white)
     } dynamicIsland: { context in
@@ -195,6 +197,8 @@ private struct IslandStatusIcon: View {
         state: .idle,
         animPhase: 0
       )
+      .id("\(kind)-\(item.workStatus)-\(item.progress / 5)")
+      .transition(.opacity.combined(with: .scale(scale: 0.92)))
     } else {
       Image(systemName: statusSymbol(kind))
         .font(.system(size: size, weight: .semibold))

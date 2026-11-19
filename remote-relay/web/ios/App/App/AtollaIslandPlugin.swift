@@ -6,11 +6,11 @@ import os.log
 
 /**
  * Capacitor 插件：优先级事件 → 单个灵动岛。
- * Phase1（无 APNs）：
+ * 当前阶段（无 APNs）：
  * - 前台可创建/更新 Live Activity；
- * - 有活动时每 5s 发 refreshNeeded + 推一次 ContentState，展开岛/锁屏可更新步骤；
- * - 进后台：停假跳动；原生拉镜像刷新 current_task，空闲则 end（不依赖 WebView）；
- * - 回前台立刻校准；前台任务结束仍由 JS endAll。
+ * - 状态变化时更新，普通运行事件做阈值过滤与短窗口合并；
+ * - 进后台后停止轮询，仅保留最后一次真实状态并标记 stale；
+ * - 回前台由 JS 立刻校准，前台另有 30s 低频兜底。
  */
 @objc(AtollaIslandPlugin)
 public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -28,12 +28,7 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   private let currentSchemaVersion = 5
   /// 前台超过此时长未收到 JS 同步，视为孤儿活动并下岛
   private let maxOrphanAge: TimeInterval = 180
-  /// 展开岛 / 锁屏步骤刷新间隔（秒）
-  private let contentRefreshInterval: TimeInterval = 5
-  private var animTimer: Timer?
   private var orphanTimer: Timer?
-  private var contentRefreshTimer: Timer?
-  private var animPhase: Int = 0
   private var activeKind: String = ""
   private var lastItems: [AtollaBusyAttributes.IslandItemSlice] = []
   private var lastCount: Int = 0
@@ -41,9 +36,10 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   private var lastMoreDeepLink: String = ""
   private var lastJSSyncAt: Date?
   private var syncPaused: Bool = false
-  private var bgTask: UIBackgroundTaskIdentifier = .invalid
+  private var lastCommittedState: AtollaBusyAttributes.ContentState?
+  private var pendingUpdate: DispatchWorkItem?
 
-  /// 监听前后台：后台停跳动，保留 5s 内容刷新；前台立刻校准
+  /// 监听前后台：后台停止本地刷新；前台由 Web 层立即校准。
   override public func load() {
     super.load()
     NotificationCenter.default.addObserver(
@@ -65,21 +61,15 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   }
 
   @objc private func onAppBackground() {
-    // 停假跳动；开启 background task，尽量撑住 5s 刷新直到系统回收
-    stopAnimTimer()
-    beginIslandBackgroundTask()
     Task { @MainActor in
       await self.markSyncPausedForBackground(reason: "didEnterBackground")
-      self.ensureContentRefreshTimer()
     }
   }
 
   @objc private func onAppForeground() {
-    endBackgroundTask()
-    // 立刻把 Activity 拉回前台态，并继续 5s 刷新（有活动时）
+    // 先恢复计时展示，随后由 Web 层拉取一次最新业务状态。
     Task { @MainActor in
       await self.clearSyncPausedAndRefresh(reason: "willEnterForeground")
-      self.ensureContentRefreshTimer()
     }
   }
 
@@ -112,7 +102,6 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     let authEnabled = ActivityAuthorizationInfo().areActivitiesEnabled
 
     if count <= 0 || items.isEmpty {
-      stopAnimTimer()
       Task { @MainActor in
         os_log("syncState empty → endAll auth=%{public}@", log: self.log, type: .info, authEnabled ? "1" : "0")
         await self.endAllActivitiesNow(reason: "js-empty")
@@ -139,27 +128,28 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
         self.lastMoreDeepLink = moreDeepLink
         self.noteJSSync()
         let state = self.makeState()
-        let stale = self.contentStaleDate()
         // 后台延迟 dismiss 后可能仍残留 ended 活动，先清掉再建
         if let existing = self.currentActivity(), existing.activityState == .active {
-          await existing.update(ActivityContent(state: state, staleDate: stale))
           UserDefaults.standard.set(self.currentSchemaVersion, forKey: self.schemaVersionKey)
-          if appActive {
-            self.updateAnimTimer()
-          } else {
-            self.stopAnimTimer()
-          }
-          self.ensureContentRefreshTimer()
+          let result = self.scheduleOrCommitUpdate(activity: existing, state: state)
           os_log(
-            "syncState updated id=%{public}@ kind=%{public}@ paused=%{public}@ count=%{public}d",
+            "syncState %{public}@ id=%{public}@ kind=%{public}@ paused=%{public}@ count=%{public}d",
             log: self.log,
             type: .info,
+            result,
             existing.id,
             kind,
             self.syncPaused ? "1" : "0",
             self.lastCount
           )
-          call.resolve(["ok": true, "updated": true, "activityId": existing.id, "syncPaused": self.syncPaused])
+          call.resolve([
+            "ok": true,
+            "updated": result == "updated",
+            "queued": result == "queued",
+            "skipped": result == "skipped",
+            "activityId": existing.id,
+            "syncPaused": self.syncPaused,
+          ])
           return
         }
         if !Activity<AtollaBusyAttributes>.activities.isEmpty {
@@ -191,8 +181,7 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
         )
         UserDefaults.standard.set(activity.id, forKey: self.activityIdKey)
         UserDefaults.standard.set(self.currentSchemaVersion, forKey: self.schemaVersionKey)
-        self.updateAnimTimer()
-        self.ensureContentRefreshTimer()
+        self.lastCommittedState = self.makeState()
         os_log(
           "syncState started id=%{public}@ kind=%{public}@ count=%{public}d",
           log: self.log,
@@ -210,7 +199,6 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   }
 
   @objc func endAll(_ call: CAPPluginCall) {
-    stopAnimTimer()
     if #available(iOS 16.2, *) {
       Task { @MainActor in
         await self.endAllActivitiesNow(reason: "js-endAll")
@@ -221,7 +209,7 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     call.resolve(["ok": true])
   }
 
-  // MARK: - 动画相位 Timer（灵动岛依赖 Activity.update，不能靠 Widget TimelineView）
+  // MARK: - 状态生成与更新节流
 
   private func makeState() -> AtollaBusyAttributes.ContentState {
     // 后台暂停时把耗时写成静态 durationMs，锁屏不再用本地秒表狂奔
@@ -230,7 +218,8 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
       activeKind: activeKind,
       count: lastCount,
       items: items,
-      animPhase: syncPaused ? 0 : animPhase,
+      // 保留字段以兼容既有 Activity schema；不再用相位驱动高频刷新。
+      animPhase: 0,
       updatedAt: lastJSSyncAt?.timeIntervalSince1970 ?? Date().timeIntervalSince1970,
       presentation: lastPresentation,
       moreDeepLink: lastMoreDeepLink,
@@ -276,60 +265,118 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     return Date().addingTimeInterval(seconds)
   }
 
-  private func updateAnimTimer() {
-    // 仅前台且未暂停的 running/task_plan 跳动
-    if !syncPaused,
-       (activeKind == "running" || activeKind == "task_plan"),
-       UIApplication.shared.applicationState == .active {
-      startAnimTimer()
-    } else {
-      stopAnimTimer()
+  /// 已存在的活动只在展示内容确实变化时更新；运行态事件合并 2 秒。
+  @available(iOS 16.2, *)
+  @MainActor
+  private func scheduleOrCommitUpdate(
+    activity: Activity<AtollaBusyAttributes>,
+    state: AtollaBusyAttributes.ContentState
+  ) -> String {
+    guard Self.hasMeaningfulDisplayChange(from: lastCommittedState, to: state) else {
+      return "skipped"
     }
+
+    if Self.requiresImmediateUpdate(state.activeKind) {
+      cancelPendingUpdate()
+      commitUpdate(activity: activity, state: state, reason: "priority-event")
+      return "updated"
+    }
+
+    pendingUpdate?.cancel()
+    let work = DispatchWorkItem { [weak self, weak activity] in
+      guard let self, let activity else { return }
+      Task { @MainActor in
+        self.pendingUpdate = nil
+        let latest = self.makeState()
+        guard Self.hasMeaningfulDisplayChange(from: self.lastCommittedState, to: latest) else {
+          return
+        }
+        self.commitUpdate(activity: activity, state: latest, reason: "coalesced-event")
+      }
+    }
+    pendingUpdate = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    return "queued"
   }
 
-  private func startAnimTimer() {
-    stopAnimTimer()
-    // 对齐 PC jelly-jump 0.6s 一轮：0.3s 落地↔腾空翻转，SwiftUI easeInOut 插值成上下弹
-    let timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-      self?.tickAnim()
-    }
-    RunLoop.main.add(timer, forMode: .common)
-    animTimer = timer
-  }
-
-  private func stopAnimTimer() {
-    animTimer?.invalidate()
-    animTimer = nil
-  }
-
-  private func tickAnim() {
-    guard #available(iOS 16.2, *) else { return }
-    guard !syncPaused, (activeKind == "running" || activeKind == "task_plan"), !lastItems.isEmpty else {
-      stopAnimTimer()
-      return
-    }
-    if UIApplication.shared.applicationState != .active {
-      stopAnimTimer()
-      return
-    }
-    // 仅 0/1：上下跳，禁止 0...7 横滑切帧
-    animPhase = (animPhase + 1) % 2
-    let state = makeState()
+  @available(iOS 16.2, *)
+  @MainActor
+  private func commitUpdate(
+    activity: Activity<AtollaBusyAttributes>,
+    state: AtollaBusyAttributes.ContentState,
+    reason: String
+  ) {
+    lastCommittedState = state
     let stale = contentStaleDate()
     Task { @MainActor in
-      guard let activity = self.currentActivity() else {
-        self.stopAnimTimer()
-        return
-      }
       await activity.update(ActivityContent(state: state, staleDate: stale))
+      os_log(
+        "activity update id=%{public}@ kind=%{public}@ reason=%{public}@",
+        log: self.log,
+        type: .info,
+        activity.id,
+        state.activeKind,
+        reason
+      )
     }
   }
 
-  /// JS 每次成功 sync 打点；启动孤儿巡检与 5s 内容刷新
+  /// 错误、审批和终态不能被普通运行事件延迟。
+  private static func requiresImmediateUpdate(_ kind: String) -> Bool {
+    kind == "error" || kind == "approval" || kind == "completed"
+  }
+
+  /// 排除更新时间和动画相位；普通进度不足 5% 时不唤醒 ActivityKit。
+  private static func hasMeaningfulDisplayChange(
+    from previous: AtollaBusyAttributes.ContentState?,
+    to next: AtollaBusyAttributes.ContentState
+  ) -> Bool {
+    guard let previous else { return true }
+    guard previous.activeKind == next.activeKind,
+          previous.count == next.count,
+          previous.presentation == next.presentation,
+          previous.moreDeepLink == next.moreDeepLink,
+          previous.syncPaused == next.syncPaused,
+          previous.items.count == next.items.count else {
+      return true
+    }
+
+    for (old, new) in zip(previous.items, next.items) {
+      guard old.id == new.id,
+            old.kind == new.kind,
+            old.agentName == new.agentName,
+            old.department == new.department,
+            old.occurredAt == new.occurredAt,
+            old.expiresAt == new.expiresAt,
+            old.summary == new.summary,
+            old.workStatus == new.workStatus,
+            old.deepLink == new.deepLink,
+            old.jellyColor == new.jellyColor,
+            old.planPhase == new.planPhase,
+            old.planStepTitle == new.planStepTitle,
+            old.planCurrent == new.planCurrent,
+            old.planTotal == new.planTotal else {
+        return true
+      }
+      // 有起始时间时由系统计时视图刷新，durationMs 变化不应唤醒 ActivityKit。
+      let usesSystemTimer = (new.kind == "running" || new.kind == "task_plan") && new.occurredAt > 0
+      if !usesSystemTimer, old.durationMs != new.durationMs { return true }
+      if abs(old.progress - new.progress) >= 5 { return true }
+    }
+    return false
+  }
+
+  private func cancelPendingUpdate() {
+    pendingUpdate?.cancel()
+    pendingUpdate = nil
+  }
+
+  /// JS 每次成功 sync 打点并启动前台孤儿巡检。
   private func noteJSSync() {
     lastJSSyncAt = Date()
-    ensureOrphanWatchdog()
-    ensureContentRefreshTimer()
+    if UIApplication.shared.applicationState == .active {
+      ensureOrphanWatchdog()
+    }
   }
 
   private func ensureOrphanWatchdog() {
@@ -346,60 +393,6 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     orphanTimer = nil
   }
 
-  /// 有活动时每 5s：唤醒 JS 拉数 + 推一次 ContentState（展开岛可见步骤变化）
-  private func ensureContentRefreshTimer() {
-    if contentRefreshTimer != nil { return }
-    let timer = Timer.scheduledTimer(withTimeInterval: contentRefreshInterval, repeats: true) { [weak self] _ in
-      self?.tickContentRefresh()
-    }
-    RunLoop.main.add(timer, forMode: .common)
-    contentRefreshTimer = timer
-    os_log("content refresh timer started (%.0fs)", log: log, type: .info, contentRefreshInterval)
-  }
-
-  private func stopContentRefreshTimer() {
-    contentRefreshTimer?.invalidate()
-    contentRefreshTimer = nil
-  }
-
-  private func tickContentRefresh() {
-    guard #available(iOS 16.2, *) else { return }
-    let hasActivity = !Activity<AtollaBusyAttributes>.activities.isEmpty
-    if !hasActivity {
-      stopContentRefreshTimer()
-      if !lastItems.isEmpty { clearLocalIslandBookkeeping() }
-      return
-    }
-    let appActive = UIApplication.shared.applicationState == .active && !syncPaused
-    Task { @MainActor in
-      if appActive {
-        // 前台：唤醒 JS 拉数并推当前 bookkeeping
-        self.notifyListeners("refreshNeeded", data: [
-          "ts": Date().timeIntervalSince1970,
-          "activeKind": self.activeKind,
-        ])
-        await self.pushCurrentStateToActivities(reason: "content-refresh-5s")
-      } else {
-        // 后台/锁屏：原生校准（更新任务文案；空闲则下岛）
-        _ = await AtollaIslandRemoteRefresh.reconcile()
-        let stillActive = !Activity<AtollaBusyAttributes>.activities.isEmpty
-        if !stillActive {
-          self.clearLocalIslandBookkeeping()
-          return
-        }
-        if let activity = self.currentActivity() {
-          let state = activity.content.state
-          self.activeKind = state.activeKind
-          self.lastItems = state.items
-          self.lastCount = state.count
-          self.lastPresentation = state.presentation
-          self.lastMoreDeepLink = state.moreDeepLink
-          self.syncPaused = true
-        }
-      }
-    }
-  }
-
   /// 仅前台检查孤儿：后台无 JS 轮询属预期，不可因此下岛
   private func checkOrphanActivity() {
     guard UIApplication.shared.applicationState == .active else { return }
@@ -413,26 +406,25 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
-  /// 进后台：停跳动并标记 syncPaused，立刻原生拉一次镜像
+  /// 进后台：停止所有本地刷新，只提交一次最后真实状态。
   @available(iOS 16.2, *)
   @MainActor
   private func markSyncPausedForBackground(reason: String) async {
-    stopAnimTimer()
+    cancelPendingUpdate()
+    stopOrphanWatchdog()
     syncPaused = true
     await pushCurrentStateToActivities(reason: reason)
-    _ = await AtollaIslandRemoteRefresh.reconcile()
-    if Activity<AtollaBusyAttributes>.activities.isEmpty {
-      clearLocalIslandBookkeeping()
-    }
   }
 
-  /// 回前台：清除 syncPaused 并立刻刷新 Activity，再等 JS 校准内容
+  /// 回前台：恢复系统计时展示，再等待 Web 层立即校准内容。
   @MainActor
   private func clearSyncPausedAndRefresh(reason: String) async {
     syncPaused = false
     guard #available(iOS 16.2, *) else { return }
     await pushCurrentStateToActivities(reason: reason)
-    updateAnimTimer()
+    if !Activity<AtollaBusyAttributes>.activities.isEmpty {
+      ensureOrphanWatchdog()
+    }
     os_log("foreground: syncPaused cleared + activity refreshed", log: log, type: .info)
   }
 
@@ -450,6 +442,10 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
       return
     }
     let state = makeState()
+    guard Self.hasMeaningfulDisplayChange(from: lastCommittedState, to: state) else {
+      os_log("push state skipped: unchanged (%{public}@)", log: log, type: .info, reason)
+      return
+    }
     let stale = contentStaleDate()
     for activity in activities {
       await activity.update(ActivityContent(state: state, staleDate: stale))
@@ -463,6 +459,7 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
         reason
       )
     }
+    lastCommittedState = state
   }
 
   private func clearLocalIslandBookkeeping() {
@@ -472,28 +469,11 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
     lastCount = 0
     lastPresentation = "list"
     lastMoreDeepLink = ""
-    animPhase = 0
     lastJSSyncAt = nil
     syncPaused = false
-    stopAnimTimer()
+    lastCommittedState = nil
+    cancelPendingUpdate()
     stopOrphanWatchdog()
-    stopContentRefreshTimer()
-  }
-
-  /// 后台尽量保住 5s 刷新，直到系统到期
-  private func beginIslandBackgroundTask() {
-    endBackgroundTask()
-    bgTask = UIApplication.shared.beginBackgroundTask(withName: "AtollaIslandRefresh") { [weak self] in
-      os_log("island background task expired", log: self?.log ?? .default, type: .info)
-      self?.endBackgroundTask()
-    }
-  }
-
-  private func endBackgroundTask() {
-    if bgTask != .invalid {
-      UIApplication.shared.endBackgroundTask(bgTask)
-      bgTask = .invalid
-    }
   }
 
   private static func parseActiveKind(_ raw: String?) -> String? {
@@ -572,10 +552,8 @@ public class AtollaIslandPlugin: CAPPlugin, CAPBridgedPlugin {
   @available(iOS 16.2, *)
   @MainActor
   private func endAllActivitiesNow(reason: String) async {
-    stopAnimTimer()
+    cancelPendingUpdate()
     stopOrphanWatchdog()
-    stopContentRefreshTimer()
-    endBackgroundTask()
     let ids = Activity<AtollaBusyAttributes>.activities.map(\.id)
     for activity in Activity<AtollaBusyAttributes>.activities {
       let done = AtollaBusyAttributes.ContentState(

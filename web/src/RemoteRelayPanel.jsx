@@ -931,81 +931,95 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
       {msg && <p className="empty-hint">{msg}</p>}
       {loading && !baseUrl && !instanceId && <p className="empty">加载中…</p>}
 
-      <article className="version-card rr-config-card" style={{ order: 20 }}>
-        <div className="version-head">
-          <span className="version-tag">局域网直连（Beta）</span>
-          <button type="button" className="ghost" disabled={lanLoading || lanBusy} onClick={() => void loadLanRelay()}>
-            {lanLoading ? '刷新中…' : '刷新'}
-          </button>
+      <article className="rr-section rr-pair-section">
+        <div className="rr-section-head">
+          <div>
+            <h3>iPhone 配对</h3>
+            <p>二维码仅可使用一次，并会在倒计时结束后自动失效。</p>
+          </div>
+          <span className={`rr-state-label ${lanPairPhase || 'idle'}`}>
+            {lanPairPhase === 'pending' ? `等待扫描 · ${lanPairCountdown}` : lanPairPhase === 'scanned' ? '已扫描' : lanPairPhase === 'paired' ? '配对成功' : lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? '二维码失效' : '尚未生成'}
+          </span>
         </div>
-        <p className="empty-hint">iPhone 与 Mac 可通信时优先直连；自动模式不可达会回退腾讯云。HTTP 仅适用于可信网络，内容不加密。</p>
-        {lanError ? <pre className="error" style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>{lanError}</pre> : null}
-        <form className="tm-form-row" onSubmit={saveLanRelay} style={{ maxWidth: 640 }}>
-          <label>
-            <span>启用局域网中继</span>
+        <div className="rr-pair-layout">
+          <div className="rr-pair-visual">
+            {!lanPairPayload ? (
+              <div className="rr-pair-placeholder" aria-label="尚未生成配对二维码">
+                <span>QR</span>
+                <small>输入设备名称后生成二维码</small>
+              </div>
+            ) : null}
+            {lanPairPayload ? (
+              <div className="rr-pair-block">
+                {lanPairPhase === 'pending' ? <QRCodeSVG value={lanPairPayload} size={208} level="M" includeMargin /> : null}
+                {lanPairPhase === 'scanned' ? (
+                  <div className="rr-pair-state">
+                    <span className="rr-pair-spinner" aria-hidden="true" />
+                    <div><strong>iPhone 已扫描</strong><p className="empty-hint">正在完成配对，请保持 iPhone 页面开启。</p></div>
+                  </div>
+                ) : null}
+                {lanPairPhase === 'paired' ? (
+                  <div className="rr-pair-state ok">
+                    <span className="rr-pair-mark" aria-hidden="true">✓</span>
+                    <div><strong>配对成功</strong><p className="empty-hint">{lanPairStatus?.device_name || lanPairName.trim() || 'iPhone'} 已加入设备列表，此二维码已失效。</p></div>
+                  </div>
+                ) : null}
+                {lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? (
+                  <div className="rr-pair-state expired">
+                    <span className="rr-pair-mark" aria-hidden="true">!</span>
+                    <div><strong>{lanPairPhase === 'expired' ? '二维码已过期' : '二维码已失效'}</strong><p className="empty-hint">为安全起见，请重新生成二维码后再扫描。</p></div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <div className="rr-pair-controls">
+            <label><span>设备名称</span><input aria-label="设备名称" type="text" value={lanPairName} onChange={(e) => setLanPairName(e.target.value)} placeholder="例如：我的 iPhone" /></label>
+            <button type="button" className="primary" disabled={lanBusy || !lanPairName.trim()} onClick={() => void pairLanDevice()}>{lanBusy ? '处理中…' : lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? '重新生成二维码' : '生成配对二维码'}</button>
+            <p className="rr-pair-instruction">{lanPairPhase === 'pending' ? <>请用 iPhone「设置 → 局域网连接」扫描。二维码 <strong>{lanPairCountdown}</strong> 后失效。</> : '生成后请使用 iPhone 的局域网连接设置进行扫描。'}</p>
+          </div>
+        </div>
+        <div className="rr-device-list">
+          <div className="rr-subhead"><span>已配对设备</span><span>{activeLanDevices.length}</span></div>
+          <div className="rr-mobile-grid">
+            {activeLanDevices.length === 0 ? <p className="empty-hint">暂无已配对的局域网设备</p> : activeLanDevices.map((device) => (
+              <div key={device.id} className="rr-mobile-device">
+                <div className="rr-mobile-device-body">
+                  <div className="rr-mobile-device-title"><strong>{device.name || 'iPhone'}</strong><span className="rr-mobile-device-state">已配对</span></div>
+                  <ul className="rr-mobile-meta">
+                    <li><span>最近配对</span><span>{formatTime(device.updated_at || device.created_at)}</span></li>
+                    {device.pairing_count > 1 ? <li><span>累计配对</span><span>{device.pairing_count} 次</span></li> : null}
+                  </ul>
+                  <button type="button" className="ghost rr-kick-btn" disabled={lanRevokeID === device.id} onClick={() => void revokeLanDevice(device)}>{lanRevokeID === device.id ? '撤销中…' : '撤销设备'}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </article>
+
+      <article className="rr-section rr-lan-section">
+        <div className="rr-section-head">
+          <div>
+            <div className="rr-title-line"><h3>局域网直连</h3><span className="rr-beta">Beta</span></div>
+            <p>iPhone 与 Mac 可通信时优先直连；自动模式不可达会回退腾讯云。HTTP 仅适用于可信网络。</p>
+          </div>
+          <label className="rr-switch">
             <input type="checkbox" checked={lanConfig.enabled} onChange={(e) => setLanConfig((prev) => ({ ...prev, enabled: e.target.checked }))} />
+            <span aria-hidden="true" /><small>{lanConfig.enabled ? '已启用' : '已关闭'}</small>
           </label>
-          <label>
-            <span>移动端连接策略</span>
-            <select value={lanConfig.strategy} onChange={(e) => setLanConfig((prev) => ({ ...prev, strategy: e.target.value }))}>
-              <option value="auto">自动：局域网优先，云端回退</option>
-              <option value="lan_only">仅局域网</option>
-              <option value="cloud_only">仅腾讯云</option>
-            </select>
-          </label>
-          <label>
-            <span>局域网端口</span>
-            <input type="number" min={1024} max={65535} value={lanConfig.port} onChange={(e) => setLanConfig((prev) => ({ ...prev, port: Number(e.target.value) || 7943 }))} />
-          </label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <button type="submit" className="primary" disabled={lanBusy || lanLoading}>{lanBusy ? '保存中…' : '保存局域网策略'}</button>
-            <span className="empty-hint" style={{ margin: 0 }}>{lanConfig.enabled ? (lanStatus?.running ? `监听中 :${lanStatus.port}${lanStatus.bonjour ? ' · Bonjour 已发布' : ''}` : `未监听${lanStatus?.error ? `：${lanStatus.error}` : ''}`) : '关闭时 iPhone 不会使用局域网通道。'}</span>
+        </div>
+        {lanError ? <pre className="error rr-inline-error">{lanError}</pre> : null}
+        <form className="rr-lan-form" onSubmit={saveLanRelay}>
+          <div className="rr-grid rr-grid-lan">
+            <label><span>移动端连接策略</span><select disabled={!lanConfig.enabled} value={lanConfig.strategy} onChange={(e) => setLanConfig((prev) => ({ ...prev, strategy: e.target.value }))}><option value="auto">自动：局域网优先，云端回退</option><option value="lan_only">仅局域网</option><option value="cloud_only">仅腾讯云</option></select></label>
+            <label><span>局域网端口</span><input disabled={!lanConfig.enabled} type="number" min={1024} max={65535} value={lanConfig.port} onChange={(e) => setLanConfig((prev) => ({ ...prev, port: Number(e.target.value) || 7943 }))} /></label>
+          </div>
+          <div className="rr-lan-actions">
+            <span className="rr-lan-status">{lanConfig.enabled ? (lanStatus?.running ? `监听中 :${lanStatus.port}${lanStatus.bonjour ? ' · Bonjour 已发布' : ''}` : `未监听${lanStatus?.error ? `：${lanStatus.error}` : ''}`) : '关闭时 iPhone 不会使用局域网通道。'}</span>
+            <div className="rr-action-row"><button type="button" className="ghost" disabled={lanLoading || lanBusy} onClick={() => void loadLanRelay()}>{lanLoading ? '刷新中…' : '刷新状态'}</button><button type="submit" className="primary" disabled={lanBusy || lanLoading}>{lanBusy ? '保存中…' : '保存策略'}</button></div>
           </div>
         </form>
-        <div className="rr-password-block" style={{ marginTop: 16 }}>
-          <div className="rr-password-head"><span>配对 iPhone</span><span className="rr-reg-tag unset">二维码一次有效</span></div>
-          <div className="rr-password-actions">
-            <input aria-label="设备名称" type="text" value={lanPairName} onChange={(e) => setLanPairName(e.target.value)} placeholder="例如：我的 iPhone" />
-            <button type="button" className="ghost" disabled={lanBusy || !lanPairName.trim()} onClick={() => void pairLanDevice()}>{lanBusy ? '处理中…' : lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? '重新生成二维码' : '生成配对二维码'}</button>
-          </div>
-          {lanPairPayload ? (
-            <div className="rr-pair-block" style={{ marginTop: 12 }}>
-              {lanPairPhase === 'pending' ? (
-                <>
-                  <QRCodeSVG value={lanPairPayload} size={208} level="M" includeMargin />
-                  <p className="empty-hint">请用 iPhone「设置 → 局域网连接」扫描。二维码 <strong>{lanPairCountdown}</strong> 后失效，扫描后会立即更新状态。</p>
-                </>
-              ) : null}
-              {lanPairPhase === 'scanned' ? (
-                <div className="rr-pair-state">
-                  <span className="rr-pair-spinner" aria-hidden="true" />
-                  <div>
-                    <strong>iPhone 已扫描</strong>
-                    <p className="empty-hint">正在完成配对，请保持 iPhone 页面开启。二维码 <strong>{lanPairCountdown}</strong> 后失效；若长时间未完成，请在 iPhone 上重试。</p>
-                  </div>
-                </div>
-              ) : null}
-              {lanPairPhase === 'paired' ? (
-                <div className="rr-pair-state ok">
-                  <span className="rr-pair-mark" aria-hidden="true">✓</span>
-                  <div>
-                    <strong>配对成功</strong>
-                    <p className="empty-hint">{lanPairStatus?.device_name || lanPairName.trim() || 'iPhone'} 已加入下方设备列表，此二维码已失效。</p>
-                  </div>
-                </div>
-              ) : null}
-              {lanPairPhase === 'expired' || lanPairPhase === 'invalid' ? (
-                <div className="rr-pair-state expired">
-                  <span className="rr-pair-mark" aria-hidden="true">!</span>
-                  <div>
-                    <strong>{lanPairPhase === 'expired' ? '二维码已过期' : '二维码已失效'}</strong>
-                    <p className="empty-hint">为安全起见，请重新生成二维码后再扫描。</p>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
         <details className="rr-audit-fold">
           <summary>
             <span className="rr-audit-caret" aria-hidden="true">›</span>
@@ -1023,23 +1037,9 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
             </ul>
           )}
         </details>
-        <div className="rr-mobile-grid" style={{ marginTop: 12 }}>
-          {activeLanDevices.length === 0 ? <p className="empty-hint">暂无已配对的局域网设备</p> : activeLanDevices.map((device) => (
-            <div key={device.id} className="rr-mobile-device">
-              <div className="rr-mobile-device-body">
-                <div className="rr-mobile-device-title"><strong>{device.name || 'iPhone'}</strong><span className="rr-mobile-device-state">已配对</span></div>
-                <ul className="rr-mobile-meta">
-                  <li><span>最近配对</span><span>{formatTime(device.updated_at || device.created_at)}</span></li>
-                  {device.pairing_count > 1 ? <li><span>累计配对</span><span>{device.pairing_count} 次</span></li> : null}
-                </ul>
-                <button type="button" className="ghost rr-kick-btn" disabled={lanRevokeID === device.id} onClick={() => void revokeLanDevice(device)}>{lanRevokeID === device.id ? '撤销中…' : '撤销设备'}</button>
-              </div>
-            </div>
-          ))}
-        </div>
       </article>
 
-      <article className="version-card rr-config-card" style={{ order: 30 }}>
+      <article className="version-card rr-config-card rr-support-section" style={{ order: 40 }}>
         <div className="version-head">
           <span className="version-tag">连接远程配置</span>
         </div>
@@ -1122,7 +1122,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </form>
       </article>
 
-      <article className="version-card rr-config-card" style={{ order: 40 }}>
+      <article className="version-card rr-config-card rr-support-section" style={{ order: 50 }}>
         <div className="version-head">
           <span className="version-tag">验证码登录配置</span>
           <span className={`rr-reg-tag ${smtpOk ? 'set' : 'unset'}`}>
@@ -1167,7 +1167,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         {smtpErr ? <pre className="error" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{smtpErr}</pre> : null}
       </article>
 
-      <article className="version-card rr-status-card" style={{ order: 50 }}>
+      <article className="version-card rr-status-card rr-support-section" style={{ order: 60 }}>
         <div className="version-head">
           <span className="version-tag">运行状态</span>
         </div>
@@ -1195,7 +1195,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </ul>
       </article>
 
-      <article className="version-card rr-mobile-card" style={{ order: 60 }}>
+      <article className="version-card rr-mobile-card rr-support-section" style={{ order: 70 }}>
         <div className="version-head">
           <span className="version-tag">移动端访问</span>
           <button type="button" className="ghost" disabled={busy || !!kickId} onClick={() => void loadMobileSessions()}>
@@ -1260,16 +1260,19 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
         </div>
       </article>
 
-      <article className="version-card" style={{ order: 10 }}>
-        <div className="version-head">
-          <span className="version-tag">服务器部署</span>
+      <article className="rr-section rr-deploy-section" style={{ order: 10 }}>
+        <div className="rr-section-head">
+          <div>
+            <h3>服务器部署</h3>
+            <p>由本机 Atolla 连接服务器执行部署脚本，并实时返回运行日志。</p>
+          </div>
         </div>
-        <p className="empty-hint">
+        <p className="rr-section-note">
           由本机 Atolla 直接跑脚本并实时出日志。点击部署/升级时会询问云机 <strong>SSH 密码</strong>（也可留空，改用本机已配置的 SSH 密钥）。
           也可复制命令到终端手动执行。
         </p>
-        <div className="tm-form-row" style={{ maxWidth: 640 }}>
-          <label>
+        <div className="rr-grid rr-deploy-grid">
+          <label className="rr-field-host">
             <span>SSH 主机</span>
             <div className="rr-host-suggest">
               <input
@@ -1309,42 +1312,40 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
               ) : null}
             </div>
           </label>
-          <label>
+          <label className="rr-field-user">
             <span>SSH 用户</span>
             <input type="text" value={deployUser} onChange={(e) => setDeployUser(e.target.value)} disabled={jobRunning} />
           </label>
-          <label>
+          <label className="rr-field-ssh-port">
             <span>SSH 端口</span>
             <input type="number" min={1} value={deploySshPort} onChange={(e) => setDeploySshPort(e.target.value)} disabled={jobRunning} />
           </label>
-          <label>
+          <label className="rr-field-directory">
             <span>远端目录</span>
             <input type="text" value={deployRemoteDir} onChange={(e) => setDeployRemoteDir(e.target.value)} disabled={jobRunning} />
           </label>
-          <label>
+          <label className="rr-field-listen-port">
             <span>监听端口（仅首次部署）</span>
             <input type="number" min={1} value={deployListenPort} onChange={(e) => setDeployListenPort(e.target.value)} disabled={jobRunning} />
           </label>
-          <label>
+          <label className="rr-field-site-password">
             <span>门禁密码 SITE_PASSWORD（仅首次部署）</span>
             <input type="password" autoComplete="new-password" value={deploySitePassword} onChange={(e) => setDeploySitePassword(e.target.value)} disabled={jobRunning} />
           </label>
-          <label>
-            <span>China-mirror</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+          <label className="rr-mirror-option">
+            <span>国内 npm 镜像加速</span>
+            <span className="rr-check-row">
               <input
                 type="checkbox"
                 checked={deployChinaMirror}
                 disabled={jobRunning}
                 onChange={(e) => setDeployChinaMirror(e.target.checked)}
               />
-              <span className="empty-hint" style={{ margin: 0 }}>
-                国内 npmmirror 加速
-              </span>
+              <span>使用 npmmirror</span>
             </span>
           </label>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+        <div className="rr-deploy-actions">
           <button
             type="button"
             className="primary"
@@ -1355,7 +1356,7 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
           </button>
           <button
             type="button"
-            className="primary"
+            className="ghost rr-secondary-action"
             disabled={jobRunning || !deployHost.trim()}
             onClick={() => openSshAuth('upgrade')}
           >
@@ -1372,12 +1373,12 @@ export default function RemoteRelayPanel({ authHeaders, onUnauthorized, active }
             </button>
           )}
         </div>
-        <p className="empty-hint" style={{ marginTop: 8 }}>
+        <p className="rr-footnote">
           升级会保留云上的门禁密码 / JWT / 端口；首次部署才写入门禁密码。
         </p>
       </article>
 
-      {showDeployProgress ? <article className="version-card" style={{ order: 20 }}>
+      {showDeployProgress ? <article className="version-card rr-deploy-progress" style={{ order: 15 }}>
         <div className="version-head">
           <span className="version-tag">部署进度</span>
           {jobStatus === 'running' && <span className="empty-hint">进行中（{jobKind || '…'}）</span>}

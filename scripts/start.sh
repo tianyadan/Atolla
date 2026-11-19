@@ -134,9 +134,9 @@ if [ "$DAEMON" = 1 ]; then
   sleep 2
   echo "==> 启动 React 前端 (vite, 局域网可访问, 后台)"
   cd ../web
-  # 缺依赖时先安装，避免 vite: command not found
-  if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vite ]; then
-    echo "==> web/node_modules 缺失，执行 npm install"
+  # node_modules 可能存在但缺少新加入的直接依赖，启动前统一校验。
+  if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vite ] || ! npm ls --depth=0 >/dev/null 2>&1; then
+    echo "==> web 依赖缺失或版本不一致，执行 npm install"
     npm install
   fi
   : >"$FRONTEND_LOG"
@@ -162,9 +162,9 @@ sleep 2
 echo "==> 启动 React 前端 (vite, 局域网可访问)"
 echo "    提示: 若要关终端仍保持运行，请用 ./scripts/start-bg.sh 或 ./scripts/start.sh --daemon"
 cd ../web
-# 缺依赖时先安装，避免 vite: command not found
-if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vite ]; then
-  echo "==> web/node_modules 缺失，执行 npm install"
+# node_modules 可能存在但缺少新加入的直接依赖，启动前统一校验。
+if [ ! -d node_modules ] || [ ! -x node_modules/.bin/vite ] || ! npm ls --depth=0 >/dev/null 2>&1; then
+  echo "==> web 依赖缺失或版本不一致，执行 npm install"
   npm install
 fi
 npm run dev -- --host 0.0.0.0
