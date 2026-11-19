@@ -1,5 +1,5 @@
 import { App } from '@capacitor/app'
-import { Capacitor, registerPlugin } from '@capacitor/core'
+import { Capacitor } from '@capacitor/core'
 import { useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { fetchAgents, fetchPendingInstancePermissions, getUnlockToken } from '../api'
@@ -7,22 +7,11 @@ import { buildIslandEvents, selectIslandPresentation } from '../islandEvents'
 import { resetIslandSyncKey, syncIslandPresentation } from '../islandLiveActivity'
 import { subscribeIslandSyncInvalidation } from '../islandSyncInvalidation'
 
-const POLL_MS_FG = 3_000
-const POLL_MS_BG = 5_000
-
-/** 原生 5s 唤醒 JS 拉数（展开岛 / 锁屏期间） */
-type IslandRefreshPlugin = {
-  addListener(
-    eventName: 'refreshNeeded',
-    listener: (data: { ts?: number }) => void,
-  ): Promise<{ remove: () => Promise<void> }>
-}
-
-const AtollaIslandRefresh = registerPlugin<IslandRefreshPlugin>('AtollaIsland')
+const POLL_MS_FG = 30_000
 
 /**
- * 全局轮询忙碌数字人并上岛。
- * 前台 3s；后台/锁屏 5s 继续拉数（配合原生 background task + refreshNeeded）。
+ * 全局同步忙碌数字人并上岛。
+ * 业务事件立即失效，前台每 30s 低频校准；后台完全停止本地轮询。
  */
 export function IslandBusySyncHost() {
   const location = useLocation()
@@ -30,7 +19,6 @@ export function IslandBusySyncHost() {
   const genRef = useRef(0)
   const instanceRef = useRef(instanceId)
   const intervalRef = useRef<number | null>(null)
-  const appActiveRef = useRef(true)
 
   useEffect(() => {
     instanceRef.current = instanceId
@@ -68,13 +56,13 @@ export function IslandBusySyncHost() {
       }
     }
 
-    /** 启停轮询；后台用 5s，前台 3s */
-    function startPolling(ms: number) {
+    /** 只在前台启动低频校准。 */
+    function startPolling() {
       stopPolling()
       if (cancelled) return
       intervalRef.current = window.setInterval(() => {
         void tick()
-      }, ms)
+      }, POLL_MS_FG)
     }
 
     function stopPolling() {
@@ -84,52 +72,40 @@ export function IslandBusySyncHost() {
       }
     }
 
-    void tick()
-    startPolling(POLL_MS_FG)
+    let appActive = document.visibilityState !== 'hidden'
+    if (appActive) {
+      void tick()
+      startPolling()
+    }
 
     const invalidate = () => {
       resetIslandSyncKey()
-      void tick()
+      if (appActive) void tick()
     }
     const unsubscribeInvalidation = subscribeIslandSyncInvalidation(invalidate)
 
     let appHandle: { remove: () => Promise<void> } | undefined
     void App.addListener('appStateChange', ({ isActive }) => {
-      appActiveRef.current = isActive
-      resetIslandSyncKey()
-      if (isActive) {
-        void tick()
-        startPolling(POLL_MS_FG)
-      } else {
-        // 进后台：5s 继续刷新步骤/进度，供展开岛与锁屏更新
-        void tick()
-        startPolling(POLL_MS_BG)
-      }
+      setAppActive(isActive)
     }).then((h) => {
       appHandle = h
     })
 
-    // 原生 5s 心跳：WebView 定时器被节流时仍能唤醒拉数
-    let refreshHandle: { remove: () => Promise<void> } | undefined
-    void AtollaIslandRefresh.addListener('refreshNeeded', () => {
+    function setAppActive(next: boolean) {
+      if (appActive === next) return
+      appActive = next
       resetIslandSyncKey()
-      void tick()
-    }).then((h) => {
-      refreshHandle = h
-    })
+      if (next) {
+        // 回前台立即校准，再恢复低频兜底。
+        void tick()
+        startPolling()
+      } else {
+        stopPolling()
+      }
+    }
 
     const onVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        appActiveRef.current = false
-        resetIslandSyncKey()
-        void tick()
-        startPolling(POLL_MS_BG)
-      } else if (document.visibilityState === 'visible') {
-        appActiveRef.current = true
-        resetIslandSyncKey()
-        void tick()
-        startPolling(POLL_MS_FG)
-      }
+      setAppActive(document.visibilityState === 'visible')
     }
     document.addEventListener('visibilitychange', onVisibility)
 
@@ -138,7 +114,6 @@ export function IslandBusySyncHost() {
       stopPolling()
       unsubscribeInvalidation()
       void appHandle?.remove()
-      void refreshHandle?.remove()
       document.removeEventListener('visibilitychange', onVisibility)
       void syncIslandPresentation({ activeKind: null, count: 0, items: [], presentation: 'list' })
     }
