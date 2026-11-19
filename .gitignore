@@ -12,8 +12,12 @@ node_modules/
 **/xcuserdata/
 **/*.xcuserstate
 **/*.xcarchive
+**/*.xcresult/
 **/*.ipa
 **/*.dmg
+# 独立导出到 dist 之外的 macOS 安装/应用产物
+**/*.app/
+**/*.pkg
 macos/AtollaIsland/.build/
 macos/AtollaIsland/.swiftpm/
 macos/AtollaIsland/dist/
