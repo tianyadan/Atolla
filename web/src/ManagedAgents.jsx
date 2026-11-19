@@ -387,8 +387,6 @@ export default function ManagedAgentsPanel({
   const lastPinnedHeightRef = useRef(-1)
   const viewRef = useRef({ active, selectedId, agents })
   viewRef.current = { active, selectedId: selectedId, agents }
-  /** 主轮询 effect 写入：发送 / 终止 / 切员工时立刻补拉一轮 */
-  const kickPollRef = useRef(() => {})
 
   const selected = agents.find((a) => a.id === selectedId) || null
   const initializing = selected?.status === 'initializing'
@@ -745,7 +743,7 @@ export default function ManagedAgentsPanel({
 
   const authHeadersRef = useRef(authHeaders)
   authHeadersRef.current = authHeaders
-  /** 主轮询单飞：同 key 飞行中不叠请求 */
+  /** runtime / pending / task-plan 单飞；主名单轮询在自己的 effect 里另建一把 */
   const deskFlightRef = useRef(null)
   if (!deskFlightRef.current) deskFlightRef.current = createSingleFlight()
   /** 操作后立刻补拉名单/详情（由主轮询 effect 赋值） */
@@ -765,20 +763,16 @@ export default function ManagedAgentsPanel({
     }
     send(selectedId)
     let timer = 0
-    /** 可见 8s；窗口隐藏改为 30s 慢心跳，挂机仍算在看 */
-    const arm = () => {
+    /** 可见 8s；文档隐藏改为 30s 慢心跳，不跟主轮询一起停 */
+    const arm = (visible) => {
       window.clearTimeout(timer)
-      const ms = document.visibilityState === 'visible' ? PC_VIEWER_VISIBLE_MS : PC_VIEWER_HIDDEN_MS
+      const ms = visible ? PC_VIEWER_VISIBLE_MS : PC_VIEWER_HIDDEN_MS
       timer = window.setTimeout(() => {
         send(selectedId)
-        arm()
+        arm(document.visibilityState === 'visible')
       }, ms)
     }
-    arm()
-    const unsub = subscribePageVisible(() => {
-      window.clearTimeout(timer)
-      arm()
-    })
+    const unsub = subscribePageVisible(arm)
     return () => {
       window.clearTimeout(timer)
       unsub()
@@ -911,13 +905,6 @@ export default function ManagedAgentsPanel({
   // 切换数字人时先清理旧队列徽标，等待新队列状态回传。
   useEffect(() => {
     setTaskQueueBadge(0)
-  }, [selectedId])
-
-  // 切员工后立刻 kick，不等空闲 8s / 忙碌 2s 的下一拍
-  useEffect(() => {
-    if (!selectedId) return undefined
-    kickPollRef.current()
-    return undefined
   }, [selectedId])
 
   // 从「数字人管理」卡片 / 灵动岛跳转：选中并打开设置 / 招聘；顺带补拉审批
@@ -1099,12 +1086,15 @@ export default function ManagedAgentsPanel({
     let timer = 0
     let detailTimer = 0
     let pageVisible = document.visibilityState === 'visible'
-    const flight = deskFlightRef.current
+    // 主轮询单独单飞：补跑复用本 effect 的稳定闭包，不和 runtime/pending 抢同一把锁
+    const flight = createSingleFlight()
+    /** 本机 Ask SSE 存活时只备份名单 */
+    const sseAgentsMs = 3000
     const pollMs = () => {
       const { selectedId: sid, agents: list } = viewRef.current
       const local = sid ? getAgentSession(sid) : null
       // 本机 SSE 仍在：名单降为 3s 备份，详情由 tick 直接跳过
-      if (local?.abort) return 3000
+      if (local?.abort) return sseAgentsMs
       const selectedViewing = list.some((a) => a.id === sid && a.mobile_viewing)
       const busy =
         anyAgentLoading() ||
@@ -1118,55 +1108,77 @@ export default function ManagedAgentsPanel({
         )
       return busy ? POLL_BUSY_MS : POLL_IDLE_MS
     }
+    // 稳定闭包：单飞补跑复用这一份，执行时再读 viewRef，不捕获当时的 selectedId
+    const runAgents = async () => {
+      try {
+        if (stopped || !pageVisible) return
+        if (!hasBearerToken(authHeaders())) return
+        await loadAgents()
+        if (stopped || !pageVisible) return
+        syncLoadingFromAgentStatus(viewRef.current.agents)
+      } catch {
+        // 补跑是 void，错误必须留在体内
+      }
+    }
+
+    const runDetail = async () => {
+      try {
+        if (stopped || !pageVisible) return
+        const sid = viewRef.current.selectedId
+        if (!sid) return
+        const local = getAgentSession(sid)
+        // 用户刚终止：跳过详情，避免 DB 未收尾把「已终止」冲掉
+        if (local.userStopped) return
+        // SSE 存活（有 abort）禁止 loadDetail；无 abort 的后台恢复仍要校准消息
+        if (local.abort) return
+        if (!hasBearerToken(authHeaders())) return
+        await loadDetail(sid, { force: true })
+      } catch {
+        // 同上：避免 unhandledrejection
+      }
+    }
+
     const tick = () => {
-      if (!pageVisible) return
-      const headers = authHeaders()
-      if (!hasBearerToken(headers)) return
-      const sid = viewRef.current.selectedId
-      void flight('agents', async () => {
-        try {
-          await loadAgents()
-          syncLoadingFromAgentStatus(viewRef.current.agents)
-        } catch { /* 单飞补跑不得变成未处理拒绝 */ }
-      })
-      if (!sid) return
-      const local = getAgentSession(sid)
-      // 用户刚终止：跳过详情，避免 DB 未收尾把「已终止」冲掉
-      if (local.userStopped) return
-      // 本机 SSE 流式中禁止拉详情（正文已由 SSE 推送）
-      if (local.abort) return
+      if (stopped || !pageVisible) return
+      if (!hasBearerToken(authHeaders())) return
+      void flight('agents', runAgents)
       window.clearTimeout(detailTimer)
       // 与名单错开约 400ms，避免同一帧双请求尖峰
       detailTimer = window.setTimeout(() => {
         if (stopped || !pageVisible) return
-        const now = getAgentSession(sid)
-        if (now.userStopped || now.abort) return
-        void flight(`detail:${sid}`, async () => {
-          try {
-            await loadDetail(sid, { force: true })
-          } catch { /* ignore */ }
-        })
+        void flight('detail', runDetail)
       }, 400)
     }
+
     const schedule = () => {
       window.clearTimeout(timer)
-      if (stopped) return
+      if (stopped || !pageVisible) return
       timer = window.setTimeout(() => {
+        if (stopped || !pageVisible) return
         tick()
         schedule()
       }, pollMs())
     }
+
+    /** 立刻打一轮，并按当前档位重排下一拍；隐藏时不发 */
     const kick = () => {
+      if (stopped || !pageVisible) return
       window.clearTimeout(timer)
+      window.clearTimeout(detailTimer)
       tick()
       schedule()
     }
     deskKickRef.current = kick
+
     const unsub = subscribePageVisible((visible) => {
       pageVisible = visible
-      if (visible && !stopped) kick()
+      if (!visible) {
+        window.clearTimeout(timer)
+        window.clearTimeout(detailTimer)
+        return
+      }
+      if (!stopped) kick()
     })
-    kick()
     return () => {
       stopped = true
       deskKickRef.current = () => {}
@@ -1958,8 +1970,8 @@ export default function ManagedAgentsPanel({
       runtimeDetail: beginAgentRuntime(startedAt),
       lastRuntimeDetail: null,
     })
-    // abort 已挂上：kick 只刷名单，不会在 SSE 存活时拉 loadDetail
-    kickPollRef.current()
+    // abort 已挂上：kick 只刷名单，SSE 存活时 runDetail 会自己跳过
+    deskKickRef.current()
     // pending: 轮询 force 校准时由 coalesce 保留，避免乐观气泡被冲掉
     setAgentChatLog(agentId, (prev) => [
       ...prev,
@@ -1967,7 +1979,6 @@ export default function ManagedAgentsPanel({
     ])
     scrollChatToBottom()
     pendingQueueNextRef.current = null
-    deskKickRef.current()
     try {
       const res = await fetch(`${API}/admin/agents/${agentId}/ask`, {
         method: 'POST',
@@ -2374,8 +2385,8 @@ export default function ManagedAgentsPanel({
       liveActivity: null,
       agentPhase: '',
     })
-    // userStopped 已置位：kick 刷新名单并跳过详情，避免终止后干等下一拍
-    kickPollRef.current()
+    // userStopped 已置位：立刻补拉名单；详情由 runDetail 跳过
+    deskKickRef.current()
     const prevAbort = prev.abort
     try {
       await fetch(`${API}/admin/agents/${id}/stop`, { method: 'POST', headers: authHeaders() })
