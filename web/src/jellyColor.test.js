@@ -93,12 +93,13 @@ test('jellyStateFromAgent 映射', () => {
   assert.equal(jellyStateFromAgent({ status: 'done' }), 'idle')
 })
 
-test('jellyStateFromPhase 使用思考动画并保留其他运行阶段', () => {
-  assert.equal(jellyStateFromPhase('thinking'), 'ponder')
+test('jellyStateFromPhase 为正常思考使用中性工作动画并保留其他运行阶段', () => {
+  assert.equal(jellyStateFromPhase('thinking'), 'coding')
   assert.equal(jellyStateFromPhase('working'), 'coding')
   assert.equal(jellyStateFromPhase('responding'), 'coding')
   assert.equal(jellyStateFromPhase('waiting'), 'waiting')
   assert.equal(jellyStateFromPhase('error'), 'error')
   assert.equal(jellyStateFromPhase('idle'), 'idle')
+  assert.equal(jellyStateFromPhase('celebrate'), 'celebrate')
   assert.equal(jellyStateFromPhase('unknown', 'working'), 'working')
 })

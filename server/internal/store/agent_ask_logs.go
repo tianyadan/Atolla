@@ -62,21 +62,24 @@ type AgentLLMInvocation struct {
 
 // AgentAskLog 数字员工一轮 Ask。
 type AgentAskLog struct {
-	ID             int64      `json:"id"`
-	AgentID        int64      `json:"agent_id"`
-	ConversationID int64      `json:"conversation_id"`
-	UserMessageID  int64      `json:"user_message_id"`
-	Source         string     `json:"source"`
-	Status         string     `json:"status"`
-	DurationMs     int        `json:"duration_ms"`
-	InputTokens    int64      `json:"input_tokens"`
-	OutputTokens   int64      `json:"output_tokens"`
-	TotalTokens    int64      `json:"total_tokens"`
-	ErrorType      string     `json:"error_type,omitempty"`
-	ErrorMessage   string     `json:"error_message,omitempty"`
-	StartedAt      time.Time  `json:"started_at"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID             int64  `json:"id"`
+	AgentID        int64  `json:"agent_id"`
+	ConversationID int64  `json:"conversation_id"`
+	UserMessageID  int64  `json:"user_message_id"`
+	Source         string `json:"source"`
+	// Engine 是任务开始时的引擎快照。不能在完成时读取当前配置，
+	// 否则用户中途切换引擎会污染历史 Token 归属。
+	Engine       string     `json:"engine"`
+	Status       string     `json:"status"`
+	DurationMs   int        `json:"duration_ms"`
+	InputTokens  int64      `json:"input_tokens"`
+	OutputTokens int64      `json:"output_tokens"`
+	TotalTokens  int64      `json:"total_tokens"`
+	ErrorType    string     `json:"error_type,omitempty"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 // AgentAskToolCall 一轮内的工具调用。
@@ -130,6 +133,14 @@ type AgentAskTokenBucket struct {
 	TotalTokens  int64  `json:"total_tokens"`
 }
 
+// ProfileTokenUsageDay 是长期保留的个人 Token 用量日汇总。
+// 它只包含聚合数字和引擎，不保存 Prompt、回答或工具参数。
+type ProfileTokenUsageDay struct {
+	Date        string `json:"date"`
+	TotalTokens int64  `json:"total_tokens"`
+	Estimated   bool   `json:"estimated"`
+}
+
 // AgentAskToolAggregate 按工具聚合。
 type AgentAskToolAggregate struct {
 	ToolName      string  `json:"tool_name"`
@@ -153,6 +164,10 @@ type AgentAskErrorRow struct {
 
 // ensureAgentAskAuditSchema 创建数字员工审计表。
 func (s *Store) ensureAgentAskAuditSchema(ctx context.Context) error {
+	usageTableExists, err := s.hasTable(ctx, "agent_token_usage_records")
+	if err != nil {
+		return err
+	}
 	if err := s.execDDL(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_ask_logs (
 		  id                BIGINT        NOT NULL AUTO_INCREMENT,
@@ -160,6 +175,7 @@ func (s *Store) ensureAgentAskAuditSchema(ctx context.Context) error {
 		  conversation_id   BIGINT        NOT NULL DEFAULT 0,
 		  user_message_id   BIGINT        NOT NULL DEFAULT 0,
 		  source            VARCHAR(16)   NOT NULL DEFAULT 'admin',
+		  engine            VARCHAR(32)   NOT NULL DEFAULT 'unknown',
 		  status            VARCHAR(20)   NOT NULL DEFAULT 'processing',
 		  duration_ms       INT           NOT NULL DEFAULT 0,
 		  input_tokens      BIGINT        NOT NULL DEFAULT 0,
@@ -224,22 +240,53 @@ func (s *Store) ensureAgentAskAuditSchema(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
+	// 旧库没有 engine 列；启动时幂等补齐，避免要求用户手工执行迁移。
+	if err := s.addColumnIfMissing(ctx, "agent_ask_logs", "engine",
+		`ALTER TABLE agent_ask_logs ADD COLUMN engine VARCHAR(32) NOT NULL DEFAULT 'unknown'`); err != nil {
+		return err
+	}
+	if err := s.execDDL(ctx, `
+		CREATE TABLE IF NOT EXISTS agent_token_usage_records (
+		  ask_log_id     BIGINT       NOT NULL,
+		  usage_date     DATE         NOT NULL,
+		  engine         VARCHAR(32)  NOT NULL DEFAULT 'unknown',
+		  input_tokens   BIGINT       NOT NULL DEFAULT 0,
+		  output_tokens  BIGINT       NOT NULL DEFAULT 0,
+		  cache_tokens   BIGINT       NOT NULL DEFAULT 0,
+		  total_tokens   BIGINT       NOT NULL DEFAULT 0,
+		  estimated      TINYINT      NOT NULL DEFAULT 0,
+		  recorded_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  PRIMARY KEY (ask_log_id),
+		  KEY idx_atur_date_engine (usage_date, engine)
+		) ENGINE=InnoDB`); err != nil {
+		return err
+	}
+	// 仅新建表时执行一次历史回填。之后每次启动不再扫描完整审计表；
+	// 新运行的写入由 FinishAgentAskLog 同一事务完成。
+	if !usageTableExists {
+		// 已完成的历史记录也可用于总量热力图。旧记录没有引擎快照，
+		// 仅以当前员工引擎回填，并明确标为 estimated，绝不伪装成精确归属。
+		if err := s.backfillProfileTokenUsage(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // BeginAgentAskLog 用户消息落库后创建 processing 行。
-func (s *Store) BeginAgentAskLog(ctx context.Context, agentID, convID, userMsgID int64, source string) (int64, error) {
+func (s *Store) BeginAgentAskLog(ctx context.Context, agentID, convID, userMsgID int64, source, engine string) (int64, error) {
 	// 轨迹含 Prompt/输出正文，只保留 7 天；清理失败不阻断主任务。
 	_, _ = s.PurgeAgentLLMInvocations(ctx, time.Now().Add(-agentLLMTraceRetention))
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = AgentAskSourceAdmin
 	}
+	engine = normalizeTokenUsageEngine(engine)
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO agent_ask_logs
-		  (agent_id, conversation_id, user_message_id, source, status, started_at)
-		VALUES (?,?,?,?,?,NOW())`,
-		agentID, convID, userMsgID, source, AgentAskStatusProcessing)
+		  (agent_id, conversation_id, user_message_id, source, engine, status, started_at)
+		VALUES (?,?,?,?,?,?,NOW())`,
+		agentID, convID, userMsgID, source, engine, AgentAskStatusProcessing)
 	if err != nil {
 		return 0, err
 	}
@@ -340,13 +387,104 @@ func (s *Store) FinishAgentAskLog(ctx context.Context, id int64, input, output, 
 	if durationMs < 0 {
 		durationMs = 0
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `
 		UPDATE agent_ask_logs SET
 		  input_tokens=?, output_tokens=?, total_tokens=?,
 		  duration_ms=?, status=?, error_type=?, error_message=NULLIF(?,''), finished_at=NOW()
 		WHERE id=?`,
 		input, output, total, durationMs, status, errType, errMsg, id)
+	if err != nil {
+		return err
+	}
+	// ask_log_id 是主键：即使上层因网络/超时重试 Finish，也只能写入一次，
+	// 因此累计 Token 不会重复执行。
+	insert := `INSERT IGNORE INTO agent_token_usage_records
+		(ask_log_id, usage_date, engine, input_tokens, output_tokens, cache_tokens, total_tokens, estimated, recorded_at)
+		SELECT id, DATE(started_at), engine, input_tokens, output_tokens, 0, total_tokens, 0, NOW()
+		FROM agent_ask_logs WHERE id=?`
+	if s.IsSQLite() {
+		insert = `INSERT OR IGNORE INTO agent_token_usage_records
+			(ask_log_id, usage_date, engine, input_tokens, output_tokens, cache_tokens, total_tokens, estimated, recorded_at)
+			SELECT id, date(started_at), engine, input_tokens, output_tokens, 0, total_tokens, 0, CURRENT_TIMESTAMP
+			FROM agent_ask_logs WHERE id=?`
+	}
+	if _, err = tx.ExecContext(ctx, insert, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func normalizeTokenUsageEngine(engine string) string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "codex":
+		return "codex"
+	case "claude":
+		return "claude"
+	case "cursor", "agent":
+		return "cursor"
+	default:
+		return "unknown"
+	}
+}
+
+func (s *Store) backfillProfileTokenUsage(ctx context.Context) error {
+	query := `INSERT IGNORE INTO agent_token_usage_records
+		(ask_log_id, usage_date, engine, input_tokens, output_tokens, cache_tokens, total_tokens, estimated, recorded_at)
+		SELECT l.id, DATE(l.started_at),
+		  CASE LOWER(TRIM(COALESCE(NULLIF(NULLIF(l.engine,''),'unknown'), NULLIF(a.engine,''), 'unknown')))
+		    WHEN 'agent' THEN 'cursor' WHEN 'codex' THEN 'codex' WHEN 'claude' THEN 'claude' WHEN 'cursor' THEN 'cursor' ELSE 'unknown' END,
+		  l.input_tokens, l.output_tokens, 0, l.total_tokens, 1, NOW()
+		FROM agent_ask_logs l LEFT JOIN managed_agents a ON a.id=l.agent_id
+		WHERE l.status <> ?`
+	if s.IsSQLite() {
+		query = `INSERT OR IGNORE INTO agent_token_usage_records
+			(ask_log_id, usage_date, engine, input_tokens, output_tokens, cache_tokens, total_tokens, estimated, recorded_at)
+			SELECT l.id, date(l.started_at),
+			  CASE LOWER(TRIM(COALESCE(NULLIF(NULLIF(l.engine,''),'unknown'), NULLIF(a.engine,''), 'unknown')))
+			    WHEN 'agent' THEN 'cursor' WHEN 'codex' THEN 'codex' WHEN 'claude' THEN 'claude' WHEN 'cursor' THEN 'cursor' ELSE 'unknown' END,
+			  l.input_tokens, l.output_tokens, 0, l.total_tokens, 1, CURRENT_TIMESTAMP
+			FROM agent_ask_logs l LEFT JOIN managed_agents a ON a.id=l.agent_id
+			WHERE l.status <> ?`
+	}
+	_, err := s.db.ExecContext(ctx, query, AgentAskStatusProcessing)
 	return err
+}
+
+// ListProfileTokenUsage 从长期、无正文的用量表读取日汇总。
+func (s *Store) ListProfileTokenUsage(ctx context.Context, from, to time.Time, engine string) ([]ProfileTokenUsageDay, error) {
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	where := "usage_date >= ? AND usage_date < ?"
+	args := []any{from.Format("2006-01-02"), to.Format("2006-01-02")}
+	if engine != "" && engine != "all" {
+		where += " AND engine=?"
+		args = append(args, engine)
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT usage_date, COALESCE(SUM(total_tokens),0), COALESCE(MAX(estimated),0)
+		FROM agent_token_usage_records WHERE %s
+		GROUP BY usage_date ORDER BY usage_date`, where), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]ProfileTokenUsageDay, 0)
+	for rows.Next() {
+		var date any
+		var item ProfileTokenUsageDay
+		var estimated int
+		if err := rows.Scan(&date, &item.TotalTokens, &estimated); err != nil {
+			return nil, err
+		}
+		item.Date = formatSQLDateBucket(date)
+		item.Estimated = estimated != 0
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 // InsertAgentAskToolCall 追加工具调用。

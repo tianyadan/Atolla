@@ -55,6 +55,32 @@ func parseAuditTime(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// AdminProfileTokenUsage 返回从 2026 年开始、无对话正文的长期 Token 审计汇总。
+func (h *Handler) AdminProfileTokenUsage(c *gin.Context) {
+	engine := strings.ToLower(strings.TrimSpace(c.DefaultQuery("engine", "all")))
+	if engine == "agent" {
+		engine = "cursor"
+	}
+	if engine != "all" && engine != "codex" && engine != "claude" && engine != "cursor" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "engine 仅支持 all、codex、claude、cursor"})
+		return
+	}
+	from := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.Local)
+	if parsed, ok := parseAuditTime(strings.TrimSpace(c.Query("from"))); ok && !parsed.Before(from) {
+		from = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.Local)
+	}
+	to := time.Now().AddDate(0, 0, 1)
+	if parsed, ok := parseAuditTime(strings.TrimSpace(c.Query("to"))); ok {
+		to = time.Date(parsed.Year(), parsed.Month(), parsed.Day()+1, 0, 0, 0, 0, time.Local)
+	}
+	items, err := h.svc.Store.ListProfileTokenUsage(c.Request.Context(), from, to, engine)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "from": from.Format("2006-01-02"), "to": to.AddDate(0, 0, -1).Format("2006-01-02")})
+}
+
 // AdminAgentAuditOverview 审计看板概览。
 func (h *Handler) AdminAgentAuditOverview(c *gin.Context) {
 	f := parseAgentAskAuditFilter(c)

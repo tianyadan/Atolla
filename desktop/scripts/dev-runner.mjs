@@ -8,10 +8,12 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, watch } from 'node:fs'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveRuntimePaths, startBackend } from '../runtime.mjs'
 import { createDevBackendManager } from './dev-backend.mjs'
+import { createDevControlServer } from './dev-control.mjs'
 
 const desktopDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const repositoryRoot = path.resolve(desktopDirectory, '..')
@@ -27,6 +29,20 @@ let relaunchTimer = null
 let backendRestartTimer = null
 let exitRequested = false
 let lifecycle = Promise.resolve()
+let devControl = null
+
+/**
+ * 开发态固定 Electron userData 路径，使运行器能在 Electron 启动前持有 Go。
+ * macOS 是当前桌面端支持目标；其他平台仅提供可预测的本地回退路径。
+ */
+function resolveDevUserDataPath() {
+  const configured = String(process.env.ATOLLA_DEV_USER_DATA_PATH || '').trim()
+  if (configured) return configured
+  if (process.platform === 'darwin') return path.join(homedir(), 'Library', 'Application Support', 'Atolla')
+  return path.join(homedir(), '.config', 'Atolla')
+}
+
+const devUserDataPath = resolveDevUserDataPath()
 
 function log(message) {
   console.log(`[electron-dev] ${message}`)
@@ -34,16 +50,6 @@ function log(message) {
 
 function warn(message) {
   console.warn(`[electron-dev] ${message}`)
-}
-
-function sendToElectron(current, message) {
-  if (current !== child || !current.connected || exitRequested) return
-  try {
-    current.send(message)
-  } catch (error) {
-    // 热重启窗口时 IPC 断开是正常竞态，下次启动会重新请求后端地址。
-    warn(`Electron IPC 已断开：${error.message}`)
-  }
 }
 
 const backendManager = createDevBackendManager({
@@ -91,8 +97,8 @@ async function stopElectron() {
   stopping = false
 }
 
-/** 启动 Electron；渲染进程指向 Vite。 */
-function startElectron() {
+/** 启动 Electron；Go 已由 dev-runner 启动并由控制面独占持有。 */
+function startElectron(backend) {
   if (!existsSync(electronBin)) {
     throw new Error(`找不到 electron：${electronBin}（请先在 desktop/ 执行 npm ci）`)
   }
@@ -104,24 +110,13 @@ function startElectron() {
       ATOLLA_ELECTRON_RENDERER_URL: rendererUrl,
       ATOLLA_ELECTRON_OPEN_DEVTOOLS: openDevtools ? '1' : '0',
       ATOLLA_DEV_RUNNER: '1',
+      ATOLLA_DEV_CONTROL_URL: devControl?.url || '',
+      ATOLLA_DEV_CONTROL_TOKEN: devControl?.token || '',
+      ATOLLA_DEV_USER_DATA_PATH: devUserDataPath,
     },
-    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    stdio: 'inherit',
   })
   const current = child
-  current.on('message', (message) => {
-    if (current !== child || exitRequested) return
-    if (message?.type === 'atolla:dev-start') {
-      void enqueue(() => backendManager.ensure(message.userDataPath)).then(
-        (backend) => sendToElectron(current, { type: 'atolla:dev-ready', baseUrl: backend.baseUrl }),
-        (error) => sendToElectron(current, { type: 'atolla:dev-error', error: error.message }),
-      )
-    } else if (message?.type === 'atolla:dev-restart') {
-      void enqueue(() => backendManager.restart()).then(
-        (backend) => sendToElectron(current, { type: 'atolla:dev-restarted', baseUrl: backend.baseUrl }),
-        (error) => sendToElectron(current, { type: 'atolla:dev-error', error: error.message }),
-      )
-    }
-  })
   child.on('exit', (code, signal) => {
     child = null
     if (stopping || exitRequested) return
@@ -145,7 +140,8 @@ function scheduleRelaunch(reason) {
       log(`检测到变更（${reason}），重启 Electron…`)
       await stopElectron()
       if (exitRequested) return
-      startElectron()
+      const backend = await backendManager.ensure(devUserDataPath)
+      startElectron(backend)
     })
   }, 400)
 }
@@ -199,6 +195,7 @@ async function shutdown(code = 0) {
   log('正在停止…')
   await lifecycle
   await stopElectron()
+  await devControl?.close()
   await backendManager.shutdown()
   process.exit(code)
 }
@@ -218,8 +215,19 @@ if (watchGo) {
   watchDirectory(path.join(repositoryRoot, 'server'), ['.go'], 'go')
 }
 
-startElectron()
-log('前端改动走 Vite HMR（无需重启窗口）；主进程/preload 变更会自动 relaunch')
-if (watchGo) {
-  log('已启用 --watch-go：修改 server/*.go 仅重启 Go，窗口保持打开')
+async function startDevelopmentRuntime() {
+  devControl = await createDevControlServer({ backendManager })
+  const backend = await backendManager.ensure(devUserDataPath)
+  log(`Go 由 dev-runner 独占（pid=${backend.child.pid}，${backend.baseUrl}）`)
+  log(`控制通道 ${devControl.url}（仅 loopback + 一次性令牌）`)
+  startElectron(backend)
+  log('前端改动走 Vite HMR（无需重启窗口）；主进程/preload 变更会自动 relaunch')
+  if (watchGo) {
+    log('已启用 --watch-go：修改 server/*.go 仅重启 Go，窗口保持打开')
+  }
 }
+
+void startDevelopmentRuntime().catch((error) => {
+  warn(`开发运行器启动失败：${error.message}`)
+  void shutdown(1)
+})

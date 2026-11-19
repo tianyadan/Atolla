@@ -318,25 +318,10 @@ type askCoreOpts struct {
 	holdStatus   bool
 	skipTaskPlan bool
 	attachments  []ChatAttachment
-	// visitorAudit 非空时：用户消息落库后建 processing 审计，结束后写 token/耗时/状态。
-	visitorAudit *visitorAskAudit
 	// agentAudit 非空时：数字员工主会话 Ask 写入审计看板（后台/手机）。
 	agentAudit *agentAskAudit
 	// locale 界面语言（zh-CN / en）：约束思考与回复语言，空则不加指令。
 	locale string
-}
-
-// visitorAskAudit 前台一轮 Ask 的审计上下文。
-type visitorAskAudit struct {
-	VisitorID  int64
-	IP         string
-	UA         string
-	logID      int64
-	started    time.Time
-	input      int64
-	output     int64
-	cacheRead  int64
-	cacheWrite int64
 }
 
 // agentAskAudit 数字员工一轮 Ask 的审计上下文。
@@ -374,7 +359,7 @@ func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question
 }
 
 func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fixedConvID int64, question string, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
-	// 先包装 onEvent，再定义 onChunk，确保 usage / 工具事件能写入审计。
+	// 先包装 onEvent，再定义 onChunk，确保 usage / 工具事件能写入数字人员工运行审计。
 	// thinkingPhase 记录引擎当前是否在思考：思考增量走 reasoning 事件，不进正文也不进库。
 	var thinkingPhase atomic.Bool
 	{
@@ -390,12 +375,6 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 					out := toInt64Any(ev["output_tokens"])
 					cr := toInt64Any(ev["cache_read_tokens"])
 					cw := toInt64Any(ev["cache_write_tokens"])
-					if opts.visitorAudit != nil {
-						opts.visitorAudit.input = in
-						opts.visitorAudit.output = out
-						opts.visitorAudit.cacheRead = cr
-						opts.visitorAudit.cacheWrite = cw
-					}
 					if opts.agentAudit != nil {
 						opts.agentAudit.input = in
 						opts.agentAudit.output = out
@@ -522,18 +501,9 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 			_ = s.setManagedAgentStatus(context.WithoutCancel(runCtx), agentID, "error", uerr.Error(), 0, convID)
 			return nil, uerr
 		}
-		if opts.visitorAudit != nil {
-			opts.visitorAudit.started = time.Now()
-			logID, aerr := s.Store.BeginVisitorAskLog(runCtx, opts.visitorAudit.VisitorID, convID, agentID, userMsgID, opts.visitorAudit.IP, opts.visitorAudit.UA)
-			if aerr != nil {
-				log.Printf("visitor ask: begin audit failed: %v", aerr)
-			} else {
-				opts.visitorAudit.logID = logID
-			}
-		}
 		if opts.agentAudit != nil {
 			opts.agentAudit.started = time.Now()
-			logID, aerr := s.Store.BeginAgentAskLog(runCtx, agentID, convID, userMsgID, opts.agentAudit.Source)
+			logID, aerr := s.Store.BeginAgentAskLog(runCtx, agentID, convID, userMsgID, opts.agentAudit.Source, a.Engine)
 			if aerr != nil {
 				log.Printf("agent ask: begin audit failed: %v", aerr)
 			} else {
@@ -554,7 +524,6 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		tp.SetPlanDraft(runCtx, draft)
 		steps = tp.Snapshot("").StepTitles
 		msg, err := s.finishTaskPlanAwaitingConfirm(runCtx, a, convID, opts, tp, onEvent)
-		s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, err)
 		s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, err)
 		return msg, err
 	}
@@ -583,7 +552,6 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, history, onChunk, onEvent, userQuestion, atts)
 	msg, err := s.finishManagedAsk(runCtx, a, convID, opts.bindMainConv, out, ms, runErr, tp, opts, onEvent)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
-	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(runCtx, opts.agentAudit, msg, runErr)
 	return msg, err
 }
@@ -739,7 +707,6 @@ func (s *Service) askManagedWithInvokes(
 	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, convID, sys, sumQ, "", onChunk, onEvent, taskBody, nil)
 	msg, err := s.finishManagedAsk(ctx, caller, convID, bindMainConv, out, ms, runErr, tp, opts, onEvent)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
-	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)
 	s.finalizeAgentAskAudit(ctx, opts.agentAudit, msg, runErr)
 	s.writeInvokeDividersAsync(caller, taskBody, results)
 	return msg, err
@@ -832,39 +799,6 @@ func (s *Service) finishManagedAsk(ctx context.Context, a *store.ManagedAgent, c
 		s.notifyAgentTerminal(context.WithoutCancel(ctx), agentID)
 	}
 	return msg, nil
-}
-
-// finalizeVisitorAskAudit 写完 assistant 后结束审计；失败只打日志，不拖垮主链路。
-func (s *Service) finalizeVisitorAskAudit(ctx context.Context, audit *visitorAskAudit, msg *store.Message, runErr error) {
-	if audit == nil || audit.logID <= 0 {
-		return
-	}
-	status := store.AskStatusSuccess
-	errMsg := ""
-	if ctx.Err() != nil {
-		status = store.AskStatusCancelled
-		errMsg = ctx.Err().Error()
-	} else if runErr != nil {
-		status = store.AskStatusError
-		errMsg = runErr.Error()
-	}
-	asstID := int64(0)
-	duration := int(time.Since(audit.started).Milliseconds())
-	if msg != nil {
-		asstID = msg.ID
-		if msg.Status == "error" && status == store.AskStatusSuccess {
-			status = store.AskStatusError
-		}
-	}
-	if duration <= 0 {
-		duration = 1
-	}
-	cached := audit.cacheRead + audit.cacheWrite
-	total := audit.input + audit.output + cached
-	if err := s.Store.FinishVisitorAskLog(context.WithoutCancel(ctx), audit.logID, asstID,
-		audit.input, audit.output, cached, total, duration, status, errMsg); err != nil {
-		log.Printf("visitor ask: finish audit %d failed: %v", audit.logID, err)
-	}
 }
 
 // recordAgentAskToolEvent 从 SSE 活动/命令事件落工具审计（拿不到耗时时记 0）。
@@ -1055,7 +989,6 @@ func applyCancelledAskOutput(ctxErr error, out string, runErr error) (string, er
 	}
 	return trimmed, nil
 }
-
 
 // ResetStuckManagedAgentsOnBoot 进程重启后无 live run：把残留 running/busy 等收回 idle，避免「终止无效」。
 func (s *Service) ResetStuckManagedAgentsOnBoot(ctx context.Context) {

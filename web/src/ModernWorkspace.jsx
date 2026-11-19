@@ -29,7 +29,6 @@ function buildMoreGroups(t) {
       { id: 'agents-manage', label: t('nav.agentsManage'), icon: 'robot' },
       { id: 'group-chats', label: t('nav.groupChats'), icon: 'chat' },
       { id: 'plans', label: t('nav.plans'), icon: 'folder' },
-      { id: 'audit', label: t('nav.audit'), icon: 'shield' },
     ],
     [
       { id: 'audit-agents', label: t('nav.auditAgents'), icon: 'document' },
@@ -77,29 +76,13 @@ export default function ModernWorkspace({
   const [groupManagerOpen, setGroupManagerOpen] = useState(false)
   const [hireFolderId, setHireFolderId] = useState('0')
   const [moreOpen, setMoreOpen] = useState(false)
-  const [accountOpen, setAccountOpen] = useState(false)
   const [dismissTarget, setDismissTarget] = useState(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [error, setError] = useState('')
   const [hoverAgent, setHoverAgent] = useState(null)
   const [, setAgentSessionVersion] = useState(0)
-  const accountCloseTimer = useRef(0)
   const moreMenuRef = useRef(null)
-
-  function openAccountMenu() {
-    window.clearTimeout(accountCloseTimer.current)
-    setMoreOpen(false)
-    setAccountOpen(true)
-  }
-
-  function scheduleAccountMenuClose() {
-    window.clearTimeout(accountCloseTimer.current)
-    // 给鼠标跨过头像与浮层边缘留出缓冲，避免菜单一闪而过。
-    accountCloseTimer.current = window.setTimeout(() => setAccountOpen(false), 220)
-  }
-
-  useEffect(() => () => window.clearTimeout(accountCloseTimer.current), [])
 
   // 左侧数字人菜单与对话区共用实时会话阶段，避免菜单动画停留在默认跳动状态。
   useEffect(() => subscribeAgentSessions(() => {
@@ -365,13 +348,15 @@ export default function ModernWorkspace({
               {group.items.map((item) => {
                 const session = getAgentSession(item.agent_id)
                 const state = session.loading || session.compressing ? 'running' : highestAgentState(item)
-                const jellyState = state === 'error'
-                  ? 'error'
-                  : state === 'approval'
-                    ? 'waiting'
-                    : state === 'running'
-                      ? jellyStateFromPhase(session.agentPhase, 'working')
-                      : 'idle'
+                const jellyState = session.celebrationEndsAt > Date.now()
+                  ? 'celebrate'
+                  : state === 'error'
+                    ? 'error'
+                    : state === 'approval'
+                      ? 'waiting'
+                      : state === 'running'
+                        ? jellyStateFromPhase(session.agentPhase, 'working')
+                        : 'idle'
                 return (
                   <div key={item.id} className={`modern-recent-item${selected?.id === item.id ? ' active' : ''}`}>
                     <button type="button" className="modern-recent-main" onClick={() => activateConversation(item)}>
@@ -409,35 +394,20 @@ export default function ModernWorkspace({
           {!groups.length && <p className="modern-empty">{t('modern.emptyChats')}</p>}
         </div>
         <div className="modern-account-row">
-          <div
-            className="modern-account-profile"
-            onMouseEnter={openAccountMenu}
-            onMouseLeave={scheduleAccountMenuClose}
-            onFocus={openAccountMenu}
-            onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget)) scheduleAccountMenuClose()
-            }}
+          <button
+            type="button"
+            className="modern-account-profile modern-account-trigger"
+            onClick={() => onOpenMenu?.('profile')}
+            title="打开个人信息与 Token 用量"
           >
-            <button type="button" className="modern-account-trigger" aria-label={t('modern.accountMenu')} aria-expanded={accountOpen} onClick={() => setAccountOpen((value) => !value)}>
-              <span className="modern-user-avatar" aria-hidden="true">{String(username || 'U').slice(0, 1).toUpperCase()}</span>
-              <span className="modern-user-name">{username || t('modern.user')}</span>
-            </button>
-            {accountOpen && (
-              <div className="modern-account-menu">
-                <button type="button" onClick={onOpenFrontend}>{t('top.frontendChat')}</button>
-                <hr />
-                <button type="button" className="danger-item" onClick={onLogout}>{t('top.logoutFull')}</button>
-              </div>
-            )}
-          </div>
+            <span className="modern-user-avatar" aria-hidden="true">{String(username || 'U').slice(0, 1).toUpperCase()}</span>
+            <span className="modern-user-name">{username || t('modern.user')}</span>
+          </button>
           <div className={`modern-more-wrap${moreOpen ? ' is-open' : ''}`} ref={moreMenuRef}>
             <button
               type="button"
               className={`modern-icon-btn modern-more-trigger${moreOpen ? ' is-open' : ''}`}
-              onClick={() => {
-                setAccountOpen(false)
-                setMoreOpen((value) => !value)
-              }}
+                onClick={() => setMoreOpen((value) => !value)}
               aria-label={t('modern.more')}
               aria-expanded={moreOpen}
               aria-controls="modern-more-menu"
@@ -450,6 +420,22 @@ export default function ModernWorkspace({
               role="menu"
               aria-hidden={!moreOpen}
             >
+              <div className="modern-more-group">
+                <button
+                  type="button"
+                  className="modern-more-item"
+                  role="menuitem"
+                  tabIndex={moreOpen ? 0 : -1}
+                  style={{ '--menu-index': 0 }}
+                  onClick={() => {
+                    setMoreOpen(false)
+                    onOpenFrontend?.()
+                  }}
+                >
+                  <ModernIcon name="chat" size={18} />
+                  <span>{t('top.frontendChat')}</span>
+                </button>
+              </div>
               {moreGroups.map((group, groupIndex) => (
                 <div className="modern-more-group" key={group[0].id}>
                   {group.map((item, itemIndex) => (
@@ -459,7 +445,7 @@ export default function ModernWorkspace({
                       role="menuitem"
                       tabIndex={moreOpen ? 0 : -1}
                       key={item.id}
-                      style={{ '--menu-index': groupIndex * 4 + itemIndex }}
+                      style={{ '--menu-index': groupIndex * 4 + itemIndex + 1 }}
                       onClick={() => openMoreModule(item.id)}
                     >
                       <ModernIcon name={item.icon} size={18} />
@@ -479,6 +465,20 @@ export default function ModernWorkspace({
                 <ModernIcon name="info" size={17} />
                 <span>Atolla</span>
                 <small>{CURRENT_VERSION}</small>
+              </button>
+              <button
+                type="button"
+                className="modern-more-item danger-item"
+                role="menuitem"
+                tabIndex={moreOpen ? 0 : -1}
+                style={{ '--menu-index': moreGroups.length * 4 + 1 }}
+                onClick={() => {
+                  setMoreOpen(false)
+                  onLogout?.()
+                }}
+              >
+                <ModernIcon name="logout" size={18} />
+                <span>{t('top.logoutFull')}</span>
               </button>
             </div>
           </div>

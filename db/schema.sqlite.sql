@@ -281,26 +281,6 @@ CREATE TABLE IF NOT EXISTS visitors (
   UNIQUE(public_id)
 );
 
-CREATE TABLE IF NOT EXISTS visitor_ask_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  visitor_id           INTEGER        NOT NULL,
-  conversation_id      INTEGER        NOT NULL DEFAULT 0,
-  agent_id             INTEGER        NOT NULL DEFAULT 0,
-  ip                   VARCHAR(64)   NOT NULL DEFAULT '',
-  user_agent           VARCHAR(512)  NOT NULL DEFAULT '',
-  user_message_id      INTEGER        NOT NULL DEFAULT 0,
-  assistant_message_id INTEGER        NOT NULL DEFAULT 0,
-  input_tokens         INTEGER        NOT NULL DEFAULT 0,
-  output_tokens        INTEGER        NOT NULL DEFAULT 0,
-  cached_tokens        INTEGER        NOT NULL DEFAULT 0,
-  total_tokens         INTEGER        NOT NULL DEFAULT 0,
-  duration_ms          INTEGER           NOT NULL DEFAULT 0,
-  status               VARCHAR(20)   NOT NULL DEFAULT 'processing',
-  error_message        TEXT          NULL,
-  finished_at DATETIME      NULL,
-  created_at DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 -- v0.4.0 技能商店目录 + 按数字人安装
 CREATE TABLE IF NOT EXISTS skill_catalog (
   id VARCHAR(64) PRIMARY KEY,

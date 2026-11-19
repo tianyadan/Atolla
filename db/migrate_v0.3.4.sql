@@ -16,16 +16,3 @@ CREATE TABLE IF NOT EXISTS visitors (
   UNIQUE KEY uk_visitor_public (public_id),
   KEY idx_visitor_seen (last_seen_at)
 ) ENGINE=InnoDB;
-
-CREATE TABLE IF NOT EXISTS visitor_ask_logs (
-  id               BIGINT        NOT NULL AUTO_INCREMENT,
-  visitor_id       BIGINT        NOT NULL,
-  conversation_id  BIGINT        NOT NULL DEFAULT 0,
-  agent_id         BIGINT        NOT NULL DEFAULT 0,
-  ip               VARCHAR(64)   NOT NULL DEFAULT '',
-  user_agent       VARCHAR(512)  NOT NULL DEFAULT '',
-  created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  KEY idx_val_visitor (visitor_id, created_at),
-  KEY idx_val_ip (ip, created_at)
-) ENGINE=InnoDB;

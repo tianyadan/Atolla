@@ -9,7 +9,6 @@ import WorkflowPermOverlay from './workflow/WorkflowPermOverlay.jsx'
 import ProductManual from './ProductManual.jsx'
 import PublicHome from './PublicHome.jsx'
 import DigitalHumanCards from './DigitalHumanCards.jsx'
-import VisitorAskAudit from './VisitorAskAudit.jsx'
 import AgentAudit from './AgentAudit.jsx'
 import LegacyMemoryShelf from './LegacyMemoryShelf.jsx'
 import RemoteRelayPanel from './RemoteRelayPanel.jsx'
@@ -26,6 +25,7 @@ import GitHubIdeaSettings from './GitHubIdeaSettings.jsx'
 import RuntimeSettings from './RuntimeSettings.jsx'
 import AppPanel from './AppPanel.jsx'
 import ModernWorkspace from './ModernWorkspace.jsx'
+import ProfileTokenUsage from './ProfileTokenUsage.jsx'
 import { initLocale } from './i18n/locale.js'
 import { useLocale } from './i18n/useLocale.js'
 import { shouldSkipOnboarding } from './onboardGate.js'
@@ -50,8 +50,8 @@ function buildAdminLabels(t) {
     'agents-manage': t('nav.agentsManage'),
     'group-chats': t('nav.groupChats'),
     'legacy-memories': t('nav.legacyMemories'),
-    audit: t('nav.audit'),
     'audit-agents': t('nav.auditAgents'),
+    profile: t('nav.profile'),
     plans: t('nav.plans'),
     memos: t('nav.memos'),
     analytics: t('nav.analytics'),
@@ -376,18 +376,19 @@ export default function App() {
                 <strong>{menuLabel(adminMenu)}</strong>
               </div>
             )}
-            {adminMenu === 'audit' && (
-              <VisitorAskAudit
-                authHeaders={authHeaders}
-                onUnauthorized={() => clearAuth('登录已过期')}
-                active={adminMenu === 'audit'}
-              />
-            )}
             {adminMenu === 'audit-agents' && (
               <AgentAudit
                 authHeaders={authHeaders}
                 onUnauthorized={() => clearAuth('登录已过期')}
                 active={adminMenu === 'audit-agents'}
+              />
+            )}
+            {adminMenu === 'profile' && (
+              <ProfileTokenUsage
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'profile'}
+                username={username}
               />
             )}
             {/* 始终挂载现代工作台，切换模块时保留数字人 SSE 与运行状态。 */}
@@ -547,7 +548,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['audit', 'audit-agents', 'agents', 'agents-manage', 'group-chats', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'app', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit-agents', 'profile', 'agents', 'agents-manage', 'group-chats', 'legacy-memories', 'remote-relay', 'network-allowlist', 'settings', 'app', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>

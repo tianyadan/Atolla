@@ -130,11 +130,9 @@ func (s *Service) AskReceptionistWith(ctx context.Context, visitorID, agentID, c
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
 	_ = s.Store.TouchVisitor(ctx, visitorID)
-	// 审计在 askManagedCore：用户消息 INSERT 后 Begin，assistant 落库后 Finish。
 	return s.askManagedCore(ctx, a, convID, question, askCoreOpts{
 		bindMainConv: false,
 		attachments:  atts,
-		visitorAudit: &visitorAskAudit{VisitorID: visitorID, IP: ip, UA: ua},
 	}, onEvent)
 }
 

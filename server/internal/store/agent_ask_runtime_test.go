@@ -11,7 +11,7 @@ func TestLatestAgentAskRuntimeDetail(t *testing.T) {
 	agentID := createTestAgent(t, st, "runtime-latest")
 	ctx := context.Background()
 
-	firstID, err := st.BeginAgentAskLog(ctx, agentID, 11, 101, AgentAskSourceAdmin)
+	firstID, err := st.BeginAgentAskLog(ctx, agentID, 11, 101, AgentAskSourceAdmin, "codex")
 	if err != nil {
 		t.Fatalf("begin first runtime: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestLatestAgentAskRuntimeDetail(t *testing.T) {
 		t.Fatalf("finish first runtime: %v", err)
 	}
 
-	latestID, err := st.BeginAgentAskLog(ctx, agentID, 12, 102, AgentAskSourceAdmin)
+	latestID, err := st.BeginAgentAskLog(ctx, agentID, 12, 102, AgentAskSourceAdmin, "codex")
 	if err != nil {
 		t.Fatalf("begin latest runtime: %v", err)
 	}

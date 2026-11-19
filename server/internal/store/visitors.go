@@ -43,32 +43,7 @@ func (s *Store) ensureReceptionistSchema(ctx context.Context) error {
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
-	if err := s.execDDL(ctx, `
-		CREATE TABLE IF NOT EXISTS visitor_ask_logs (
-		  id                   BIGINT        NOT NULL AUTO_INCREMENT,
-		  visitor_id           BIGINT        NOT NULL,
-		  conversation_id      BIGINT        NOT NULL DEFAULT 0,
-		  agent_id             BIGINT        NOT NULL DEFAULT 0,
-		  ip                   VARCHAR(64)   NOT NULL DEFAULT '',
-		  user_agent           VARCHAR(512)  NOT NULL DEFAULT '',
-		  user_message_id      BIGINT        NOT NULL DEFAULT 0,
-		  assistant_message_id BIGINT        NOT NULL DEFAULT 0,
-		  input_tokens         BIGINT        NOT NULL DEFAULT 0,
-		  output_tokens        BIGINT        NOT NULL DEFAULT 0,
-		  cached_tokens        BIGINT        NOT NULL DEFAULT 0,
-		  total_tokens         BIGINT        NOT NULL DEFAULT 0,
-		  duration_ms          INT           NOT NULL DEFAULT 0,
-		  status               VARCHAR(20)   NOT NULL DEFAULT 'processing',
-		  error_message        TEXT          NULL,
-		  finished_at          DATETIME      NULL,
-		  created_at           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		  PRIMARY KEY (id),
-		  KEY idx_val_visitor (visitor_id, created_at),
-		  KEY idx_val_ip (ip, created_at)
-		) ENGINE=InnoDB`); err != nil {
-		return err
-	}
-	return s.ensureVisitorAskLogAuditColumns(ctx)
+	return nil
 }
 
 // NewVisitorPublicID 生成访客公开 id。

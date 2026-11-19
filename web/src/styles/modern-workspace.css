@@ -83,7 +83,8 @@
 .modern-more-trigger:active { transform: scale(.96); }
 .modern-more-menu {
   position: absolute; z-index: 50; right: -5px; bottom: 48px;
-  width: 244px; max-height: min(72vh, 520px); overflow-x: hidden; overflow-y: auto;
+  /* 合并后的菜单正常桌面高度不应滚动；仅在极矮窗口中保留可达性滚动。 */
+  width: 244px; max-height: calc(100dvh - 72px); overflow-x: hidden; overflow-y: auto;
   box-sizing: border-box; padding: 7px;
   border: 1px solid #343741; border-radius: 14px;
   background: rgba(25,26,30,.98); box-shadow: 0 24px 64px rgba(0,0,0,.52), inset 0 1px 0 rgba(255,255,255,.035);
@@ -210,19 +211,18 @@
   padding: 9px 5px 0; border-top: 1px solid var(--modern-border);
   transition: flex-direction .28s ease, padding .28s ease;
 }
-.modern-account-profile { position: relative; min-width: 0; flex: 1; }
-.modern-account-trigger { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.modern-account-profile { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+.modern-account-trigger { border: 0; width: 100%; padding: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
+.modern-account-trigger:hover, .modern-account-trigger:focus-visible { background: rgba(255,255,255,.06); outline: none; }
 .modern-user-avatar { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border-radius: 9px; background: #282b33; color: #dce2f6; font-size: 12px; font-weight: 700; }
 .modern-user-name {
   min-width: 0; flex: 1; overflow: hidden; color: var(--modern-text); font-size: 12px; font-weight: 550;
   text-overflow: ellipsis; white-space: nowrap; opacity: 1; max-width: 160px;
   transition: opacity .18s ease, max-width .3s cubic-bezier(.22, 1, .36, 1);
 }
-.modern-account-menu { position: absolute; z-index: 52; left: -2px; bottom: 30px; width: 178px; padding: 6px; border: 1px solid var(--modern-border); border-radius: 11px; background: #191a1e; box-shadow: 0 18px 48px rgba(0,0,0,.42); }
-.modern-account-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--modern-text); text-align: left; cursor: pointer; }
-.modern-account-menu button:hover { background: var(--modern-active); }
-.modern-account-menu button.danger-item { color: #ef8585; }
-.modern-account-menu hr { border: 0; border-top: 1px solid var(--modern-border); margin: 5px 3px; }
+.modern-more-item.danger-item { margin-top: 3px; border-top: 1px solid var(--modern-border); border-radius: 0 0 8px 8px; color: #ef8585; }
+.modern-more-item.danger-item svg { color: currentColor; }
+.modern-more-item.danger-item:hover, .modern-more-item.danger-item:focus-visible { background: rgba(239,133,133,.11); color: #ff9b9b; }
 .modern-chat-stage {
   position: relative; min-width: 0; min-height: 0; height: 100%;
   overflow: hidden; background: var(--modern-bg);
@@ -315,9 +315,10 @@
 .modern-group-member-list label strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .modern-group-member-list select { width: min(180px, 45%); }
 .modern-group-empty { margin: 0; padding: 20px 8px; color: var(--modern-muted); font-size: 12px; text-align: center; }
-.modern-module-bar { position: sticky; z-index: 18; top: 0; display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 12px; border: 1px solid var(--modern-border); border-radius: 10px; background: rgba(17,18,21,.96); backdrop-filter: blur(12px); }
-.modern-module-bar strong { margin-right: auto; }
-.modern-module-bar button { border: 1px solid var(--modern-border); border-radius: 8px; background: transparent; color: var(--modern-text); padding: 7px 10px; cursor: pointer; }
+/* 所有管理页共用：返回栏只承担导航和标题，不应挤占内容首屏。 */
+.modern-module-bar { position: sticky; z-index: 18; top: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 10px; padding: 4px 8px; border: 1px solid var(--modern-border); border-radius: 8px; background: rgba(17,18,21,.96); backdrop-filter: blur(12px); }
+.modern-module-bar strong { margin-right: auto; font-size: 13px; }
+.modern-module-bar button { min-height: 28px; border: 1px solid var(--modern-border); border-radius: 7px; background: transparent; color: var(--modern-text); padding: 4px 8px; font-size: 12px; cursor: pointer; }
 .modern-drawer-toggle, .modern-drawer-mask { display: none; }
 /* 折叠：宽度由 grid 过渡；文案/搜索淡出收起（不用 display:none，才能有过渡） */
 .modern-workspace.is-collapsed .modern-recents {
@@ -358,10 +359,10 @@
 .modern-workspace.is-collapsed .modern-recent-item {
   justify-content: center; width: 32px; margin-inline: auto; border-radius: 10px;
 }
-.modern-workspace.is-collapsed .modern-account-row { flex-direction: column; padding: 9px 0 0; }
-.modern-workspace.is-collapsed .modern-account-profile { flex: 0 0 auto; }
-.modern-workspace.is-collapsed .modern-account-trigger { width: 30px; }
-.modern-workspace.is-collapsed .modern-account-menu { position: fixed; left: 58px; bottom: 12px; }
+.modern-workspace.is-collapsed .modern-account-row { flex-direction: column; align-items: center; padding: 9px 0 0; }
+.modern-workspace.is-collapsed .modern-account-profile,
+.modern-workspace.is-collapsed .modern-account-trigger { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; }
+.modern-workspace.is-collapsed .modern-more-wrap { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; }
 .modern-workspace.is-collapsed .modern-more-menu { position: fixed; left: 58px; right: auto; bottom: 12px; transform-origin: left bottom; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -486,8 +487,9 @@ html.atolla-electron .ma-detail-tools button {
 }
 html.atolla-electron .modern-module-bar {
   box-sizing: border-box;
-  padding-top: 44px;
-  min-height: 72px;
+  /* 为 macOS 标题栏保留拖拽区域；旧值 44px 会让每个返回页显得像空白横幅。 */
+  padding-top: 28px;
+  min-height: 60px;
   -webkit-app-region: drag;
   app-region: drag;
 }

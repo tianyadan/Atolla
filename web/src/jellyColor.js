@@ -104,7 +104,8 @@ export function jellyStateFromAgent(agent, opts = {}) {
 /** 把统一 agent_phase 映射为水母动作；未知阶段保留调用方回退状态。 */
 export function jellyStateFromPhase(phase, fallback = 'working') {
   switch (String(phase || '').toLowerCase()) {
-    case 'thinking': return 'ponder'
+    // ponder 精灵的表情容易被误读为失败；正常思考使用中性的工作动画。
+    case 'thinking': return 'coding'
     // Agent 处理工具和生成回复时统一展示敲电脑动画。
     case 'tool_call': return 'coding'
     case 'responding': return 'coding'
@@ -112,6 +113,7 @@ export function jellyStateFromPhase(phase, fallback = 'working') {
     case 'interaction_query': return 'waiting'
     case 'waiting': return 'waiting'
     case 'error': return 'error'
+    case 'celebrate': return 'celebrate'
     case 'idle': return 'idle'
     default: return fallback
   }

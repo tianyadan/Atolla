@@ -15,10 +15,12 @@ import {
 import {
   allPendingPerms,
   anyAgentLoading,
+  clearAgentCelebration,
   clearAgentSession,
   getAgentSession,
   patchAgentSession,
   setAgentChatLog,
+  startAgentCelebration,
   subscribeAgentSessions,
 } from './managedAgentSessions.js'
 import { coalesceChatLog, shouldAppendAssistantChunk, stripRepeatedAssistantTail } from './coalesceChatLog.js'
@@ -1739,8 +1741,8 @@ export default function ManagedAgentsPanel({
       } else if (ev.type === 'done') {
         flushThinking(agentId)
         const local = getAgentSession(agentId)
+        startAgentCelebration(agentId)
         patchAgentSession(agentId, {
-          agentPhase: 'idle',
           runtimeDetail: finishAgentRuntime(local.runtimeDetail, 'completed'),
         })
         if (ev.conversation_id) patchAgentSession(agentId, { convId: ev.conversation_id })
@@ -1959,6 +1961,7 @@ export default function ManagedAgentsPanel({
     // 先钉底再改会话，避免中间一次 effect 读到旧的 stickBottom=false
     stickBottomRef.current = true
     const startedAt = Date.now()
+    clearAgentCelebration(agentId)
     resetThinking(agentId)
     patchAgentSession(agentId, {
       loading: true, error: '', runStartedAt: startedAt, abort: ac, interrupting: false, invokes: {},
@@ -2062,9 +2065,10 @@ export default function ManagedAgentsPanel({
       // 用户终止：丢弃队列续跑，避免「终止」后立刻又开下一轮
       const queueNext = userStopped ? null : pendingQueueNextRef.current
       pendingQueueNextRef.current = null
+      const celebrating = !userStopped && currentSession.celebrationEndsAt > Date.now()
       patchAgentSession(agentId, {
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', pendingAttachments: [],
-        interrupting: false, liveActivity: null, agentPhase: '',
+        interrupting: false, liveActivity: null, agentPhase: celebrating ? 'celebrate' : '',
         userStopped: userStopped,
         runtimeDetail: finishAgentRuntime(currentSession.runtimeDetail, userStopped || currentSession.error ? (userStopped ? 'interrupted' : 'failed') : 'completed'),
       })
@@ -2514,7 +2518,9 @@ export default function ManagedAgentsPanel({
                     size={36}
                     state={sess.loading
                       ? jellyStateFromPhase(sess.agentPhase, 'working')
-                      : jellyStateFromAgent(selected)}
+                      : sess.celebrationEndsAt > Date.now()
+                        ? 'celebrate'
+                        : jellyStateFromAgent(selected)}
                   />
                   <h3 className="ma-detail-name">
                     {selected.name}

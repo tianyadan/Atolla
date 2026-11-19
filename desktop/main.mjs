@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveRuntimePaths, startBackend } from './runtime.mjs'
-import { requestDevBackend } from './dev-bridge.mjs'
+import { requestDevRunnerBackend, resolveDevRunnerControl } from './dev-bridge.mjs'
 
 const desktopDirectory = path.dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = path.resolve(desktopDirectory, '..')
@@ -11,7 +11,13 @@ const APP_NAME = 'Atolla'
 let backend
 let isQuitting = false
 let mainWindow
-const managedByDevRunner = !app.isPackaged && process.env.ATOLLA_DEV_RUNNER === '1'
+// 开发态 Go 只能由 dev-runner 持有。禁止 Electron IPC 失效后自行拉起 Go，
+// 否则主进程热重启会把运行中的 Agent 一并杀掉。
+const devRunnerControl = !app.isPackaged ? resolveDevRunnerControl(process.env) : null
+const managedByDevRunner = devRunnerControl !== null
+if (managedByDevRunner) {
+  app.setPath('userData', devRunnerControl.userDataPath)
+}
 
 // 尽早改名：菜单栏 / About / 部分系统 UI 不再显示 Electron
 app.setName(APP_NAME)
@@ -31,8 +37,8 @@ ipcMain.handle('atolla:relaunch-app', async () => {
   // 稍延迟，让 HTTP 响应先回到渲染进程。
   setTimeout(() => {
     if (managedByDevRunner) {
-      // 配置变更必须重启 Go；普通窗口热重启则不会发送此请求。
-      void requestDevBackend(process, { type: 'atolla:dev-restart' }, 'atolla:dev-restarted')
+      // 配置变更必须由 dev-runner 重启 Go；普通窗口热重启不会调用此接口。
+      void requestDevRunnerBackend(devRunnerControl, 'restart')
         .then(() => mainWindow?.reload())
         .catch((error) => dialog.showMessageBox({ type: 'error', title: 'Atolla 后端重启失败', message: error.message }))
       return
@@ -152,6 +158,9 @@ function createMainWindow(rendererUrl) {
 }
 
 async function launch() {
+  if (!app.isPackaged && !managedByDevRunner) {
+    throw new Error('开发模式必须通过 scripts/dev-electron.sh 或 npm run dev 启动；Go 仅由 dev-runner 持有')
+  }
   const paths = resolveRuntimePaths({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -159,7 +168,7 @@ async function launch() {
     repositoryRoot,
   })
   const devBackendUrl = managedByDevRunner
-    ? await requestDevBackend(process, { type: 'atolla:dev-start', userDataPath: paths.applicationDataRoot }, 'atolla:dev-ready')
+    ? await requestDevRunnerBackend(devRunnerControl, 'ensure', { userDataPath: paths.applicationDataRoot })
     : null
   if (!managedByDevRunner) {
     backend = await startBackend({
